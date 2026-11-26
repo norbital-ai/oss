@@ -15,6 +15,9 @@ import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { NOW, TODAY } from './write-fixture.ts';
 import { actor_ref } from '../src/engine/access/actor.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { Sales: { policies: ['seller'] }, Finance: { policies: ['reviewer'] } };
 
 const salesId = '0199a000-0000-7000-8000-000000000001',
 	financeId = '0199a000-0000-7000-8000-000000000002';
@@ -41,7 +44,6 @@ const manifest: EngineManifest = {
 			update: { columns: { orders: ['note'] }, effect: true }
 		}
 	},
-	teams: { Sales: { policies: ['seller'] }, Finance: { policies: ['reviewer'] } },
 	policies: {
 		seller: { description: 'Seller', grants: { orders: grant } },
 		reviewer: { description: 'Reviewer', grants: { orders: { outputs: { default: {} } } } }
@@ -111,7 +113,7 @@ const fixture = Layer.effectDiscard(
 		pg = yield* TestDb.open(manifest);
 		db = TenantDb.typed(PgliteDb.make(pg));
 		yield* exec(
-			`INSERT INTO sys_user(id,name,team) VALUES('${salesId}','Sales','Sales'),('${financeId}','Finance','Finance');INSERT INTO orders(id,title) VALUES('${left}','Left'),('${right}','Right')`
+			`${teams_sql(TEAMS)};INSERT INTO sys_user(id,name,team) VALUES('${salesId}','Sales','Sales'),('${financeId}','Finance','Finance');INSERT INTO orders(id,title) VALUES('${left}','Left'),('${right}','Right')`
 		);
 		const authorities = new Authorities(manifest, 'test');
 		const seller = yield* authorities.member(db, 'bootstrap', salesId),

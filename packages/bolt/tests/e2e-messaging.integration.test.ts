@@ -15,6 +15,13 @@ import type { Json } from '../src/decl/values.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace, respond_system_1 } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = {
+	't-con': { name: 'Contractors', policies: ['contractor'] },
+	't-fin': { name: 'Finance', policies: ['finance'] },
+	't-sales': { name: 'Sales', policies: ['sales'] }
+};
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -104,11 +111,6 @@ const manifest = {
 			grants: { orders: { outputs: { default: {} }, create: { verdict: true } } }
 		},
 		finance: { description: 'Finance', grants: { orders: { outputs: { default: {} } } } }
-	},
-	teams: {
-		't-con': { name: 'Contractors', policies: ['contractor'] },
-		't-fin': { name: 'Finance', policies: ['finance'] },
-		't-sales': { name: 'Sales', policies: ['sales'] }
 	},
 	automations: {},
 	
@@ -260,6 +262,7 @@ const setup = Effect.runSync(
 			const t = Context.get(context, TestWorkspace),
 				conversations = Context.get(context, Conversations),
 				route = yield* route_fixture(context);
+			yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 			yield* t.db.write({
 				text: `INSERT INTO sys_user (id, email, name, admin, team, phone) VALUES
 			('${ADA}', 'ada@ws.example', 'Ada', true, NULL, '+65 9123 4567'),

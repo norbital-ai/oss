@@ -51,7 +51,6 @@ const manifest: EngineManifest = {
 	apps: {},
 	automations: {},
 	integrations: {},
-	teams: {},
 	custom_fields: {},
 	mcp: {},
 	agent: { skills: {} }

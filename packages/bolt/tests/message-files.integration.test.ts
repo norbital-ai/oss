@@ -23,7 +23,6 @@ const manifest = Result.getOrThrow(
 		exposures: {},
 		integrations: {},
 		policies: {},
-		teams: {},
 		
 		automations: {},
 		mcp: {},

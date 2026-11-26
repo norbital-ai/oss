@@ -33,7 +33,6 @@ const empty: EngineManifest = {
 	exposures: {},
 	integrations: {},
 	policies: { ops: { description: 'Ops', grants: {} } },
-	teams: {},
 	automations: {},
 	mcp: {},
 	apps: {},
@@ -59,7 +58,7 @@ describe('bug 26: one statement reads the clock once', () => {
 			const founder = (yield* founder_bootstrap(h, 'boss@acme.example')).user;
 			const boss = yield* new Authorities(empty, 'r1').member(db, 'bootstrap', founder);
 			if (boss === null) return yield* Effect.die('no founder authority');
-			const { id } = yield* invite(h, empty, boss, { email: 'late@acme.example' });
+			const { id } = yield* invite(h, boss, { email: 'late@acme.example' });
 			yield* revokeInvitation(h, boss, id);
 			const [rows] = yield* db.read([
 				{

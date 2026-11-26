@@ -129,7 +129,6 @@ export const scopeKind = (scope: SearchScope) =>
 		envoy: 'Envoy',
 		mcp: 'MCP server',
 		policy: 'Policy',
-		team: 'Team',
 		relationship: 'Relationship',
 		field: 'Field type',
 		skill: 'Skill',

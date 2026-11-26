@@ -15,6 +15,9 @@ import { BoltError } from '../src/protocol/errors.ts';
 import { HEADERS, PATHS } from '../src/protocol/wire.ts';
 import { SHELL, type ShellBoot } from '../src/shell/nav.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { Sales: { policies: ['rep'] }, Finance: { name: 'Finance desk', policies: [] }, Proposer: { policies: ['proposer'] } };
 
 const OPEN = '0199a000-0000-4000-8000-00000000000a';
 const manifest = Result.getOrThrow(
@@ -118,7 +121,6 @@ const manifest = Result.getOrThrow(
 				pages: { home: { title: 'Home' } }
 			}
 		},
-		teams: { Sales: { policies: ['rep'] }, Finance: { name: 'Finance desk', policies: [] }, Proposer: { policies: ['proposer'] } },
 		automations: {},
 		mcp: {},
 		custom_fields: {},
@@ -293,6 +295,7 @@ const api = (j: Jar) =>
 	Effect.gen(function* () {
 		const t = yield* TestWorkspace,
 			run = yield* FiberSet.makeRuntimePromise<never>();
+		yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 		const fetch: typeof globalThis.fetch = (input, init) => {
 			const headers = new Headers(init?.headers);
 			headers.set('cookie', cookieOf(j));
@@ -520,7 +523,7 @@ layer(workspace)('shell routes', (it) => {
 						surfaces: { settings: false, inbox: true, studio: true }
 					});
 					expect(b.nav.map((n) => n.name)).toEqual(['sales']);
-					expect(Object.keys(b.catalog).sort()).toEqual(['openings', 'sys_user', 'sys_workspace']); // the kernel directory + workspace display name
+					expect(Object.keys(b.catalog).sort()).toEqual(['openings', 'sys_team', 'sys_user', 'sys_workspace']); // the kernel directories + workspace display name
 					expect((yield* call(rep, 'GET', '/__bolt/shell/settings')).status).toBe(403);
 					expect(
 						(yield* call(rep, 'POST', '/__bolt/shell/settings', {
@@ -901,10 +904,11 @@ layer(workspace)('shell routes', (it) => {
 					expect((yield* boot(jar(), undefined, 'desk')).status).toBe(401);
 					expect((yield* boot(jar(), undefined, 'nope')).status).toBe(404);
 					expect((yield* boot(rep, undefined, 'vault')).status).toBe(403);
-					// the member boot catalog is cut to what the kiosk may read (plus the member directory and workspace display name)
+					// the member boot catalog is cut to what the kiosk may read (plus the member and team directories and workspace display name)
 					expect(Object.keys((yield* bootValue(rep, undefined, 'desk')).catalog).sort()).toEqual([
 						'applications',
 						'openings',
+						'sys_team',
 						'sys_user',
 						'sys_workspace'
 					]);

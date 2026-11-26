@@ -47,7 +47,6 @@ const manifest = Result.getOrThrow(
 		
 		agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },
 		integrations: {},
-		teams: {},
 		automations: {},
 		mcp: {},
 		apps: {},

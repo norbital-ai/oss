@@ -10,6 +10,12 @@ import { uuidv7 } from '@norbital-ai/host-api';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { SHELL } from '../src/shell/nav.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { team_rows } from './support/teams.ts';
+
+const TEAMS = {
+	Writers: { name: 'Writers', policies: ['writer'] },
+	Chatters: { name: 'Chatters', policies: ['chatter'] }
+};
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
@@ -51,10 +57,6 @@ const manifest = Result.getOrThrow(
 				grants: { notes: { outputs: { default: {} } } }
 			}
 		},
-		teams: {
-			Writers: { name: 'Writers', policies: ['writer'] },
-			Chatters: { name: 'Chatters', policies: ['chatter'] }
-		},
 		automations: {},
 		mcp: {},
 		apps: {
@@ -72,7 +74,7 @@ const manifest = Result.getOrThrow(
 );
 
 const ORIGIN = 'https://acme.example';
-const workspace = TestWorkspace.layer({ manifest, host: { public_url: ORIGIN } });
+const workspace = TestWorkspace.layer({ manifest, seed: { sys_team: team_rows(TEAMS) }, host: { public_url: ORIGIN } });
 type Answer = { status: number; body: unknown; retry_after: string | null };
 const send = (
 	path: string,
@@ -351,7 +353,6 @@ const runs = Result.getOrThrow(
 				capabilities: { automations: ['manual'] }
 			}
 		},
-		teams: { Workers: { name: 'Workers', policies: ['worker'] } },
 		automations: {
 			manual: { description: 'Logs three lines', policies: ['worker'] },
 			tick: {
@@ -374,6 +375,7 @@ const automations = Effect.gen(function* () {
 		guest: yield* program(
 			`export default { model: { notes: { bodies: { effect: { create: ${lines('r')} } } } }, automation: { manual: { body: ${lines('m')} }, tick: { body: ${lines('t')} } } };`
 		),
+		seed: { sys_team: team_rows({ Workers: { name: 'Workers', policies: ['worker'] } }) },
 		host: { public_url: ORIGIN },
 		now: '2026-10-29T08:00:30.000Z'
 	});

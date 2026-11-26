@@ -26,7 +26,6 @@ const manifest = Result.getOrThrow(
 		policies: { rep: { description: 'Rep', grants: {} } },
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
-		teams: {},
 		automations: {},
 		
 

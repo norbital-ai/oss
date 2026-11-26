@@ -21,7 +21,7 @@ import {
 } from '@norbital-ai/host-api';
 import { LIMITS, type Authority } from '../contracts.ts';
 import { Clock, Crypto, Effect, Layer, Option, Result, Schema } from 'effect';
-import { relations, teams, type EngineManifest } from '../manifest.ts';
+import { relations, type EngineManifest } from '../manifest.ts';
 import { TenantDb as TenantDbService, type TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { CapturedResult, capturePiece, nativeCommit, type CommitPublication } from '../db/captured.ts';
 import { storedRowSql } from '../db/stored.ts';
@@ -1102,9 +1102,8 @@ export const IdentityLive = Layer.effect(
 								return Effect.fail(
 									BoltError.make('forbidden', 'admission', 'The member who started this is no longer active.')
 								);
-							const graph = teams(manifest);
 							const same =
-								JSON.stringify(now.actor.teams) === JSON.stringify(manifest.workspace.memberships ? was.teams : was.teams.filter(t => Object.hasOwn(graph, t))) &&
+								JSON.stringify(now.actor.teams) === JSON.stringify(was.teams) &&
 								now.admin === holder.admin &&
 								now.actor.external === was.external &&
 								now.actor.party?.model === was.party?.model &&

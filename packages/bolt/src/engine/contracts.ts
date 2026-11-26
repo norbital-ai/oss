@@ -288,7 +288,7 @@ export type GuestOutcome =
 	/** A throw, a budget (`cpu_budget`, `crossing_budget`, `read_budget_exceeded`, `memory`) or a bad answer. */
 	| { kind: 'failed'; error: BoltError };
 export interface MembershipPort {
-	/** `team` is a source team handle (`+team.ts`). */
+	/** `team` is the member's `sys_team` id. */
 	project(
 		member: {
 			user: string;

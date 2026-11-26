@@ -49,7 +49,6 @@ const manifest = Result.getOrThrow(
 		},
 		automations: { tidy: { description: 'Tidy', policies: ['p'] } },
 		integrations: {},
-		teams: {},
 		mcp: {},
 		apps: {},
 		custom_fields: {},

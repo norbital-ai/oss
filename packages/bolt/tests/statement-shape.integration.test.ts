@@ -43,7 +43,6 @@ const manifest: EngineManifest = {
 		}
 	},
 	policies: {},
-	teams: {}
 };
 const guest =
 	program(`export default { model: { runs: { bodies: { create: function* (changes, ctx) {
@@ -157,7 +156,6 @@ const labelled: EngineManifest = {
 		}
 	},
 	policies: {},
-	teams: {}
 };
 const PlanNode: Schema.Codec<{
 	readonly 'Relation Name'?: string;

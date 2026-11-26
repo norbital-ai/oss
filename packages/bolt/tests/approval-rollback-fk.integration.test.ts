@@ -40,7 +40,6 @@ const manifest: EngineManifest = {
 		}
 	},
 	policies: {},
-	teams: {},
 	integrations: {},
 	automations: {},
 	mcp: {},

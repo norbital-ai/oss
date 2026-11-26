@@ -1,9 +1,9 @@
 // The write area's SQL plumbing: the `WITH` chain builder behind the one write statement, its idempotency gate and
 // outcome, notices and rate charges, the SQLSTATE map, invocation-minted ids and the transform's fingerprints.
 import type { Json } from '../../decl/values.ts';
-import type { TeamEntries } from '../../decl/access/team.ts';
+import type { TeamPolicies } from '../identity/graph.ts';
 import { memberTeams } from '../identity/teams.ts';
-import { teamEntries, type EngineManifest } from '../manifest.ts';
+import type { EngineManifest } from '../manifest.ts';
 import { Effect, Result, Schema } from 'effect';
 import { copiedSql, db_error, DbError, type RawDb, type Sql } from '@norbital-ai/host-api';
 import { LIMITS, type Outcome, type RowData } from '../contracts.ts';
@@ -31,15 +31,11 @@ export const noticeInsert = (
 	rows: Json,
 	now: string,
 	when: string = GATED,
-	teams: TeamEntries = {},
+	teams: TeamPolicies = {},
 	signup: readonly string[] = [],
 	workspace?: EngineManifest['workspace']
 ): string => {
-	const policies = c.p(
-		Object.fromEntries(
-			Object.entries(teamEntries(teams)).map(([handle, team]) => [handle, team.policies])
-		)
-	);
+	const policies = c.p(teams);
 	const direct = workspace === undefined ? 'ARRAY[u.team]::text[]' : memberTeams(workspace, c.shared('now', now));
 	return (
 		c.cte(

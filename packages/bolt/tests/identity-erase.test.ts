@@ -44,7 +44,6 @@ const m: EngineManifest = {
 	},
 	integrations: {},
 	policies: {},
-	teams: {},
 	automations: {},
 	mcp: {},
 	apps: {},

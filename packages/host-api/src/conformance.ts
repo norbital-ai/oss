@@ -256,7 +256,7 @@ export const conformance = (input: {
 								params: []
 							},
 							{
-								text: 'CREATE TABLE sys_user (id uuid PRIMARY KEY, name text, email text, phone text, team text, active bool)',
+								text: 'CREATE TABLE sys_user (id uuid PRIMARY KEY, name text, email text, phone text, active bool)',
 								params: []
 							}
 						]

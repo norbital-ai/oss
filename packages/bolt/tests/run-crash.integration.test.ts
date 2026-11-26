@@ -24,7 +24,6 @@ const manifest = {
 	},
 	automations: { note: { description: 'Writes a log line', policies: ['ops'] } },
 	integrations: {},
-	teams: {},
 	mcp: {},
 	apps: {},
 	custom_fields: {},

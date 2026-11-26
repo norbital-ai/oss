@@ -188,7 +188,6 @@ it.effect('the declaration functions are documented, and spec parameters list th
 		'secrets',
 		'seeder',
 		'sync',
-		'team',
 		'workspace'
 	]);
 	const model = required(docs.symbol('bolt', 'ModelLiteral'));

@@ -7,6 +7,9 @@ import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { json } from './support/route-fixture.ts';
 import { manifest as base } from './write-fixture.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { owners: { policies: ['self'] } };
 
 const NOW = '2026-10-24T08:00:00.000Z';
 const ORIGIN = 'https://workspace.test';
@@ -44,7 +47,6 @@ const manifest: EngineManifest = {
 			}
 		}
 	},
-	teams: { owners: { policies: ['self'] } }
 };
 /** `self` may update an instance it owns: the update `check`, dry-run on the instance before health or replay. */
 const guest = program(`export default { policy: { self: { grants: { sys_integration: { update: {
@@ -61,6 +63,7 @@ const setup = Effect.gen(function* () {
 		})
 	);
 	const t = Context.get(context, TestWorkspace);
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	const owner = t.member(['self'], { teams: ['owners'] });
 	const other = t.member(['self'], { teams: ['owners'] });
 	const cookie = yield* t.session(owner.id);

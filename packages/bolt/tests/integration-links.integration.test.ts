@@ -141,7 +141,6 @@ const manifest = {
 			}
 		}
 	},
-	teams: {},
 	automations: {},
 	mcp: {},
 	apps: {},

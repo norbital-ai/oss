@@ -13,7 +13,6 @@ const withCron = (cron: string): EngineManifest => ({
 	exposures: {},
 	integrations: {},
 	policies: { ops: { description: 'Ops', grants: {} } },
-	teams: {},
 	automations: { tick: { description: 'Ticks', on: [{ cron }], policies: ['ops'] } },
 	mcp: {},
 	apps: {},

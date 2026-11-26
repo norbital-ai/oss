@@ -19,6 +19,8 @@ const SqlOwed = Context.Reference<boolean>('bolt/SqlOwed', { defaultValue: () =>
 const IDENTITY = /\bsys_(?:user|session)\b/;
 /** A statement that can add, activate, deactivate or update an integration connection. */
 const INTEGRATION = /\bsys_integration\b/;
+/** A statement that writes a team; one that only reads `sys_team` (the approval lock names teams) is none. */
+const TEAM = /\b(?:INTO|UPDATE|DELETE FROM)\s+"?sys_team\b/i;
 /** Neon's default: a database touched this recently is still awake, so one more read costs no wake. */
 const AWAKE_MILLIS = 5 * 60_000;
 export const SqlReadCapture = Context.Reference<SqlReadCaptureService | undefined>(
@@ -43,6 +45,8 @@ export type TenantDbShape = RawDb & {
 	readonly identityWrites: () => number;
 	/** How many writing statements on `sys_integration` have finished, so resting syncs wake on connection changes. */
 	readonly integrationWrites: () => number;
+	/** How many writing statements on `sys_team` have finished, so the team graph is read again. */
+	readonly teamWrites: () => number;
 	/**
 	 * How many writing statements have finished, as `identityWrites` counts them: read before a read, it tells whether
 	 * anything this generation wrote could have changed what that read saw.
@@ -96,7 +100,8 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 			touched = Number.NEGATIVE_INFINITY,
 			writes = 0,
 			identity = 0,
-			integrations = 0;
+			integrations = 0,
+			teams = 0;
 		const turn = Semaphore.makeUnsafe(1);
 		const pay = Effect.gen(function* () {
 			if (owed === undefined || (yield* SqlOwed)) return;
@@ -129,6 +134,7 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 				writes++;
 				if (texts.some((text) => IDENTITY.test(text))) identity++;
 				if (texts.some((text) => INTEGRATION.test(text))) integrations++;
+				if (texts.some((text) => TEAM.test(text))) teams++;
 			});
 		const raw: RawDb = {
 			read: (statements) => Effect.andThen(settled, adapter.read(statements)).pipe(
@@ -189,6 +195,7 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 			awake: Effect.map(Clock.currentTimeMillis, (now) => now - touched < AWAKE_MILLIS),
 			identityWrites: () => identity,
 			integrationWrites: () => integrations,
+			teamWrites: () => teams,
 			writes: () => writes,
 			quietly: (work) =>
 				Effect.suspend(() => {

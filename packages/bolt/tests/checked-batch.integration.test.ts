@@ -9,6 +9,9 @@ import type { Json } from '../src/decl/values.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { manifest as base } from './write-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { Requesters: { policies: ['requester'] }, Reviewers: { policies: ['reviewer'] } };
 
 const inputs = (acts: Readonly<Record<string, Json>>) => acts;
 const manifest: EngineManifest = {
@@ -64,7 +67,6 @@ const manifest: EngineManifest = {
 			grants: { customers: { outputs: { default: {} } } }
 		}
 	},
-	teams: { Requesters: { policies: ['requester'] }, Reviewers: { policies: ['reviewer'] } },
 	automations: {
 		followup: {
 			description: 'Checked batch in a run',
@@ -87,6 +89,7 @@ afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
 const fixture = Effect.gen(function* () {
 	const context = yield* Layer.build(TestWorkspace.layer({ manifest, guest: yield* guest }));
 	const t = Context.get(context, TestWorkspace);
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	const writer = t.member(['writer']);
 	const restricted = t.member(['restricted']);
 	const requester = t.member(['requester'], { teams: ['Requesters'], team_path: ['Requesters'] });

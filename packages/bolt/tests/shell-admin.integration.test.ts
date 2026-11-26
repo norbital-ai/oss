@@ -8,6 +8,9 @@ import { shell_api } from '../src/shell/runtime.ts';
 import { founder_bootstrap } from '../src/engine/identity/session.ts';
 import { HostIdentity } from '../src/engine/services.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { sales: { name: 'Sales', policies: ['rep'] } };
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
@@ -32,7 +35,6 @@ const manifest = Result.getOrThrow(
 		apps: {
 			sales: { title: 'Sales', description: 'd', icon: 'i', pages: { deals: { title: 'Deals' } } }
 		},
-		teams: { sales: { name: 'Sales', policies: ['rep'] } },
 		automations: {},
 
 
@@ -67,6 +69,7 @@ const Reply = Schema.Struct({
 const call = (j: Jar, method: string, path: string, body?: unknown) =>
 	Effect.gen(function* () {
 		const t = yield* TestWorkspace;
+		yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 		const cookie = cookieOf(j);
 		const res = yield* t.handle(
 			new Request(`${ORIGIN}${path}`, {
@@ -262,7 +265,7 @@ layer(workspace)('shell administration', (it) => {
 		})
 	);
 
-	it.effect('an API key selects a source team and rejects undeclared choices', () =>
+	it.effect('an API key selects a team and rejects one that is not on file', () =>
 		Effect.gen(function* () {
 			expect(
 				(yield* op(admin, 'issueKey', { name: 'Bad', team: 'undeclared' })).body?.error?.code

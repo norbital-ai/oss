@@ -27,7 +27,6 @@ const manifest = Result.getOrThrow(
 		integrations: {},
 		policies: {},
 		apps: {},
-		teams: {},
 		automations: {},
 
 		mcp: {},

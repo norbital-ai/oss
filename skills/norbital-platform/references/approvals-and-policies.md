@@ -4,7 +4,7 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 
 ## Source homes & grants
 
-- `policy({ description, grants, capabilities? })` (filename = name); `team(...)` maps exact handles to `{ policies, name?, parent? }`. Parent graph scopes `actor.team_tree` without inheriting policies or approval rights. Members reference exact source handles; changing teams/policies/routes requires a release.
+- `policy({ description, grants, capabilities? })` (filename = name). Teams are `sys_team` rows an administrator edits (`name`, optional `parent`, `policies`); source declares none and holds a team only as an `Id<'sys_team'>` read from a row. Parent graph scopes `actor.team_tree` without inheriting policies or approval rights. Changing policies/routes requires a release; a team's policies change with its row, on the next request.
 - Policies grant only declared model outputs/verbs (`bolt check` refuses others). `outputs: { default: …, <name>: … }` takes nested `{ where?, history?, <relation>?: { where? } }` trees (`{}` = all rows). Policies filter rows, never shape — narrower audiences get narrower outputs.
 - `history: true` grants history under the root `where` (losing row access loses history). `create`/`update` take `{ fields?, <relation>?, verdict? }` (`{}` = all declared fields; no `true` shorthand); `update.moves` grants state transitions; `delete` takes `{ verdict? }`.
 - `capabilities`: `automations` (manual starts by person/agent; code needs none), `syncs` (`'<model>.<sync>'` remote refreshes; model must be readable), `apps` (including kiosks), tools and MCP.
@@ -21,7 +21,7 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 
 ## Approval flows & requests
 
-- `ctx.approve({ steps: [{ name, teams?: ['<handle>'], users?: [<sys_user id>] }], superseded_by?: ['<handle>'] })`; a step names teams, users or both (a record's assigned approver: `users: [row.approver_id]`, read by the verdict). Branch in code; no runtime route models or second decision engine. Approval is a separate lock, never a business state named `approved`.
+- `ctx.approve({ steps: [{ name, teams?: [<sys_team id>], users?: [<sys_user id>] }], superseded_by?: [<sys_team id>] })`; a step names teams, users or both, each an id the verdict reads from a row (a record's reviewing team or assigned approver: `teams: [row.review_team]`, `users: [row.approver_id]`). Branch in code; no runtime route models or second decision engine. Approval is a separate lock, never a business state named `approved`.
 - Flows snapshot on open (releases never rewrite open flows) and re-evaluate on resubmit (changed steps restart at step 1). Steps run in order; any listed team member or user decides.
 - Held writes return `pending_approval` (`request_id`, `records`). Submitters cannot review their own requests (even if admin or on the team). Resubmitting keeps the request pending even if policy now allows directly.
 

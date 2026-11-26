@@ -22,6 +22,11 @@ import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.t
 import { LINK_DOWN } from '../src/engine/integrations/abi.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { filesOf } from '../src/engine/conversations/store.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = {
+	direct: { policies: ['staff'] }
+};
 
 const runtime_accounts = [
 	{ id: 'customer_mail', integration: 'customer_notices', status: { state: 'connected' } },
@@ -121,9 +126,6 @@ const manifest = Result.getOrThrow(
 				description: 'Files supplier mail',
 				grants: { supplier_mail: { outputs: { default: {} }, create: {}, update: {}, delete: {} } }
 			}
-		},
-		teams: {
-			direct: { policies: ['staff'] }
 		},
 		automations: {},
 		mcp: {},
@@ -245,6 +247,7 @@ const fixture = () =>
 		const t = Context.get(context, TestWorkspace),
 			nativeConversations = Context.get(context, Conversations),
 			outbound = Context.get(context, Outbound);
+		yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 		// the rows earlier tests left: every read below skips them
 		const before = (table: string) =>
 			t.db

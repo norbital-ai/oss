@@ -32,7 +32,6 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: movements.exposure === undefined ? {} : { movements: movements.exposure },
 	policies: {},
-	teams: {}
 };
 
 layer(TestWorkspace.layer({ manifest }), { excludeTestServices: true })('constraint messages', (it) => {

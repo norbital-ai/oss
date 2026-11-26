@@ -31,7 +31,6 @@ const manifest = Result.getOrThrow(
 		exposures: { swatches: { outputs: { default: { swatches: { fields: 'all' } } } } },
 		integrations: {},
 		policies: {},
-		teams: {},
 		automations: {},
 
 		mcp: {},

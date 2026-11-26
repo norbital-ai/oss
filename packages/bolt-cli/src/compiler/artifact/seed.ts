@@ -21,7 +21,7 @@ import { datatype_issues } from '@norbital-ai/store/kind';
 
 type SeedAsset = PackJson['assets'][number];
 
-/** Rows per model, the identity rows (`sys_user`, run-time `sys_integration` instances) included, as JSON. */
+/** Rows per model, the identity rows (`sys_team`, `sys_user`, run-time `sys_integration` instances) included, as JSON. */
 export type SeedRows = {
 	readonly [model: string]: readonly { readonly [field: string]: Json }[];
 };

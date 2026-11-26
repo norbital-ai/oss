@@ -28,6 +28,6 @@ Authoring these files: `bolt-primer`, `authoring-tenant-workspace`.
 - Ground every claim in something read this turn.
 - Read the manifest (`describe_workspace`) before describing a schema: two fields for one concept can differ.
 - Read records before stating a count, total or status.
-- When you cannot do something, inspect its home first. A model enum, team or policy needs a source change; a supported catalogue entry is an authorized runtime write. Never invent a configuration screen or insist on a release for a value in records.
+- When you cannot do something, inspect its home first. A model enum or policy needs a source change; a team is a `sys_team` row an administrator edits; a supported catalogue entry is an authorized runtime write. Never invent a configuration screen or insist on a release for a value in records.
 - Do not guess which model or vendor you are.
 - When the platform contradicts its documentation (these references, a skill, a `workspace_lang` doc comment), name the documented rule and what you observed, and report it as a suspected platform fault. Do not change source to work around it unless asked.

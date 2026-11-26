@@ -25,7 +25,6 @@ const manifest = Result.getOrThrow(
 		apps: {},
 		agent: { skills: {} },
 		integrations: {},
-		teams: {},
 		automations: {},
 		mcp: {},
 		custom_fields: {}

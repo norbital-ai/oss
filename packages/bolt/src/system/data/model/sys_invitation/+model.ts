@@ -1,4 +1,4 @@
-// An invitation: the authored team affiliation a member receives on acceptance. It names the person by their
+// An invitation: the team a member receives on acceptance. It names the person by their
 // email, their mobile number, or both; either proves it. Administrators read it; no grant.
 // Created at once; acceptance follows address proof and creates or links the `sys_user` with the invitation's team.
 // Identity writes are native administrator operations; like any write they start the automations listening to the
@@ -17,8 +17,8 @@ export default bind_system_model('sys_invitation')({
 		external: { kind: 'bool', default: false },
 		/** Who sent it. */
 		invited_by: { kind: 'ref', to: 'sys_user', optional: true },
-		/** The team handle the member receives, declared in source (`+team.ts`); writes refuse an undeclared handle. */
-		team: { kind: 'text', format: 'team', optional: true },
+		/** The team the member receives. */
+		team: { kind: 'ref', to: 'sys_team', optional: true, on_delete: 'restrict' },
 		party: { kind: 'json', optional: true },
 		expires_at: { kind: 'instant' },
 		accepted_at: { kind: 'instant', optional: true },

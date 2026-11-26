@@ -18,7 +18,6 @@ const manifest = {
 	exposures: {},
 	policies: {},
 	integrations: {},
-	teams: {},
 	automations: {},
 	mcp: {},
 	apps: {},

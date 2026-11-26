@@ -23,8 +23,7 @@ import type {
 	InstanceId,
 	IntegrationName,
 	Is,
-	PolicyName,
-	TeamName
+	PolicyName
 } from '../names.ts';
 import type {
 	brand,
@@ -169,7 +168,7 @@ export interface Schedule {
 
 // ── notices: one shape for `ctx.notify`, approval effects included ──
 /** Whom a notice goes to: a team's members, one member, or a policy's holders. */
-export type Recipient = { team: TeamName } | { user: Id<'sys_user'> } | { policy: PolicyName };
+export type Recipient = { team: Id<'sys_team'> } | { user: Id<'sys_user'> } | { policy: PolicyName };
 /**
  * A model effect's approval roles: the request's `'requester'` or the current step's `'approvers'` (teams and users),
  * resolved only in an approval event (`ctx.event.kind === 'approval'`). `'approvers'` resolves at delivery against
@@ -204,7 +203,7 @@ type ConversationDefinition = {
  *
  * Code decides wording, grouping and which events notify; approval inbox notices already exist.
  * @example
- * { title: 'New review job', description: `${name} is waiting on the board.`, to: [{ team: 'reviewers' }],
+ * { title: 'New review job', description: `${name} is waiting on the board.`, to: [{ team: project.review_team }],
  *   link: { model: 'projects', id: project.id }, via: ['email', hotline.id],
  *   attachments: [{ document: { html }, to: 'pdf', name: 'Brief.pdf' }], once: `review:${project.id}` }
  */
@@ -239,7 +238,7 @@ export type Notice<To = Recipient> = {
  * @example
  * update: { effect: function* (changes, ctx) {
  * 	if (ctx.event.kind !== 'write') return;
- * 	yield* ctx.notify(changes.map(({ after }) => ({ title: 'Project moved', to: [{ team: 'reviewers' }],
+ * 	yield* ctx.notify(changes.map(({ after }) => ({ title: 'Project moved', to: [{ team: after.review_team }],
  * 		link: { model: 'projects', id: after.id }, once: `project-moved:${after.id}` })));
  * } }
  */

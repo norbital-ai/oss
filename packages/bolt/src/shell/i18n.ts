@@ -946,7 +946,7 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Last used': '最后使用',
 	'New value': '新值',
 	'No API keys yet.': '暂无 API 密钥。',
-	'Issue a key so a source team can call this workspace.': '签发密钥，以便源团队调用此工作区。',
+	'Issue a key so a team can call this workspace.': '签发密钥，以便团队调用此工作区。',
 	'No MCP servers': '暂无 MCP 服务器',
 	'No secrets': '暂无密钥',
 	No: '否',

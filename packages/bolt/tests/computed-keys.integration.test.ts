@@ -28,7 +28,6 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: colours.exposure === undefined ? {} : { colours: colours.exposure },
 	policies: {},
-	teams: {},
 	automations: {}
 };
 const untyped = (acts: { readonly [callable: string]: Json }) => acts;

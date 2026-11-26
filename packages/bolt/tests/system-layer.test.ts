@@ -36,7 +36,6 @@ const EMPTY: EngineManifest = {
 	exposures: {},
 	integrations: {},
 	policies: {},
-	teams: {},
 	automations: {},
 	mcp: {},
 	apps: {},
@@ -150,7 +149,7 @@ function rendered(): { [table: string]: Shape } {
 	);
 }
 
-// Native schema expectations include relationship indexes; teams are source, so `team` is plain text with no key.
+// Native schema expectations include relationship indexes; `team` is a foreign key to `sys_team`.
 const EXPECTED: { [table: string]: Shape } = {
 	approval_request: {
 		key: 'id uuid primary key',
@@ -218,8 +217,11 @@ const EXPECTED: { [table: string]: Shape } = {
 				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_api_key_HASH(name), ''))) stored"
 		},
 		unique: ['(prefix)'],
-		indexes: ['(created_by)', 'using gin (bolt_search)'],
-		fks: ['(created_by) references sys_user (id) on delete restrict on update restrict'],
+		indexes: ['(created_by)', '(team)', 'using gin (bolt_search)'],
+		fks: [
+			'(created_by) references sys_user (id) on delete restrict on update restrict',
+			'(team) references sys_team (id) on delete restrict on update restrict'
+		],
 		checks: ['(isfinite(created_at))', '(isfinite(last_used_at))', '(isfinite(revoked_at))']
 	},
 	sys_challenge: {
@@ -417,8 +419,11 @@ const EXPECTED: { [table: string]: Shape } = {
 			bolt_search:
 				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_invitation_HASH(email), ''))) stored"
 		},
-		indexes: ['(invited_by)', '(lower(email))', '(phone)', 'using gin (bolt_search)'],
-		fks: ['(invited_by) references sys_user (id) on delete restrict on update restrict'],
+		indexes: ['(invited_by)', '(lower(email))', '(phone)', '(team)', 'using gin (bolt_search)'],
+		fks: [
+			'(invited_by) references sys_user (id) on delete restrict on update restrict',
+			'(team) references sys_team (id) on delete restrict on update restrict'
+		],
 		checks: [
 			'((email is not null or phone is not null))',
 			"((party is null or store_json_valid(party, '{kind:json,optional:true}'::jsonb) is true))",
@@ -672,6 +677,25 @@ const EXPECTED: { [table: string]: Shape } = {
 			"(via in ('code', 'invitation', 'signup', 'host', 'anonymous'))"
 		]
 	},
+	sys_team: {
+		key: 'id text primary key',
+		columns: {
+			name: 'text not null',
+			parent: 'text',
+			policies: "text[] not null default '{}'::text[]",
+			created_at: 'timestamptz not null default now()',
+			revision: 'int not null default 1',
+			bolt_record_label: 'text generated always as (bolt_record_label_sys_team_HASH(name)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_team_HASH(name), ''))) stored"
+		},
+		indexes: ['(parent)', 'using gin (bolt_search)', 'using gin (policies)'],
+		fks: ['(parent) references sys_team (id) on delete restrict on update restrict'],
+		checks: [
+			'(isfinite(created_at))',
+			"(not jsonb_path_exists(to_jsonb(policies), 'strict $[*] ? (@.type() != string)'))"
+		]
+	},
 	sys_sync: {
 		key: 'id uuid primary key',
 		columns: {
@@ -764,7 +788,8 @@ const EXPECTED: { [table: string]: Shape } = {
 				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_user_HASH(name), '') || ' ' || coalesce(name::text, '') || ' ' || coalesce(email::text, ''))) stored"
 		},
 		unique: ['(lower(email))', '(phone_key)'],
-		indexes: ['using gin (bolt_search)'],
+		indexes: ['(team)', 'using gin (bolt_search)'],
+		fks: ['(team) references sys_team (id) on delete restrict on update restrict'],
 		checks: [
 			"((preferences is null or store_json_valid(preferences, '{default:{},kind:json,shape:{fields:{appearance:{kind:enum,optional:true,values:[light,dark,system]},locale:{kind:text,max:35,optional:true},sounds:{kind:bool,optional:true}},kind:object}}'::jsonb) is true))",
 			"((coalesce(admin = false, false) or coalesce(kind = 'staff'::text, false)))",
@@ -971,8 +996,8 @@ describe('the catalogue reads the system models from their declarations', () => 
 		expect(user.fields.get('email')).toMatchObject({ email: true, pg: 'text' });
 		expect(user.fields.get('id')).toMatchObject({ pg: 'text' });
 		expect(user.fields.has('approval_id')).toBe(false);
-		expect(user.one.has('team')).toBe(false);
-		expect(user.fields.get('team')).toMatchObject({ kind: 'text', team: true, pg: 'text' });
+		expect(user.one.get('team')?.targets).toEqual(['sys_team']);
+		expect(user.fields.get('team')).toMatchObject({ kind: 'id', of: 'sys_team', pg: 'text' });
 		expect(cat.models.get('approval_request')?.fields.get('id')).toMatchObject({ pg: 'uuid' });
 		expect(cat.exposures.get('sys_api_key')?.fields).toEqual(
 			new Set([

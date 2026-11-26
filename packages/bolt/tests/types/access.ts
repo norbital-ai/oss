@@ -8,7 +8,7 @@ import './registry.ts';
 import type { CreateVerdict, UpdateVerdict } from '../../src/decl/ctx.ts';
 import type { Edge, Grant, WriteField } from '../../src/decl/access/policy.ts';
 import type { LimitKey } from '../../src/decl/runtime/app.ts';
-import type { TeamName } from '../../src/decl/names.ts';
+import type { Id } from '../../src/decl/values.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
@@ -21,7 +21,12 @@ is<Eq<WriteField<'orders', 'create', 'orders.lines'>, 'item' | 'qty' | 'price'>>
 // no declared queries: no `'<model>.<query>'` limit keys
 is<Eq<Extract<LimitKey, `orders.${string}`>, never>>();
 is<Eq<'outputs' extends keyof Grant<'notices'> ? 1 : 0, 1>>();
-is<Eq<TeamName, 'finance' | 'sales'>>();
+
+// a team is held as an id read from a row
+declare const sales: Id<'sys_team'>;
+declare const finance: Id<'sys_team'>;
+// @ts-expect-error a string literal is no team id
+export const literal_team: Id<'sys_team'> = 'sales';
 
 // ── valid: today's template behaviour as literals ──
 const ownOrders = { owner: { eq: { var: 'actor.id' } } } as const;
@@ -43,12 +48,12 @@ export const salesRep = policy({
 						return yield* ctx.refuse('errors.refused', { field: 'customer' });
 					return ctx.approve({
 						steps: [
-							{ name: 'Sales review', teams: ['sales'] },
+							{ name: 'Sales review', teams: [sales] },
 							...(rows.some((row) => row.after.note != null)
-								? [{ name: 'Finance sign-off', teams: ['finance'] as const }]
+								? [{ name: 'Finance sign-off', teams: [finance] as const }]
 								: [])
 						],
-						superseded_by: ['finance']
+						superseded_by: [finance]
 					});
 				}
 			},
@@ -61,9 +66,9 @@ export const salesRep = policy({
 						return yield* ctx.refuse('errors.refused', { field: 'status' });
 					if (changes.every((c) => c.set.status === undefined)) return ctx.allow();
 					const owner = changes[0]?.before.owner ?? null;
-					const finance = { name: 'Finance', teams: ['finance'] } as const;
+					const step = { name: 'Finance', teams: [finance] } as const;
 					return ctx.approve({
-						steps: owner === null ? [finance] : [{ name: 'Owner team', teams: ['sales'] }, finance]
+						steps: owner === null ? [step] : [{ name: 'Owner team', teams: [sales] }, step]
 					});
 				}
 			},
@@ -71,9 +76,9 @@ export const salesRep = policy({
 				verdict: function* (rows, ctx) {
 					if (rows.some((r) => r.before.status !== 'draft'))
 						return yield* ctx.refuse('errors.refused', { row: 0 });
-					return ctx.actor.kind === 'member' && ctx.actor.teams.includes('finance')
+					return ctx.actor.kind === 'member' && ctx.actor.teams.includes(finance)
 						? ctx.allow()
-						: ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] });
+						: ctx.approve({ steps: [{ name: 'Finance', teams: [finance] }] });
 				}
 			}
 		},
@@ -150,9 +155,6 @@ export const updateCheck: UpdateVerdict<'orders'> = salesRep.grants.orders.updat
 // @ts-expect-error A1 an unknown model
 // prettier-ignore
 policy({ description: 'x', grants: { oders: { outputs: { default: {} } } } });
-// @ts-expect-error A1 teams are source declarations, never a grantable model
-// prettier-ignore
-policy({ description: 'x', grants: { sys_team: { outputs: { default: {} } } } });
 // @ts-expect-error A2 a read grant never names fields: the output's shape is the model's
 // prettier-ignore
 policy({ description: 'x', grants: { sites: { outputs: { default: { sites: { fields: ['name'] } } } } } });
@@ -243,7 +245,7 @@ policy({
 				// A named team decides when the condition holds.
 				verdict: function* (changes, ctx) {
 					return changes[0]?.before.status === 'draft'
-						? ctx.approve({ steps: [{ name: 'Sales', teams: ['sales'] }] })
+						? ctx.approve({ steps: [{ name: 'Sales', teams: [sales] }] })
 						: yield* ctx.refuse('errors.refused');
 				}
 			}
@@ -265,7 +267,7 @@ policy({
 		}
 	}
 });
-// @ts-expect-error AP2 a step naming an undeclared team
+// @ts-expect-error AP2 a step naming a team by a literal
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { verdict: function* (_, ctx) { return ctx.approve({ steps: [{ name: 'x', teams: ['legal'] }] }); } } } } });
 // @ts-expect-error AP3 a check returns a verdict, nothing else
@@ -277,9 +279,9 @@ policy({ description: 'x', grants: { orders: { update: { verdict: function* () {
 // @ts-expect-error AP5 `set` names the declared update columns
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { verdict: function* (changes, ctx) { return changes[0]?.set.nte === undefined ? ctx.allow() : yield* ctx.refuse('errors.refused'); } } } } });
-// @ts-expect-error AP6 a superseder is a declared team
+// @ts-expect-error AP6 a superseder is a team id
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { update: { verdict: function* (_, ctx) { return ctx.approve({ steps: [{ name: 'x', teams: ['sales'] }], superseded_by: ['board'] }); } } } } });
+policy({ description: 'x', grants: { orders: { update: { verdict: function* (_, ctx) { return ctx.approve({ steps: [{ name: 'x', teams: [sales] }], superseded_by: ['board'] }); } } } } });
 // @ts-expect-error AP7 a flow needs at least one step
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { verdict: function* (_, ctx) { return ctx.approve({ steps: [] }); } } } } });

@@ -11,6 +11,7 @@ import { driver_name, driver_of } from '../../decl/runtime/integration.ts';
 import type { Fields } from '@norbital-ai/store/kind';
 import { SYSTEM } from '../../system/index.ts';
 import { conversational } from '../../engine/integrations/instances.ts';
+import { teamGraph } from '../../engine/identity/graph.ts';
 import * as members from '../../engine/identity/members.ts';
 import { requireAdmin, SIGNUP_KEY, type IdentityHost } from '../../engine/identity/session.ts';
 import { AgentHost } from '../../engine/agent/shared.ts';
@@ -131,12 +132,6 @@ export type Delivery = {
 	lastError: string | null;
 };
 const AUDIT_LIMIT = 200;
-/** A source team's declared name, else its handle. */
-export const teamName = (m: EngineManifest, id: string): string => {
-	const team = m.teams[id];
-	return team !== undefined && 'name' in team && typeof team.name === 'string' ? team.name : id;
-};
-
 /** The settings pages' rows: one row per member with sessions collapsed to a last-seen time; admins only. */
 export const settings = Effect.fn('shell.settings')(function* (
 	h: IdentityHost,
@@ -204,10 +199,11 @@ export const settings = Effect.fn('shell.settings')(function* (
 	);
 	const status = secrets === undefined ? null : yield* secrets.status('workspace');
 	const runtimeEnvoys = yield* decode(EnvoyRow, envoys?.rows ?? []);
+	const graph = yield* teamGraph(h.db);
 	return {
 		members: yield* decode(Member, users?.rows ?? []),
-		teams: Object.keys(m.teams)
-			.map((id) => ({ id, name: teamName(m, id) }))
+		teams: Object.entries(graph.teams)
+			.map(([id, team]) => ({ id, name: team.name }))
 			.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
 		invitations: yield* decode(InvitationRow, invitations?.rows ?? []),
 		keys: yield* decode(KeyRow, keys?.rows ?? []),
@@ -371,9 +367,9 @@ export const applySettings = Effect.fn('shell.settings_op')(function* (
 		case 'setSignup':
 			return yield* members.setSignup(h, auth, op.input.open);
 		case 'invite':
-			return yield* members.invite(h, m, auth, op.input);
+			return yield* members.invite(h, auth, op.input);
 		case 'inviteMany':
-			return yield* members.inviteMany(h, m, auth, op.input.invitations);
+			return yield* members.inviteMany(h, auth, op.input.invitations);
 		case 'revokeInvitation':
 			return yield* members.revokeInvitation(h, auth, op.input.id);
 		case 'resendInvitation':
@@ -385,11 +381,11 @@ export const applySettings = Effect.fn('shell.settings_op')(function* (
 		case 'reactivate':
 			return yield* members.reactivate(h, auth, op.input.id);
 		case 'assign_team':
-			return yield* members.assign_team(h, m, auth, op.input.id, op.input.team);
+			return yield* members.assign_team(h, auth, op.input.id, op.input.team);
 		case 'setHandles':
 			return yield* members.setHandles(h, auth, op.input.id, op.input);
 		case 'issueKey':
-			return yield* members.issueKey(h, m, auth, op.input.name, op.input.team);
+			return yield* members.issueKey(h, auth, op.input.name, op.input.team);
 		case 'rotateKey':
 			return yield* members.rotateKey(h, auth, op.input.id);
 		case 'revokeKey':

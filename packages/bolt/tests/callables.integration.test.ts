@@ -142,7 +142,6 @@ const manifest = Result.getOrThrow(
 				}
 			}
 		},
-		teams: { Rep: { policies: ['rep'] } },
 		automations: {
 			place: {
 				description: 'Place an order',

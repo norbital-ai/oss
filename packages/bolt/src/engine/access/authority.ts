@@ -159,7 +159,7 @@ export function exposed(
 
 /**
  * The kernel directory grant: staff read staff, externals read themselves and their party, each as
- * `sys_user`'s `directory` output (id, name). Teams are source.
+ * `sys_user`'s `directory` output (id, name).
  */
 function directory(actor: EngineActor): Arm | undefined {
 	if (actor.kind !== 'member') return undefined;
@@ -217,7 +217,7 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 	key: string
 ): Effect.fn.Return<Authority, BoltError> {
 	const bypass = holder.admin || holder.platform === true;
-	const protectedMembership = membershipWriter(holder.actor, holder.admin) ? [] : membershipModels(m.workspace);
+	const protectedMembership = ['sys_team', ...(membershipWriter(holder.actor, holder.admin) ? [] : membershipModels(m.workspace))];
 	const policySpecs = holder.policies.flatMap((name) => {
 		const spec = Object.hasOwn(m.policies, name) ? m.policies[name] : undefined;
 		return spec === undefined ? [] : [{ name, spec }];
@@ -234,7 +234,7 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 		const all = layered(m).exposures;
 		for (const c of [
 			...Object.keys(m.exposures),
-			...(holder.admin ? [...IDENTITY, 'sys_integration', 'sys_workspace'] : [])
+			...(holder.admin ? [...IDENTITY, 'sys_integration', 'sys_workspace', 'sys_team'] : [])
 		]) {
 			const a = col(c),
 				open: Arm = { policy: '$admin', where: TRUE };
@@ -286,6 +286,9 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 				)
 			);
 	}
+	// Staff read the teams: a verdict names the teams that hold a policy as a flow's approvers. A run reads them by a grant.
+	if (!bypass && holder.actor.kind === 'member' && !holder.actor.external)
+		addRead('sys_team', DEFAULT_OUTPUT, yield* readArms(m, 'sys_team', DEFAULT_OUTPUT, KERNEL, {}));
 	// The same generated update as any record: the matching personal read arm scopes a
 	// member's write to their own row, without lending directory or access-control fields.
 	if (holder.actor.kind === 'member') {

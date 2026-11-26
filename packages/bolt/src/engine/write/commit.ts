@@ -11,6 +11,7 @@ import { captureRows } from '../db/captured.ts';
 import { storedCaptures, storedImageSql } from '../db/stored.ts';
 import { readGuardBaseline } from '../approvals/read-guards.ts';
 import { Effect, Schema } from 'effect';
+import type { TeamPolicies } from '../identity/graph.ts';
 import type { NoticeInsert } from '../notifications/notify.ts';
 import { CommitAnswer } from './result.ts';
 export { CommitAnswer } from './result.ts';
@@ -66,6 +67,8 @@ export type Commit = {
 	runs: readonly (QueuedRun & { id: string; actor?: string; starter?: Json })[];
 	/** An approval decision's notices; an act sends none. */
 	notices?: readonly NoticeInsert[];
+	/** Each team's policies, as the notices' team and policy recipients resolve. */
+	teams?: TeamPolicies;
 	output: Json;
 	/** An act that writes no row: the updated records that already held their values. */
 	unchanged?: readonly { model: string; id: string }[];
@@ -609,7 +612,7 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 					)
 		);
 	if (first && x.runs.length > 0) enqueue(c, x.runs, { when: GATED, conflict: 'replace' });
-	if ((x.notices?.length ?? 0) > 0) noticeInsert(c, 'notices', x.notices ?? [], x.now, GATED, m.teams, m.workspace.signup?.policies, m.workspace);
+	if ((x.notices?.length ?? 0) > 0) noticeInsert(c, 'notices', x.notices ?? [], x.now, GATED, x.teams, m.workspace.signup?.policies, m.workspace);
 	if (last) x.pieces?.(c, part === undefined ? 'allp' : c.cte('actp', `SELECT c, id, revision FROM allp UNION ALL SELECT c, id, revision FROM ${PARTS}`));
 
 	// in the act's own order (the input's; `records[0]` is what was written), anything else after by model and id; a

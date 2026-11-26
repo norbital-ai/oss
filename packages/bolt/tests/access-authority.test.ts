@@ -147,7 +147,6 @@ const m: EngineManifest = {
 			grants: {}
 		}
 	},
-	teams: { Finance: { policies: [] } },
 	automations: {
 		nightly: { description: '', policies: ['auditor'] }
 	},
@@ -490,8 +489,9 @@ describe('engine/identity: remembered member rows', () => {
 			const db = TenantDb.typed({
 				read: ([statement]) =>
 					Effect.sync(() => {
-						// the open approval requests naming the member: none
-						if (statement?.text.includes('bolt_approvals')) return [{ rows: [], affected: 0 }];
+						// no team, and no open approval request naming the member
+						if (statement?.text.includes('bolt_approvals') || statement?.text.includes('FROM sys_team'))
+							return [{ rows: [], affected: 0 }];
 						reads++;
 						const user = { id: 'u1', email: null, phone: null, kind: 'staff', active: true, admin: false,
 							team: null, party: null, signup: false, revision: 1 };

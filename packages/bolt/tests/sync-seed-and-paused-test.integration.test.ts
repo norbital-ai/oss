@@ -8,6 +8,11 @@ import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
+import { team_rows } from './support/teams.ts';
+
+const TEAMS = {
+	ops: { policies: ['erp_sync'] }
+};
 
 const manifest: EngineManifest = {
 	...base,
@@ -69,9 +74,6 @@ const manifest: EngineManifest = {
 			}
 		}
 	},
-	teams: {
-		ops: { policies: ['erp_sync'] }
-	}
 };
 
 const guestSource = `export default {
@@ -102,6 +104,7 @@ describe('cutover SYNC_SEED and paused Syncs.test', () => {
 					const source = memory_source(
 						'cutover',
 						{
+							sys_team: team_rows(TEAMS),
 							sys_user: [
 								{
 									id: userId,

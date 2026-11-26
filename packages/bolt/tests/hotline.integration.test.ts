@@ -15,6 +15,9 @@ import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { respond_system_1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { payroll: { name: 'Payroll', policies: ['payroll'] } };
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -89,7 +92,6 @@ const manifest = {
 			grants: { payslips: { outputs: { default: {} }, update: {} } }
 		}
 	},
-	teams: { payroll: { name: 'Payroll', policies: ['payroll'] } },
 	automations: {},
 	
 
@@ -186,6 +188,7 @@ const build = Effect.gen(function* () {
 		agents = Context.get(context, Agents),
 		conversations = Context.get(context, Conversations),
 		route = yield* route_fixture(context);
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	yield* t.db.write({
 		text: `INSERT INTO sys_user (id, email, name, admin, team, phone) VALUES
 			('${ADA}', 'ada@ws.example', 'Ada', true, NULL, '+65 9123 4567'), ('${CAL}', 'cal@ws.example', 'Cal', false, NULL, '6598765432')`,

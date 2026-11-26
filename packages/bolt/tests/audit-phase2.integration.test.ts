@@ -16,7 +16,6 @@ const manifest: EngineManifest = {
 	exposures: {},
 	integrations: {},
 	policies: { ops: { description: 'Ops', grants: {} } },
-	teams: {},
 	automations: { browse: { description: 'Reads a supplier page', policies: ['ops'] } },
 	mcp: {},
 	apps: {},

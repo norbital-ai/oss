@@ -19,6 +19,9 @@ import { Authorities } from '../src/engine/identity/actor.ts';
 import { KitInvalid, TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
 import { act_reply, route_fixture } from './support/route-fixture.ts';
 import { filesOf } from '../src/engine/conversations/store.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { Inspectors: { policies: ['inspector'] } };
 
 // One workspace: triage on (the in-app default), a model whose records carry a file.
 const manifest = Result.getOrThrow(
@@ -44,7 +47,6 @@ const manifest = Result.getOrThrow(
 		policies: {
 			inspector: { description: 'Inspectors', grants: { photos: { outputs: { default: {} } } } }
 		},
-		teams: { Inspectors: { policies: ['inspector'] } },
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
 		automations: {},
@@ -172,6 +174,7 @@ const setup = Effect.gen(function* () {
 	});
 	const context = yield* Layer.build(TestWorkspace.layer({ manifest, ports }));
 	const t = Context.get(context, TestWorkspace);
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	yield* t.db.write({
 		text: `INSERT INTO sys_user (id, email, name, team) VALUES ('ann', 'ann@x.test', 'Ann', 'Inspectors'), ('bob', 'bob@x.test', 'Bob', NULL)`,
 		params: []

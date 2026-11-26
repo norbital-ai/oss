@@ -1,5 +1,5 @@
 // Member administration: invitations, the admin flag with its `last_admin` guard, (de)activation,
-// member team selection and API keys. Definitions and policy grants remain source declarations.
+// member team selection and API keys. Policies are source declarations; teams are `sys_team` rows.
 import type { Json } from '../../decl/values.ts';
 import { audited, auditActor, auditContext } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
@@ -92,8 +92,13 @@ function write<A extends typeof CapturedResult.Type>(
 		)
 	);
 }
-const unknownTeam = (m: EngineManifest, team: string | null | undefined) =>
-	team != null && !Object.hasOwn(m.teams, team);
+/** The team foreign key refused the write: one of `teams` is no team. */
+const noTeam =
+	(...teams: readonly (string | null | undefined)[]) =>
+	<E>(error: E): E | IdentityRefusal =>
+		error instanceof DbError && error.sqlstate === '23503'
+			? refuse('not_found', `There is no team '${[...new Set(teams.filter((team) => team != null))].join("' or '")}'.`)
+			: error;
 // ── invitations ──
 /** An invitation names its person by email, by mobile number (international form), or both; the link goes to each. */
 type InviteInput = {
@@ -177,11 +182,10 @@ function addressesOf(input: { email?: string | null; phone?: string | null }): A
 /** Admin-only; never sets `admin`. The notice's link is built from the host's public origin. */
 export const invite = Effect.fn('Bolt.invite')(function* (
 	h: IdentityHost,
-	m: EngineManifest,
 	auth: Authority,
 	input: InviteInput
 ) {
-	const result = yield* inviteMany(h, m, auth, [input]);
+	const result = yield* inviteMany(h, auth, [input]);
 	if (result.failed.length !== 0)
 		return yield* Effect.fail(
 			refuse(
@@ -196,7 +200,6 @@ export const invite = Effect.fn('Bolt.invite')(function* (
 /** Validate the entire batch before saving; all invitations commit together. */
 export const inviteMany = Effect.fn('Bolt.inviteMany')(function* (
 	h: IdentityHost,
-	m: EngineManifest,
 	auth: Authority,
 	inputs: readonly InviteInput[]
 ) {
@@ -216,8 +219,6 @@ export const inviteMany = Effect.fn('Bolt.inviteMany')(function* (
 				);
 			seen.add(key);
 		}
-		if (unknownTeam(m, input.team))
-			return yield* Effect.fail(refuse('not_found', `There is no source team '${input.team}'.`));
 		prepared.push({ input, to, id: yield* newId(h.crypto) });
 	}
 	const now = yield* h.now,
@@ -234,7 +235,7 @@ export const inviteMany = Effect.fn('Bolt.inviteMany')(function* (
 	identityPiece(s, 'ins', 'sys_invitation', `INSERT INTO sys_invitation (id, email, phone, team, external, party, invited_by, expires_at)
 	VALUES ${values.join(',')}`);
 	identityHistory(s, 'sys_invitation', 'ins', now, by(auth), h.writes, writerOf(auth).depth);
-	yield* write(h, s, CapturedResult);
+	yield* write(h, s, CapturedResult).pipe(Effect.mapError(noTeam(...inputs.map((input) => input.team))));
 	const failed: string[] = [];
 	for (let offset = 0; offset < prepared.length; offset += 20) {
 		const batch = prepared.slice(offset, offset + 20);
@@ -284,7 +285,7 @@ export const inspectInvitation = Effect.fn('Bolt.inspectInvitation')(function* (
 	return { email: r.email, phone: r.phone, team: r.team, external: r.external, status };
 });
 /**
- * Only a session for an invited address (the member's email or their number) accepts; the member's source team, kind and party land in one act. An
+ * Only a session for an invited address (the member's email or their number) accepts; the member's team, kind and party land in one act. An
  * expired, revoked or used invitation refuses `expired` and is left as it was.
  */
 export const acceptInvitation = Effect.fn('Bolt.acceptInvitation')(function* (
@@ -436,20 +437,17 @@ export const reactivate = (h: IdentityHost, auth: Authority, user: string) =>
 	setFlag(h, auth, user, 'active', true);
 export const assign_team = Effect.fn('Bolt.assign_team')(function* (
 	h: IdentityHost,
-	m: EngineManifest,
 	auth: Authority,
 	user: string,
 	team: string | null
 ) {
 	yield* requireAdmin(auth);
-	if (unknownTeam(m, team))
-		return yield* Effect.fail(refuse('not_found', `There is no source team '${team}'.`));
 	const s = new IdentityStatement();
 	identityPiece(s, 'u', 'sys_user', `UPDATE sys_user SET team = ${s.p(team)}, revision = revision + 1 WHERE id = ${s.p(user)}`);
 	const now = yield* h.now;
 	identityHistory(s, 'sys_user', 'u', now, by(auth), h.writes, writerOf(auth).depth);
 	projection(h, s, 'u', now);
-	const result = yield* write(h, s, CapturedResult);
+	const result = yield* write(h, s, CapturedResult).pipe(Effect.mapError(noTeam(team)));
 	if (!result.captured.some((row) => row.model === 'sys_user'))
 		return yield* Effect.fail(refuse('not_found', 'No such member.'));
 	return null;
@@ -516,21 +514,18 @@ const secret = () => toBase64url(crypto.getRandomValues(new Uint8Array(32)));
 const prefixOf = () => to_hex(crypto.getRandomValues(new Uint8Array(6)));
 export const issueKey = Effect.fn('Bolt.issueKey')(function* (
 	h: IdentityHost,
-	m: EngineManifest,
 	auth: Authority,
 	name: string,
 	team: string | null = null
 ) {
 	yield* requireAdmin(auth);
-	if (unknownTeam(m, team))
-		return yield* Effect.fail(refuse('not_found', `There is no source team '${team}'.`));
 	const id = yield* newId(h.crypto),
 		prefix = prefixOf(),
 		key = `nbk_${prefix}_${secret()}`,
 		s = new IdentityStatement(auth.actor);
 	capturePiece(s, 'issued', 'sys_api_key', `INSERT INTO sys_api_key (id, name, prefix, hash, team, created_by)
 	VALUES (${s.p(id)}, ${s.p(name)}, ${s.p(prefix)}, ${s.p(sha256(key))}, ${s.p(team)}, ${s.p(auth.actor.kind === 'member' ? auth.actor.id : null)})`);
-	yield* write(h, s, CapturedResult);
+	yield* write(h, s, CapturedResult).pipe(Effect.mapError(noTeam(team)));
 	return { id, key };
 });
 /** A new secret under the same principal; the revision moves, so a cached Authority for the old one is never hit. */

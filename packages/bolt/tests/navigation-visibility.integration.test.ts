@@ -16,12 +16,11 @@ const manifest:EngineManifest={...base,
     office:{title:'Office',description:'',icon:'i',pages:{private:{title:'Private'},news:{title:'News'}}}
   },
   policies:{...base.policies,pages:{description:'Read assigned switch names',capabilities:{apps:['pilot','office']},
-    grants:{switches:{outputs:{visible:{scopes:{switches:{who:{eq:{var:'actor.id'}}}}}}}}}},
-  teams:{...base.teams,desk:{policies:['pages']}}
+    grants:{switches:{outputs:{visible:{scopes:{switches:{who:{eq:{var:'actor.id'}}}}}}}}}}
 };
 const Reply=Schema.Struct({value:Schema.Struct({nav:Schema.Array(Schema.Struct({name:Schema.String,href:Schema.String,
   pages:Schema.Array(Schema.Struct({name:Schema.String}))}))})});
-layer(TestWorkspace.layer({manifest,host:{public_url:'http://localhost',secure:false}}))('actor-scoped navigation',it=>{
+layer(TestWorkspace.layer({manifest,seed:{sys_team:[{id:'desk',name:'Desk',policies:['pages']}]},host:{public_url:'http://localhost',secure:false}}))('actor-scoped navigation',it=>{
   it.effect('keeps staff on allowed pages and rejects direct requests after revocation',()=>Effect.gen(function*(){
     const t=yield* TestWorkspace;
     const pilot='00000000-0000-4000-8000-000000009987',other='00000000-0000-4000-8000-000000009988';

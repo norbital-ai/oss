@@ -102,7 +102,6 @@ const manifest = {
 			policies: ['ops']
 		}
 	},
-	teams: {},
 
 	mcp: {},
 	apps: {},

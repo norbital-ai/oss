@@ -31,7 +31,6 @@ const manifest = {
 			webhook: { verify: { scheme: 'bearer', secret: 'token' }, policies: ['inbound'], handle: true }
 		}
 	},
-	teams: {},
 	mcp: {},
 	apps: {},
 	custom_fields: {},

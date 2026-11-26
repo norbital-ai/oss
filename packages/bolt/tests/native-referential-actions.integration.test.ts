@@ -9,6 +9,9 @@ import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
 import { one_act } from './support/act-one.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { requesters: { policies: ['requester'] }, reviewers: { policies: ['reviewer'] } };
 
 const manifest: EngineManifest = {
 	...base,
@@ -82,7 +85,6 @@ const manifest: EngineManifest = {
 			grants: { roots: { outputs: { default: {} } }, watchers: { outputs: { default: {} } } }
 		}
 	},
-	teams: { requesters: { policies: ['requester'] }, reviewers: { policies: ['reviewer'] } }
 };
 const guest = program(`export default { policy: { requester: { grants: {
 	roots: { delete: { verdict: function* (rows, ctx) { return ctx.approve({ steps: [{ name: 'Review deletion', teams: ['reviewers'] }] }); } } },
@@ -127,6 +129,7 @@ const fixture = Effect.gen(function* () {
 		reviewer = (yield* t.as(
 			t.member(['reviewer'], { teams: ['reviewers'], team_path: ['reviewers'] })
 		)).authority;
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	const act = (
 		model: Model,
 		verb: 'create' | 'update' | 'delete',

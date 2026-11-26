@@ -16,6 +16,14 @@ import { manifest as base } from './write-fixture.ts';
 import { label, label_expression } from '@norbital-ai/store/label';
 import { inboxRequests, inboxSql } from '../src/engine/approvals/inbox.ts';
 import { one_act } from './support/act-one.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = {
+	requesters: { policies: ['requester'] },
+	managers: { policies: ['reviewer'] },
+	finance: { policies: ['reviewer'] },
+	auditors: { policies: ['bystander'] }
+};
 
 const required = <A>(value: A | undefined): A => {
  if (value === undefined) throw new Error('Missing approval fixture value.');
@@ -109,12 +117,6 @@ const manifest: EngineManifest = {
 			}
 		}
 	},
-	teams: {
-		requesters: { policies: ['requester'] },
-		managers: { policies: ['reviewer'] },
-		finance: { policies: ['reviewer'] },
-		auditors: { policies: ['bystander'] }
-	}
 };
 const source = `const managerStep = (ids) => ({
 	name: 'Manager',
@@ -181,6 +183,7 @@ const fixture = Effect.gen(function* () {
 	const t = yield* TestWorkspace,
 		writes = yield* Callables,
 		approvals = yield* Approvals;
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	yield* t.db.write({
 		text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Requester','staff','requesters'),($2,'Manager','staff','managers'),($3,'Finance','staff','finance') ON CONFLICT (id) DO NOTHING",
 		params: [requesterId, managerId, financeId]

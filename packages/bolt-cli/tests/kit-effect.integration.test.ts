@@ -81,7 +81,6 @@ const manifest = {
 			configuration: { lag: { kind: 'int', default: 15 } }
 		}
 	},
-	teams: {},
 	mcp: {},
 	apps: {},
 	custom_fields: {},

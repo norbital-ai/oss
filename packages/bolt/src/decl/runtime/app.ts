@@ -2,7 +2,7 @@
 // The path supplies an app or group's name and the compiler checks its child declarations.
 import { Schema } from 'effect';
 import type { Checked, Exact } from '../fields.ts';
-import type { AppName, ModelName, PolicyName, TeamName } from '../names.ts';
+import type { AppName, ModelName, PolicyName } from '../names.ts';
 import type { CurrencyCode, IanaZone, IconName, NonEmpty, Rate } from '../values.ts';
 import type { ChildName, GroupName, PageName } from './names.ts';
 import type { ConvertTarget } from './facilities.ts';
@@ -34,12 +34,8 @@ export function secrets<const E extends Record<string, SecretDecl>>(
 ): E {
 	return spec;
 }
-type Memberships<Model extends string, Team extends string> = {
+type Memberships<Model extends string> = {
 	model: Model;
-	teams: readonly Team[];
-	staff_team?: Team;
-	groups?: readonly (readonly Team[])[];
-	keep_direct?: readonly Team[];
 	bundles?: { assignments: Model; levels: Model };
 };
 /** Extra requirements for member navigation. A route is visible only when the caller can read
@@ -87,14 +83,11 @@ type WorkspaceBase = {
 	signup?: Signup;
 	/**
 	 * Optional supplementary teams for staff, on a protected workspace model with a member ref to sys_user,
-	 * a team handle and a nullable date until (the last inclusive day in the workspace zone). Only named teams
-	 * contribute policies. Direct member writes are disallowed; an Owner or a guarded automation issues or revokes
-	 * grants. For each ordered group only the highest listed unexpired supplemental team is effective. Levels listed
-	 * in keep_direct are ranked separately for direct and bundle grants. Existing sessions see changes on the next
-	 * request. staff_team gives every staff identity baseline access, including people with no primary team.
-	 * Bundles optionally join assignments (member, role, until) to levels (role, team). Native administrators remain identity-managed.
+	 * a team ref to sys_team and a nullable date until (the last inclusive day in the workspace zone). Direct member
+	 * writes are disallowed; an administrator or a guarded automation issues or revokes grants. Existing sessions see
+	 * changes on the next request. Bundles optionally join assignments (member, role, until) to levels (role, team).
 	 */
-	memberships?: Memberships<string, string>;
+	memberships?: Memberships<string>;
 	/** Rate limits per policy, applied to every caller holding it. */
 	limits?: { readonly [policy: string]: { readonly [key: string]: unknown } };
 };
@@ -150,7 +143,7 @@ type WorkspaceFor = {
 	agent?: { triage?: false };
 	/** Self sign-up by a proven email or mobile number; the build checks `party.match` names text fields. */
 	signup?: SignupFor;
-	memberships?: Memberships<ModelName, TeamName>;
+	memberships?: Memberships<ModelName>;
 	/**
 	 * Rate limits per policy: what a caller holding that policy may send. Undeclared keys take the defaults (`LimitKey`).
 	 * @example limits: { field_ops_contractor: { act: '600/min', read: '600/min', agent: '100/h' } }
@@ -189,7 +182,7 @@ export type LimitKey = 'act' | 'read' | 'agent' | 'register' | 'upload' | 'conve
  * src/+workspace.ts, +secrets.ts
  * src/data/model/<name>/+model.ts, +representation.svelte    (folders may nest; the leaf names the model)
  * src/data/custom_field/<name>/+custom_field.ts, +renderer.svelte
- * src/access_control/team/+team.ts, policy/+<name>.policy.ts
+ * src/access_control/policy/+<name>.policy.ts
  * src/integration/<name>/+integration.ts, +integration.svelte
  * src/automation/+<name>.automation.ts
  * src/agent/+agent.md, +agent.external.md, skill/<name>/+skill.md, mcp/+<name>.mcp.ts

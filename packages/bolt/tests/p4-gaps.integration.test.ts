@@ -12,6 +12,9 @@ import { AgentRow } from '../src/protocol/schema.ts';
 import { act_reply, json, route_fixture } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { rep: { policies: ['rep'] } };
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
@@ -60,7 +63,6 @@ const manifest = Result.getOrThrow(
 		},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
-		teams: { rep: { policies: ['rep'] } },
 		mcp: {},
 		apps: {},
 		custom_fields: {}
@@ -115,6 +117,7 @@ const setup = () =>
 		const t = Context.get(context, TestWorkspace),
 			route = yield* route_fixture(context),
 			authorities = new Authorities(manifest, 'test');
+		yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 		const user = (id: string, options: { external?: boolean } = {}) =>
 			t.db
 				.write({

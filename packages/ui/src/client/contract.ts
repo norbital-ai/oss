@@ -155,7 +155,7 @@ export type ApprovalView = {
 	step: number;
 	steps: readonly ApprovalStep[];
 	superseded_by: readonly string[];
-	/** Current labels of the steps' team handles and user ids; captured handles and native eligibility remain authoritative. */
+	/** Current names of the steps' team and user ids; the captured ids and native eligibility remain authoritative. */
 	team_names: Readonly<Record<string, string>>;
 	user_names: Readonly<Record<string, string>>;
 	requestor: ApprovalWho;

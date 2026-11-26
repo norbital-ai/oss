@@ -46,7 +46,6 @@ const manifest = {
 		}
 	},
 	integrations: {},
-	teams: {},
 	mcp: {},
 	apps: {},
 	custom_fields: {},

@@ -27,6 +27,9 @@ import {
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { memory_audit_layer } from './support/audit.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { Staff: { policies: ['staff'] } };
 
 const m: EngineManifest = {
 	needs: [],
@@ -44,7 +47,6 @@ const m: EngineManifest = {
 	exposures: {},
 	integrations: {},
 	policies: { customer: { description: '', grants: {} }, staff: { description: '', grants: {} } },
-	teams: { Staff: { policies: ['staff'] } },
 	automations: {},
 	mcp: {},
 	apps: {},
@@ -61,6 +63,7 @@ const port = (box: (typeof Text.Type)[]): TransportPort => ({
 const ip = '5.5.5.5';
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
+	yield* db.write({ text: teams_sql(TEAMS), params: [] });
 	// The record a newcomer is: a customer on file by number, as a template's customers model would be.
 	yield* db.write({ text: 'CREATE TABLE customers (id text PRIMARY KEY, phone text)', params: [] });
 	yield* db.write({
@@ -447,15 +450,15 @@ layer(PhoneFixtureLive)((it) => {
 					const admin = yield* as(
 						yield* memberId(`SELECT id FROM sys_user WHERE lower(email) = 'boss@acme.example'`)
 					);
-					expect(yield* Effect.flip(invite(h, m, admin, {}))).toMatchObject({
+					expect(yield* Effect.flip(invite(h, admin, {}))).toMatchObject({
 						_tag: 'IdentityRefusal',
 						code: 'check'
 					});
-					expect(yield* Effect.flip(invite(h, m, admin, { phone: '98765432' }))).toMatchObject({
+					expect(yield* Effect.flip(invite(h, admin, { phone: '98765432' }))).toMatchObject({
 						_tag: 'IdentityRefusal',
 						code: 'check'
 					});
-					const inv = yield* invite(h, m, admin, { phone: '+44 7700 900123', team: 'Staff' });
+					const inv = yield* invite(h, admin, { phone: '+44 7700 900123', team: 'Staff' });
 					expect(inv).toMatchObject({ id: expect.any(String) });
 					expect(texts.at(-1)).toMatchObject({
 						to: '+447700900123',
@@ -483,7 +486,7 @@ layer(PhoneFixtureLive)((it) => {
 					);
 					const ada = yield* memberId(`SELECT id FROM sys_user WHERE phone_key = '6581234567'`);
 					const bob = yield* memberId(`SELECT id FROM sys_user WHERE phone_key = '6591112222'`);
-					const { id } = yield* invite(h, m, admin, {
+					const { id } = yield* invite(h, admin, {
 						phone: '+65 8123 4567',
 						email: 'ada@example.com',
 						team: 'Staff'
@@ -501,7 +504,7 @@ layer(PhoneFixtureLive)((it) => {
 				const admin = yield* as(
 					yield* memberId(`SELECT id FROM sys_user WHERE lower(email) = 'boss@acme.example'`)
 				);
-				yield* invite(h, m, admin, {
+				yield* invite(h, admin, {
 					phone: '+6595556666',
 					external: true,
 					party: { model: 'customers', id: 'c-twin1' }

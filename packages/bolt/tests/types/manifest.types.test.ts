@@ -2,7 +2,6 @@
 // an interior reads what an author wrote without a cast. `Same` is mutual assignability: a Schema-built part is
 // `readonly` where the decl type is not. Never run, only checked.
 import { expectTypeOf } from '@effect/vitest';
-import type { TeamEntries } from '../../src/decl/access/team.ts';
 import type { custom_field } from '../../src/decl/custom-field.ts';
 import type { ExposureSpec, ModelParts, ModelSpec } from '../../src/decl/model.ts';
 import type { RelationshipSpec } from '../../src/decl/names.ts';
@@ -63,6 +62,5 @@ expectTypeOf<
 	Same<NonNullable<Workspace['agent']>, NonNullable<ReturnType<typeof workspace>['agent']>>
 >().toEqualTypeOf<true>();
 expectTypeOf<Same<NonNullable<Workspace['signup']>, Signup>>().toEqualTypeOf<true>();
-expectTypeOf<Same<EngineManifest['teams'], TeamEntries>>().toEqualTypeOf<true>();
 expectTypeOf<'connections' extends keyof EngineManifest ? true : false>().toEqualTypeOf<false>();
 expectTypeOf<Workspace['tz']>().toEqualTypeOf<string>();

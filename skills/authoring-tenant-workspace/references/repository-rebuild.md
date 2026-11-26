@@ -10,6 +10,6 @@ Preserve source behaviour, not legacy framework or infrastructure.
 
 ## Build & prove
 
-- Finish one user journey end-to-end (entry, completion, denied role) per module before expanding. Declare usable teams/policies and seed their members. Justify each model per [model-boundaries.md](model-boundaries.md).
+- Finish one user journey end-to-end (entry, completion, denied role) per module before expanding. Declare usable policies and seed the teams (`sys_team` rows) that hold them and their members. Justify each model per [model-boundaries.md](model-boundaries.md).
 - Test authored operations and page inputs (not just helpers): currency math, date boundaries, exact/over limits, denied roles (`t.sign_in(address)` → `t.as`), repeated imports, child edits under locked parents, refused child atomicity, overlapping-role self-review denial, per-record named-approver denial of another team member, conditional form discriminators, and missing-FX/error/loading chart states.
 - Run `workspace_test` (writing a test ≠ executing it); inspect preview at desktop and narrow widths (report blocked checks honestly; never claim parity from a green build). Verify live Version and routes after merge.

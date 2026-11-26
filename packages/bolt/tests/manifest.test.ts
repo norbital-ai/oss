@@ -15,7 +15,6 @@ import {
 	project_manifest,
 	relations,
 	stateField,
-	teams,
 	type EngineManifest
 } from '../src/engine/manifest.ts';
 import { install } from '../src/decl/runtime/guest.ts';
@@ -31,7 +30,6 @@ const base: EngineManifest = {
 	exposures: {},
 	integrations: {},
 	policies: {},
-	teams: {},
 	automations: {},
 
 	mcp: {},
@@ -44,7 +42,7 @@ const refusal = (u: unknown) =>
 const loaded = (over: Partial<Manifest>): Manifest => ({
 	workspace: { '': { tz: 'UTC', locale: 'en' } },
 	secrets: {}, model: {}, representation: {}, sync: {}, custom_field: {}, renderer: {},
-	integration_definition: {}, integration_setup: {}, policy: {}, team: {},
+	integration_definition: {}, integration_setup: {}, policy: {},
 	agent: {}, agent_external: {}, skill: {}, mcp: {}, automation: {}, app: {},
 	session: {}, page: {}, messages: {}, locale: {}, group: {},
 	...over
@@ -63,8 +61,6 @@ describe('decode_manifest', () => {
 				}
 			},
 			{ ...base, workspace: { locale: 'en' } },
-			{ ...base, teams: { sales: 'p' } },
-			{ ...base, teams: { sales: ['rep'] } },
 			{ ...base, connections: {} },
 			{ ...base, messages: { 'models.orders.fields.number': 123 } },
 			{ ...base, policies: { p: { description: '', grants: { orders: { read: 'all' } } } } },
@@ -216,7 +212,6 @@ describe('decode_manifest', () => {
 				expect(m.workspace).not.toHaveProperty('connections');
 				expect(m).not.toHaveProperty('connections');
 				expect(m.integrations.mail).toMatchObject({ driver: 'email' });
-				expect(m.teams).toEqual({ sales: { name: 'Sales', policies: ['sales_rep'] } });
 				expect(m.apps.sales?.title).toBe('Sales');
 				expect(m.apps.clock?.policies).toEqual(['kiosk_reader']);
 			}).pipe(Effect.provide(NodeServices.layer))
@@ -430,7 +425,6 @@ describe('manifest accessors', () => {
 			lines: { description: 'Lines', record_label: 'record.sku', fields: { sku: { kind: 'text' } } }
 		},
 		relationships: { 'lines.order': { to: 'orders', inverse: 'lines' } },
-		teams: { sales: { policies: ['rep'] }, leads: { name: 'Leads', parent: 'sales', policies: ['lead'] } },
 		apps: {
 			shop: {
 				title: 'Shop',
@@ -449,12 +443,8 @@ describe('manifest accessors', () => {
 		}
 	};
 
-	it('derive the secrets and normalised teams', () => {
+	it('derive the secrets', () => {
 		expect(declared_secrets(m)).toEqual(['API_URL', 'API_KEY']);
-		expect(teams(m)).toEqual({
-			sales: { name: 'sales', parent: null, policies: ['rep'] },
-			leads: { name: 'Leads', parent: 'sales', policies: ['lead'] }
-		});
 	});
 
 	it('stateField, the relation index and the built-in layer', () => {

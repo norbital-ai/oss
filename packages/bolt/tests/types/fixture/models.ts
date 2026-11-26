@@ -3,10 +3,11 @@ install();
 // A hand-written workspace for the type corpus: the `+model.ts` and `+<sync>.sync.ts` literals a template writes, every
 // body inline. `../registry.ts` is what `bolt sync` prints for them: each body is typed from it by the model's name.
 import { custom_field, model, sync } from '../../../src/index.ts';
-import type { Finding, InstanceId, SyncRow } from '../../../src/index.ts';
+import type { Finding, Id, InstanceId, SyncRow } from '../../../src/index.ts';
 
 // a runtime conversation instance (never evaluated here)
 declare const whatsapp_account: InstanceId<'whatsapp'>;
+declare const finance: Id<'sys_team'>;
 
 export const customers = model('customers', {
 	description: 'Buyers',
@@ -141,7 +142,7 @@ export const orders = model('orders', {
 			for (const { after } of changes) yield* ctx.notify({
 				title: `New order ${after.number}`,
 				description: buyers.customers.rows.find((c) => c.id === after.customer)?.name ?? '',
-				to: [{ team: 'finance' }, 'requester'], via: [whatsapp_account],
+				to: [{ team: finance }, 'requester'], via: [whatsapp_account],
 				attachments: [{ document: { html: `<h1>${after.number}</h1>` }, to: 'pdf', name: 'order.pdf' }],
 				link: { model: 'orders', id: after.id }
 			});
@@ -169,7 +170,7 @@ export const orders = model('orders', {
 	delete: {
 		effect: function* (changes, ctx) {
 			yield* ctx.notify(changes.map(({ before }) => ({
-				title: `Order ${before.number} removed`, to: [{ team: 'finance' }]
+				title: `Order ${before.number} removed`, to: [{ team: finance }]
 			})));
 		}
 	},

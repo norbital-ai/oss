@@ -34,6 +34,9 @@ import { shell_api } from '../src/shell/runtime.ts';
 import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { ACME, callbacks, guest, manifest as base, seed, SHADY } from './engine-fixture.ts';
 import { one_act } from './support/act-one.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { finance: { name: 'Finance', policies: [] } };
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -41,7 +44,7 @@ const present = <A>(value: A | null | undefined): A => {
 };
 
 const NOW = '2026-09-25T10:00:00.000Z';
-const manifest = { ...base, teams: { finance: { name: 'Finance', policies: [] } } };
+const manifest = base;
 const rep = present(base.policies['rep']);
 const repOrders = present(rep.grants['orders']);
 /** Orders without a write `check`: no grant routes them to approval, so a committed image carries every field a read
@@ -93,6 +96,7 @@ const cellOf = (m: EngineManifest, source: string) =>
 			queries = Context.get(context, Reads),
 			agents = Context.get(context, Agents),
 			route = yield* route_fixture(context);
+		yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 		const nativeQuery = queries.run;
 		const countedQuery: typeof queries.run = (...args: Parameters<typeof queries.run>) =>
 			Effect.gen(function* () {
@@ -292,7 +296,7 @@ const approving = guest.source.replace(
 	check,
 	`${check} if (changes.some(({ after }) => after.title === 'held')) return ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] });`
 );
-layer(Layer.effect(Cell, cellOf({ ...callbacks, teams: manifest.teams }, approving)), {
+layer(Layer.effect(Cell, cellOf(callbacks, approving)), {
 	excludeTestServices: true
 })('optimistic writes on PGlite', (it) => {
 	it.effect(
@@ -815,8 +819,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 								{ id: 'n2', to: [{ team: 'nobody' }], title: 'Nobody', attachments: [] }
 							],
 							NOW,
-							'true',
-							manifest.teams
+							'true'
 						);
 						count.reset();
 						live.publish(
@@ -995,7 +998,6 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 
 const autoManifest: EngineManifest = {
 	...manifest,
-	teams: { finance: { name: 'Finance', policies: [] } },
 	policies: {
 		...manifest.policies,
 		rep: {

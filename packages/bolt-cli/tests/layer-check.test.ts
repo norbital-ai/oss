@@ -46,7 +46,6 @@ const base: EngineManifest = {
 	exposures: {},
 	integrations: {},
 	policies: {},
-	teams: {},
 	automations: {},
 	mcp: {},
 	apps: {},
@@ -259,7 +258,10 @@ describe('layer maps at compile time (bolt check)', () => {
 					...base,
 					models,
 					exposures: { tickets },
-					teams: { alone: { policies: ['blind'] }, both: { policies: ['blind', 'sound'] } },
+					automations: {
+						alone: { description: 'Alone', policies: ['blind'] },
+						both: { description: 'Both', policies: ['blind', 'sound'] }
+					},
 				policies: {
 					blind: {
 						description: 'Blind',

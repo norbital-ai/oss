@@ -8,7 +8,7 @@ const Step = Schema.Struct({
 });
 /**
  * The flow a request stores (`bolt_approvals.route`): the `steps` arm of `ApprovalSnapshot`, with each step's name,
- * team handles and `sys_user` ids, so a later release cannot restate it.
+ * `sys_team` ids and `sys_user` ids, so a later release cannot restate it.
  */
 export const Snapshot = Schema.Struct({
 	kind: Schema.Literal('steps'),

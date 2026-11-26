@@ -91,7 +91,6 @@ const m = Result.getOrThrow(
 				}
 			}
 		},
-		teams: { Finance: { policies: [] } },
 		integrations: {},
 		automations: {},
 		mcp: {},

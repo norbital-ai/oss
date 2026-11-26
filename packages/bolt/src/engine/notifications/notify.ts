@@ -5,7 +5,8 @@ import { Clock, Effect, Predicate, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { CONVERT_TARGETS, DbError, type WorkspaceNote } from '@norbital-ai/host-api';
 import { LIMITS, type RowData } from '../contracts.ts';
-import { teams, type EngineManifest } from '../manifest.ts';
+import type { EngineManifest } from '../manifest.ts';
+import { teamGraph } from '../identity/graph.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { sql } from '../db/sql.ts';
 import { decodeRows } from '../db/rows.ts';
@@ -123,6 +124,7 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 	);
 	const byId = new Map(accounts.map((account) => [account.id, account]));
 	const requester = ctx.approval?.requester ?? null;
+	const graph = yield* teamGraph(yield* TenantDb);
 	const expand = (to: Notice['to'][number]): Addressee[] =>
 		to === 'requester'
 			? requester === null
@@ -143,7 +145,7 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 		const to = [...new Map(notice.to.flatMap(expand).map((r) => [JSON.stringify(r), r])).values()];
 		const unknown = to.find(
 			(r) =>
-				('team' in r && !Object.hasOwn(ctx.manifest.teams, r.team)) ||
+				('team' in r && !Object.hasOwn(graph.teams, r.team)) ||
 				('policy' in r && !Object.hasOwn(ctx.manifest.policies, r.policy))
 		);
 		if (unknown !== undefined)
@@ -249,7 +251,7 @@ export const notice_sends = Effect.fn('Bolt.noticeSends')(function* (
 	db: TenantDbShape,
 	ids: readonly string[]
 ) {
-	const teamPolicies = teams(m),
+	const graph = yield* teamGraph(db),
 		signupPolicies = m.workspace.signup?.policies ?? [];
 	const [notes, users] = yield* db.read([
 		sql(
@@ -293,10 +295,9 @@ export const notice_sends = Effect.fn('Bolt.noticeSends')(function* (
 			list.some(
 				(r) =>
 					r['user'] === u['id'] ||
-					(typeof r['team'] === 'string' &&
-						u.teams.includes(r['team']) && Object.hasOwn(teamPolicies, r['team'])) ||
+					(typeof r['team'] === 'string' && u.teams.includes(r['team'])) ||
 					(typeof r['policy'] === 'string' &&
-						(u.teams.some(team => (teamPolicies[team]?.policies ?? []).includes(String(r['policy']))) ||
+						(u.teams.some(team => (graph.teams[team]?.policies ?? []).includes(String(r['policy']))) ||
 							(u['signup'] === true && signupPolicies.includes(r['policy']))))
 			)
 		);

@@ -153,8 +153,6 @@ export function manifestErrors(
 				`declares sync '${String(declared)}' (sync('<model>', '<sync>', …)); its path names it '${name}'`
 			);
 	}
-	// Source access declarations own both hierarchy and policy composition.
-	const teams = manifest.team[''];
 	const secrets = manifest.secrets?.[''];
 	if (secrets !== undefined) {
 		if (!Predicate.isObject(secrets))
@@ -178,56 +176,6 @@ export function manifestErrors(
 						sourcePath('secrets', ''),
 						`'${name}' declares a label and optional description; its value is supplied at runtime`
 					);
-	}
-	if (teams !== undefined) {
-		const path = sourcePath('team', '');
-		if (!Predicate.isObject(teams))
-			fail('load/team-shape', path, 'team declarations are a map of stable handles');
-		else {
-			const parents = new Map<string, string>();
-			for (const [handle, entry] of Object.entries(teams)) {
-				if (!Predicate.isReadonlyObject(entry) || Array.isArray(entry)) {
-					fail('load/team-shape', path, `team '${handle}' declares an object with its policy list`);
-					continue;
-				}
-				const policies = entry['policies'];
-				if (
-					!handle.trim() ||
-					!Array.isArray(policies) ||
-					!policies.every(Predicate.isString) ||
-					Object.keys(entry).some((key) => key !== 'name' && key !== 'parent' && key !== 'policies')
-				) {
-					fail('load/team-shape', path, `team '${handle}' declares its policy list`);
-					continue;
-				}
-				for (const policy of policies)
-					if (!Object.hasOwn(manifest.policy, policy))
-						fail('load/team-policy', path, `team '${handle}' names unknown policy '${policy}'`);
-				if (
-					entry['name'] !== undefined &&
-					(typeof entry['name'] !== 'string' || !entry['name'].trim())
-				)
-					fail('load/team-name', path, `team '${handle}' has a nonempty display name`);
-				const parent = entry['parent'];
-				if (parent !== undefined && parent !== null) {
-					if (typeof parent !== 'string' || !Object.hasOwn(teams, parent))
-						fail('load/team-parent', path, `team '${handle}' names an existing parent handle`);
-					else parents.set(handle, parent);
-				}
-			}
-			for (const handle of parents.keys()) {
-				const seen = new Set<string>();
-				let current: string | undefined = handle;
-				while (current !== undefined) {
-					if (seen.has(current)) {
-						fail('load/team-cycle', path, `team '${handle}' has a cyclic hierarchy`);
-						break;
-					}
-					seen.add(current);
-					current = parents.get(current);
-				}
-			}
-		}
 	}
 	// every row carries the system columns; a model field of the same name would shadow one (`revision` is the
 	// row version every update checks), so it is refused here rather than as a duplicate column at migration

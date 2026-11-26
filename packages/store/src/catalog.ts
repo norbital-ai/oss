@@ -18,8 +18,6 @@ export type FieldInfo = {
 	many?: true;
 	email?: true;
 	phone?: true;
-	/** A source team handle (`format: 'team'`): `actor.teams` / `actor.team_tree` compare it. */
-	team?: true;
 	/** A source policy handle (`format: 'policy'`): a write naming an undeclared one is refused. */
 	policy?: true;
 	period_of?: 'date' | 'instant';
@@ -267,7 +265,6 @@ export function field_info(name: string, k: KindSpec, extra: Partial<FieldInfo> 
 		...(nativeMany ? { many: true } : {}),
 		...(k.format === 'email' ? { email: true } : {}),
 		...(k.format === 'phone' ? { phone: true } : {}),
-		...(k.format === 'team' ? { team: true } : {}),
 		...(k.format === 'policy' ? { policy: true } : {}),
 		...(kind === 'period' ? { period_of: k.of === 'date' ? 'date' : 'instant' } : {}),
 		...(kind === 'vector'

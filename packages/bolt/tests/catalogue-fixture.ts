@@ -60,7 +60,6 @@ export const manifest = Result.getOrThrow(
 				grants: { products: { outputs: { default: {} }, create: {}, update: {} } }
 			}
 		},
-		teams: {},
 		automations: {},
 		mcp: {},
 		apps: {},

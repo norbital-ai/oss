@@ -26,7 +26,6 @@ const manifest = {
 	policies: {},
 	agent: { skills: {} },
 	integrations: {},
-	teams: {},
 	automations: {},
 	mcp: {},
 	apps: {},

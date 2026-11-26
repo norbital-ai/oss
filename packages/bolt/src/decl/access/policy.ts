@@ -21,7 +21,6 @@ import type {
 	ReadPath,
 	ReadableName,
 	SyncKey,
-	TeamName,
 	WritePath
 } from '../names.ts';
 import type { Id, NonEmpty } from '../values.ts';
@@ -52,18 +51,18 @@ export type WriteField<C, O extends 'create' | 'update', P = C> = LayerColumn<C,
 
 // ── approval flows ──
 /**
- * Who decides a write, in step order: each step names teams, members (`sys_user` ids the verdict reads at runtime, such
- * as a record's assigned approver), or both, and any one of them decides it. The requester never decides their own
+ * Who decides a write, in step order: each step names teams, members (`sys_team` and `sys_user` ids the verdict reads
+ * at runtime, such as a record's reviewing team or assigned approver), or both, and any one of them decides it. The requester never decides their own
  * request. Superseders may decide any step with a reason.
  */
 export type ApprovalFlow = {
 	readonly steps: NonEmpty<
 		{ readonly name: string } & (
-			| { readonly teams: NonEmpty<TeamName>; readonly users?: NonEmpty<Id<'sys_user'>> }
-			| { readonly teams?: NonEmpty<TeamName>; readonly users: NonEmpty<Id<'sys_user'>> }
+			| { readonly teams: NonEmpty<Id<'sys_team'>>; readonly users?: NonEmpty<Id<'sys_user'>> }
+			| { readonly teams?: NonEmpty<Id<'sys_team'>>; readonly users: NonEmpty<Id<'sys_user'>> }
 		)
 	>;
-	readonly superseded_by?: readonly TeamName[];
+	readonly superseded_by?: readonly Id<'sys_team'>[];
 };
 const FlowData = Schema.Struct({
 	steps: Schema.NonEmptyArray(
@@ -84,7 +83,7 @@ const FlowData = Schema.Struct({
 });
 const decodeFlow = Schema.decodeUnknownSync(FlowData, { onExcessProperty: 'error' });
 
-/** One step of a stored flow: its name and approvers (team handles, `sys_user` ids). */
+/** One step of a stored flow: its name and approvers (`sys_team` ids, `sys_user` ids). */
 export type ApprovalStep = {
 	readonly name: string;
 	readonly teams: readonly string[];
@@ -255,11 +254,15 @@ type PolicyBase = {
  * 				fields: ['job_assignment_id', 'title', 'amount'],
  * 				verdict: function* (rows, ctx) {
  * 					const { job_assignments } = yield* ctx.query({
- * 						job_assignments: { where: { id: { in: rows.map((r) => r.after.job_assignment_id) } }, fields: ['assignee_user_id'] }
+ * 						job_assignments: {
+ * 							where: { id: { in: rows.map((r) => r.after.job_assignment_id) } },
+ * 							fields: ['assignee_user_id', 'controller_team']
+ * 						}
  * 					});
+ * 					const [job] = job_assignments.rows;
  * 					const mine = job_assignments.rows.every((j) => j.assignee_user_id === ctx.actor.id);
- * 					return mine
- * 						? ctx.approve({ steps: [{ name: 'Controller review', teams: ['field_ops_controllers'] }] })
+ * 					return mine && job !== undefined
+ * 						? ctx.approve({ steps: [{ name: 'Controller review', teams: [job.controller_team] }] })
  * 						: yield* ctx.refuse('errors.own_jobs_only', { field: 'job_assignment_id' });
  * 				}
  * 			}

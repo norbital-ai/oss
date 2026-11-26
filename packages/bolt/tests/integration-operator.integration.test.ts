@@ -41,7 +41,6 @@ const manifest = {
 		}
 	},
 	policies: {},
-	teams: {},
 	automations: {},
 	mcp: {},
 	apps: {},

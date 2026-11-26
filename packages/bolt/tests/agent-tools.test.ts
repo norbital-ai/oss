@@ -146,7 +146,6 @@ const manifest: EngineManifest = {
 			grants: { tasks: { create: { verdict: true } } }
 		}
 	},
-	teams: { Leads: { policies: [] } },
 	automations: {},
 
 	mcp: {},
@@ -1483,7 +1482,7 @@ describe('reading the source is every staff member’s; changing it is an admini
 	const source: { [path: string]: string } = {
 		'src/data/model/tasks/+model.ts': 'model({})',
 		'src/data/model/payroll/+model.ts': 'model({})',
-		'src/access_control/team/+team.ts': 'export default {}'
+		'src/access_control/policy/+rep.policy.ts': 'export default {}'
 	};
 	const workspace: WorkspacePort = {
 		files: async () => Object.keys(source),
@@ -1569,8 +1568,8 @@ describe('reading the source is every staff member’s; changing it is an admini
 					yield* result(x, 'workspace_read', { path: 'src/data/model/payroll/+model.ts' })
 				).toMatchObject({ result: { error: 'File not found: src/data/model/payroll/+model.ts' } });
 				expect(
-					yield* result(x, 'workspace_read', { path: 'src/access_control/team/+team.ts' })
-				).toMatchObject({ result: { error: 'File not found: src/access_control/team/+team.ts' } });
+					yield* result(x, 'workspace_read', { path: 'src/access_control/policy/+rep.policy.ts' })
+				).toMatchObject({ result: { error: 'File not found: src/access_control/policy/+rep.policy.ts' } });
 				expect(
 					yield* result(x, 'workspace_grep', { pattern: 'model(', literal: true })
 				).toMatchObject({

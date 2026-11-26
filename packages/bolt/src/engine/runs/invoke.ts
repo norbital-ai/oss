@@ -1,3 +1,4 @@
+import { teamGraph, teamPolicies } from '../identity/graph.ts';
 import { memberTeams } from '../identity/teams.ts';
 import { Authorities } from '../identity/actor.ts';
 import { actor_ref } from '../access/actor.ts';
@@ -807,10 +808,10 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 								const approvers = approval === undefined ? [] : yield* db.rows(Schema.Struct({ id: Schema.String }), {
 									text: `SELECT u.id FROM bolt_approvals a JOIN sys_user u ON
 									(a.route -> 'steps' -> a.step -> 'users' ? u.id OR
-									EXISTS (SELECT 1 FROM unnest(${memberTeams(m.workspace, "$3")}) AS holder(team) WHERE a.route -> 'steps' -> a.step -> 'teams' ? holder.team AND $2::jsonb ? holder.team))
+									EXISTS (SELECT 1 FROM unnest(${memberTeams(m.workspace, "$2")}) AS holder(team) WHERE a.route -> 'steps' -> a.step -> 'teams' ? holder.team))
 									WHERE a.id = $1::uuid AND a.state = 'Pending' AND u.active AND u.kind = 'staff'
 									AND a.requestor <> 'member:' || u.id AND a.requestor_user IS DISTINCT FROM u.id`,
-									params: [approval.request, JSON.stringify(Object.keys(m.teams)), ...(m.workspace.memberships === undefined ? [] : [iso(yield* Clock.currentTimeMillis)])]
+									params: [approval.request, ...(m.workspace.memberships === undefined ? [] : [iso(yield* Clock.currentTimeMillis)])]
 								});
 								const first = approval?.records[0];
 								const bins = call.bins ?? [];
@@ -827,12 +828,13 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 										approvers: { teams: [], users: approvers.map((user) => user.id) }
 									} })
 								}).pipe(Effect.provideService(TenantDb, db));
+								const teams = teamPolicies(yield* teamGraph(db));
 								// a large batch as bounded statements of one transaction
 								const answers = yield* nativeCommits(db.transaction, live.publish,
 									chunked(rows).map((chunk) => {
 										const c = new Chain();
 										c.cte('idem', 'SELECT 1 AS active');
-										noticeInsert(c, 'n', chunk, b.now, undefined, m.teams, m.workspace.signup?.policies, m.workspace);
+										noticeInsert(c, 'n', chunk, b.now, undefined, teams, m.workspace.signup?.policies, m.workspace);
 										return c;
 									}),
 									Schema.Struct({

@@ -244,7 +244,7 @@ export function makeDeliver(e: SyncEngine) {
 				body: result.status === 'acked' ? IDENTITY_CONFLICT : result.message, link: { model: r.model, id: r.record },
 				once: `sync:${r.id}`, attachments: []
 			}], now, `EXISTS (SELECT 1 FROM settled WHERE id = ${c.p(r.id)}::uuid
-				${result.status === 'acked' ? "AND status = 'dead'" : ''})`, m.teams, m.workspace.signup?.policies, m.workspace);
+				${result.status === 'acked' ? "AND status = 'dead'" : ''})`);
 		}
 		const advisory = [
 			...new Set(results.map((r) => `bolt_sync_outbox:${r.row.sync}:${r.row.instance}`))
@@ -344,10 +344,7 @@ export function makeDeliver(e: SyncEngine) {
 								attachments: []
 							}
 						],
-						bindings.now,
-						GATED,
-						m.teams,
-						m.workspace.signup?.policies, m.workspace
+						bindings.now
 					);
 			}
 		}, {

@@ -2,15 +2,15 @@ import { actor_ref } from '../access/actor.ts';
 // A request's flow snapshot and who may act on it: a step is decided by its teams' members or its users.
 import { equal_json } from '@norbital-ai/store/kind';
 import type { Authority, EngineActor } from '../contracts.ts';
-import type { EngineManifest } from '../manifest.ts';
+import type { TeamGraph } from '../identity/graph.ts';
 
 import { OPEN, type ApprovalRole, type ApprovalState } from './machine.ts';
 import type { Snapshot } from './snapshot.ts';
 
-/** A team handle the snapshot names that the workspace does not declare (an authoring error). */
-export const unknownTeam = (m: Pick<EngineManifest, 'teams'>, s: Snapshot): string | undefined =>
+/** A team the snapshot names that the workspace does not have. */
+export const unknownTeam = (graph: TeamGraph, s: Snapshot): string | undefined =>
 	[...s.steps.flatMap((step) => step.teams), ...s.superseded_by].find(
-		(handle) => !Object.hasOwn(m.teams, handle)
+		(id) => !Object.hasOwn(graph.teams, id)
 	);
 /** Two snapshots route alike: the same steps (names and approvers). */
 export const sameFlow = (a: Snapshot, b: Snapshot): boolean =>

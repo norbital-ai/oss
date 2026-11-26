@@ -14,8 +14,10 @@ import { DbError, type PackStep, type Sql } from '@norbital-ai/host-api';
 import type { RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
+import { cyclic } from '../identity/graph.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { restorer, SYNC_SEED } from './seed.ts';
+import { jsonArray } from './shared.ts';
 export { SYNC_SEED };
 import { decodeConfiguration, definitionOf } from '../integrations/instances.ts';
 import { catalog_of } from '../access/pred.ts';
@@ -32,15 +34,16 @@ export type Pack = {
 		}[];
 	};
 };
-/** The system models a pack may seed, in load order: members, then integration instances (a personal one names its member). */
-export const IDENTITY = ['sys_user', 'sys_integration'] as const;
+/** The system models a pack may seed, in load order: teams, their members, then integration instances (a personal one names its member). */
+export const IDENTITY = ['sys_team', 'sys_user', 'sys_integration'] as const;
 const IDENTITY_COLUMNS = {
+	sys_team: ['id', 'name', 'parent', 'policies'],
 	sys_user: ['id', 'name', 'email', 'kind', 'active', 'admin', 'team', 'phone', 'telegram', 'slack', 'discord'],
 	sys_integration: ['id', 'integration', 'name', 'owner', 'active', 'configuration']
 } satisfies Record<(typeof IDENTITY)[number], readonly string[]>;
 /**
- * Identity seeds choose source affiliations; they cannot declare teams or policy grants. An instance seed is a run-time
- * instance of a defined integration. Credentials and envoy deployment are configured at runtime, never seeded.
+ * A pack's teams are its workspace's starting teams: each holds declared policies and sits under a team of the same pack,
+ * and a seeded member's `team` is one of them. An instance seed is a run-time instance of a defined integration. Credentials and envoy deployment are configured at runtime, never seeded.
  * The seeded instances come back as they are stored: their configuration decoded, its defaults filled.
  */
 export function decode_identity(m: EngineManifest, rows: Pack['rows']): Pack['rows'] {
@@ -52,17 +55,33 @@ export function decode_identity(m: EngineManifest, rows: Pack['rows']): Pack['ro
 	);
 	if (unknown !== undefined)
 		throw BoltError.make('seed_decode', 'decode', `seed: unknown model '${unknown}'`);
+	// every team row carries the same columns, so one statement inserts a parent with its children
+	const teams = (rows['sys_team'] ?? []).map((row): RowData => ({ parent: null, policies: [], ...row }));
+	const parents = new Map(
+		teams.map((row) => [String(row['id']), typeof row['parent'] === 'string' ? row['parent'] : null])
+	);
+	for (const [i, row] of teams.entries()) {
+		const fail = (message: string): never => {
+			throw BoltError.make('seed_decode', 'decode', `seed sys_team[${i}]: ${message}`);
+		};
+		const { id, parent, policies } = row;
+		if (typeof id !== 'string' || typeof row['name'] !== 'string') fail('a team carries its id and name');
+		const unknown = (jsonArray(policies) ? policies : [policies]).find(
+			(policy) => typeof policy !== 'string' || !Object.hasOwn(m.policies, policy)
+		);
+		if (unknown !== undefined) fail(`'${String(unknown)}' is not a policy declared in source`);
+		if (parent !== null && (typeof parent !== 'string' || !parents.has(parent)))
+			fail('parent must be a team of the same pack');
+		if (cyclic((team) => parents.get(team), String(id)))
+			fail('a team cannot sit under itself');
+	}
 	for (const [i, row] of (rows['sys_user'] ?? []).entries()) {
 		const team = row['team'];
-		if (
-			team !== undefined &&
-			team !== null &&
-			(typeof team !== 'string' || !Object.hasOwn(m.teams, team))
-		)
+		if (team !== undefined && team !== null && (typeof team !== 'string' || !parents.has(team)))
 			throw BoltError.make(
 				'seed_decode',
 				'decode',
-				`seed sys_user[${i}]: team must name an authored source handle`
+				`seed sys_user[${i}]: team must be the id of a sys_team row of the same pack`
 			);
 	}
 	const columns = IDENTITY_COLUMNS.sys_integration;
@@ -84,7 +103,11 @@ export function decode_identity(m: EngineManifest, rows: Pack['rows']): Pack['ro
 			? fail(configuration.problem)
 			: { ...row, configuration: configuration.value };
 	});
-	return rows['sys_integration'] === undefined ? rows : { ...rows, sys_integration: instances };
+	return {
+		...rows,
+		...(rows['sys_team'] === undefined ? {} : { sys_team: teams }),
+		...(rows['sys_integration'] === undefined ? {} : { sys_integration: instances })
+	};
 }
 const PackSchema = Schema.Struct({
 	format: Schema.Literal(1),
@@ -216,7 +239,7 @@ export const packLoader = Effect.fn('Bolt.packLoader')(function* (
 	const names = Object.keys(pack.meta.rows);
 	const tenant = names.filter((c) => !identities.has(c));
 	const identityStep = Effect.gen(function* () {
-		// every model is named (an unknown one is refused); only the members and instances are read here
+		// every model is named (an unknown one is refused); only the teams, members and instances are read here
 		const identityRows = Object.fromEntries(
 			yield* Effect.forEach(names, (c) =>
 				(identities.has(c) ? Stream.runCollect(pack.rows(c, 0)) : Effect.succeed([])).pipe(

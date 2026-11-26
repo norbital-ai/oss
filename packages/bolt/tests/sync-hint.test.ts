@@ -25,7 +25,6 @@ const manifest = (syncs: ExposureSpec['syncs']) =>
 			},
 
 			policies: {},
-			teams: {},
 			automations: {},
 			mcp: {},
 			apps: {},

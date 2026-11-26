@@ -57,12 +57,6 @@ export const ROLES = [
 		file: '+*.policy.ts',
 		note: 'what holders may do'
 	},
-	{
-		role: 'team',
-		dir: 'access_control/team',
-		file: '+team.ts',
-		note: 'teams and their policies'
-	},
 	{ role: 'agent', dir: 'agent', file: '+agent.md', note: 'agent brief for staff' },
 	{
 		role: 'agent_external',

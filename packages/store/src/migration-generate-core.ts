@@ -39,8 +39,10 @@ function shapeSteps(before: SchemaSpec | null, after: SchemaSpec): string[] {
 		for (const [f, k] of Object.entries(spec.fields)) {
 			const table = before.tables[t] ?? before.tables[spec.was ?? t];
 			const was = table?.fields[f] ?? table?.fields[k.was ?? f];
+			// a text or enum list is a native array: its CHECK validates it, not a JSON shape
+			const json = INLINE.has(k.kind) || (k.many === true && k.kind !== 'text' && k.kind !== 'enum');
 			if (
-				(!INLINE.has(k.kind) && k.many !== true) ||
+				!json ||
 				was === undefined ||
 				canonical(was) === canonical(k)
 			)

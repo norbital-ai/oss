@@ -58,6 +58,9 @@ import {
 	type Kit
 } from '../../bolt-cli/src/test/effect.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { rep: { policies: ['rep'] }, reader: { policies: ['reader'] }, narrow: { policies: ['narrow'] } };
 
 const runtime_accounts = [
 	{ id: 'desk', integration: 'whatsapp' },
@@ -118,7 +121,6 @@ const manifest: EngineManifest = {
 		}
 	},
 	integrations: {},
-	teams: { rep: { policies: ['rep'] }, reader: { policies: ['reader'] }, narrow: { policies: ['narrow'] } },
 	automations: {
 		quotes_mark: {
 			description: 'Mark a quote',
@@ -422,6 +424,7 @@ const build = (
 		const t = Context.get(context, TestWorkspace),
 			agent = Context.get(context, Agents),
 			live = Context.get(context, Live);
+		yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 		const user = (
 			name: string,
 			options: { admin?: boolean; team?: 'rep' | 'reader' | 'narrow'; external?: boolean } = {}

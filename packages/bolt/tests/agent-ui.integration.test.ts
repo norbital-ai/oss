@@ -23,6 +23,9 @@ import { instance_messages } from '../src/shell/integration/messages.ts';
 import { saveAgentSettings, SYSTEM_AGENTS } from '../src/engine/agent/settings.ts';
 import { xlsxCells, xlsxSheets } from '../src/engine/files/xlsx.ts';
 import { respond_system_1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { 't-ops': { name: 'Ops', policies: ['rep'] } };
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
@@ -49,7 +52,6 @@ const manifest = Result.getOrThrow(
 
 		agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },
 		integrations: {},
-		teams: { 't-ops': { name: 'Ops', policies: ['rep'] } },
 		automations: {},
 		mcp: {},
 		apps: {},
@@ -94,6 +96,7 @@ const setup = () =>
 		const t = Context.get(context, TestWorkspace),
 			agent = Context.get(context, Agents),
 			conversations = Context.get(context, Conversations);
+		yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 		for (const [id, kind] of [
 			['ann', 'staff'],
 			['bob', 'staff'],

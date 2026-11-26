@@ -31,7 +31,6 @@ const manifest: EngineManifest = {
 			}
 		}
 	},
-	teams: {},
 	automations: {
 		inspect: {
 			description: 'Inspect the admitted document after dequeue',

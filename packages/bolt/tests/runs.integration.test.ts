@@ -43,6 +43,9 @@ import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import type { Verb } from '../src/engine/write/act.ts';
 import { one_act } from './support/act-one.ts';
 import { with_each } from './support/guest-each.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { ops: { policies: ['ops'] }, branch: { parent: 'ops', policies: [] }, nobody: { policies: [] } };
 const base: EngineManifest = {
 	needs: [],
 	workspace: {
@@ -73,7 +76,6 @@ const base: EngineManifest = {
 		}
 	},
 	integrations: {},
-	teams: { ops: { policies: ['ops'] }, branch: { parent: 'ops', policies: [] }, nobody: { policies: [] } },
 
 
 	mcp: {},
@@ -418,6 +420,7 @@ const world = Effect.fn('TestRuns.world')(function* (
 	const context = yield* engineOnce;
 	const inner = TenantDb.typed(PgliteDb.make(yield* TestDb.open(manifest)));
 	shared.inner = inner;
+	yield* Effect.orDie(inner.write({ text: teams_sql(TEAMS), params: [] }));
 	const clock = shared.clock,
 		statements = shared.statements,
 		db = sharedDb;
@@ -1109,7 +1112,7 @@ describe('re-queues, attempts and notices', () => {
 						})
 				});
 				yield* w.db.write({
-					// holder resolution itself is source-access's; here the notice is sent once across retries
+					// holder resolution itself is team-access's; here the notice is sent once across retries
 					text: `INSERT INTO sys_user(id,name,team,active,kind) VALUES ('holder','Holder','ops',true,'staff')`,
 					params: []
 				});

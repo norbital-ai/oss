@@ -33,6 +33,7 @@ is<Eq<Exact<{ extra: unknown }, {}>, { extra: never }>>();
 is<Eq<Exact<{ extra: never }, {}>, { extra: never }>>();
 
 // Array validation precedes function terminals, including values satisfying both types.
+declare const finance: Id<'sys_team'>;
 declare const callableJsonObjects: (() => void) & readonly { a: boolean }[];
 declare const callableJsonBools: (() => void) & readonly boolean[];
 model('data_case', {
@@ -490,7 +491,7 @@ model('orders', {
 model('orders', {
 	...m.orders.spec,
 	create: { ...m.orders.spec.create, effect: function* (_, ctx) {
-		// @ts-expect-error C15 a notification team must be a source handle
+		// @ts-expect-error C15 a notification team is a sys_team id
 		yield* ctx.notify({ title: 't', to: [{ team: 42 }] });
 	} }
 });
@@ -545,7 +546,7 @@ model('orders', {
 		},
 		effect: function* (changes, ctx) {
 			if (changes.some(({ before }) => before.status === 'ordered'))
-				yield* ctx.notify({ title: 'Ordered order removed', to: [{ team: 'finance' }] });
+				yield* ctx.notify({ title: 'Ordered order removed', to: [{ team: finance }] });
 		}
 	},
 	indexes: {

@@ -24,7 +24,8 @@ import {
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { capturePiece } from '../db/captured.ts';
 import { storedCaptures, storedRowSql } from '../db/stored.ts';
-import { teams, type EngineManifest } from '../manifest.ts';
+import type { EngineManifest } from '../manifest.ts';
+import { teamGraph, teamPolicies } from '../identity/graph.ts';
 import type { Lock } from '@norbital-ai/host-api';
 import {
 	LIMITS,
@@ -294,13 +295,13 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 	const hook: ApprovalHook = {
 		route: Effect.fn('Approvals.route')(function* (act) {
 			const route = act.snapshot;
-			const unknown = unknownTeam(m, route);
+			const unknown = unknownTeam(yield* teamGraph(db), route);
 			if (unknown !== undefined)
 				return yield* Effect.fail(
 					BoltError.make(
 						'invalid_spec',
 						'admission',
-						`The approval flow names the team '${unknown}', which this workspace does not declare.`
+						`The approval flow names the team '${unknown}', which this workspace does not have.`
 					)
 				);
 			const b = act.bindings,
@@ -398,13 +399,13 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 					)
 				);
 			const route = act.snapshot.kind === 'allow' ? a.route : act.snapshot;
-			const unknown = unknownTeam(m, route);
+			const unknown = unknownTeam(yield* teamGraph(db), route);
 			if (unknown !== undefined)
 				return yield* Effect.fail(
 					BoltError.make(
 						'invalid_spec',
 						'admission',
-						`The approval flow names the team '${unknown}', which this workspace does not declare.`
+						`The approval flow names the team '${unknown}', which this workspace does not have.`
 					)
 				);
 			// the same steps resume where changes were requested; changed steps restart at the first
@@ -608,6 +609,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				...carried.flatMap((commit) => commit.runs)
 			],
 			notices: [...notice, ...carried.flatMap((commit) => commit.notices ?? [])],
+			teams: teamPolicies(yield* teamGraph(db)),
 			output: null,
 			restored: plan.restored,
 			approvalDecision: { request: a.id, stands },
@@ -769,7 +771,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			ref,
 			name: ref.startsWith(member) ? (name.get(ref.slice(member.length)) ?? null) : null
 		});
-		const teamCatalogue = teams(m);
+		const graph = yield* teamGraph(db);
 		return seen.map((a): ApprovalView => ({
 			id: a.id,
 			model: a.model,
@@ -783,10 +785,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			superseded_by: a.route.superseded_by,
 			team_names: Object.fromEntries(
 				[...new Set([...a.route.steps.flatMap((s) => s.teams), ...a.route.superseded_by])].map(
-					(handle) => [
-						handle,
-						Object.hasOwn(teamCatalogue, handle) ? (teamCatalogue[handle]?.name ?? handle) : handle
-					]
+					(id) => [id, (Object.hasOwn(graph.teams, id) ? graph.teams[id]?.name : undefined) ?? id]
 				)
 			),
 			user_names: Object.fromEntries(

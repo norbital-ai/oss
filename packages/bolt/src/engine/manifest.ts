@@ -1,13 +1,12 @@
 // The manifest the engine consumes: the declaration literals by path-derived name, bodies stripped (an attached
 // body is marked `true`), decoded once at each boundary that reads one (`bolt check`, `read_artifact`). Its parts are the
 // runtime codecs. Authored literals additionally have the compiler's narrower name/type checks. Every part and the
-// manifest's own shape (the workspace, teams, policies and agent text) decodes exactly: an unknown part or a workspace
+// manifest's own shape (the workspace, policies and agent text) decodes exactly: an unknown part or a workspace
 // without its zone is `ManifestInvalid`. The accessors derive, once per manifest, what interiors recomputed and cast.
 // Runtime codecs stay with their owners; `contracts.ts` imports their derived types.
 import { Predicate, Result, Schema } from 'effect';
 import { SkillSchema } from '@norbital-ai/host-api';
 import { FieldData, OutputData } from '../decl/field-data.ts';
-import type { TeamEntries, SourceTeam } from '../decl/access/team.ts';
 import type { FieldKind } from '../decl/fields.ts';
 import { layer_models, column_layers } from '../decl/model.ts';
 import { ModelData, RelationshipData, SyncData, split_model } from '../decl/model-data.ts';
@@ -167,24 +166,11 @@ const Workspace = Schema.Struct({
 	signup: Schema.optionalKey(Signup),
 	memberships: Schema.optionalKey(Schema.Struct({
 		model: Schema.String,
-		teams: Schema.Array(Schema.String),
-		staff_team: Schema.optionalKey(Schema.String),
-		keep_direct: Schema.optionalKey(Schema.Array(Schema.String)),
-		groups: Schema.optionalKey(Schema.Array(Schema.Array(Schema.String))),
 		bundles: Schema.optionalKey(Schema.Struct({ assignments: Schema.String, levels: Schema.String }))
 	})),
 	/** Rate limits by policy: what a caller holding that policy may send. */
 	limits: Schema.optionalKey(Schema.Record(Schema.String, PolicyLimits))
 });
-/** `+team.ts`: each handle owns one structured definition. */
-const Teams = Schema.Record(
-	Schema.String,
-	Schema.Struct({
-		name: Schema.optionalKey(Schema.String),
-		parent: Schema.optionalKey(Schema.NullOr(Schema.String)),
-		policies: Schema.Array(Schema.String)
-	})
-);
 export type SkillSpec = typeof SkillSchema.Type;
 /** `+agent.md`, `+agent.external.md` (text) and the skills. */
 const Agent = Schema.Struct({
@@ -243,7 +229,6 @@ const manifestFields = {
 	/** The workspace's integration definitions by name (bolt's conversation definitions are `SYSTEM.integrations`). */
 	integrations: Schema.Record(Schema.String, IntegrationData),
 	policies: Schema.Record(Schema.String, PolicyData),
-	teams: Teams,
 	automations: Schema.Record(Schema.String, AutomationData),
 	mcp: Schema.Record(Schema.String, McpData),
 	apps: Schema.Record(Schema.String, AppData),
@@ -444,7 +429,6 @@ export function project_manifest(m: LoadedManifest): unknown {
 		policies: Object.fromEntries(
 			Object.entries(m.policy).map(([name, v]) => [name, policyData(literal(v), relationships)])
 		),
-		teams: m.team[''] ?? {},
 		automations: marked(m.automation, 'run'),
 		mcp: specs(m.mcp),
 		apps: m.app,
@@ -476,16 +460,6 @@ const memo = <A>(derive: (m: EngineManifest) => A) => {
 export const declared_secrets = memo((m): readonly string[] =>
 	Object.keys(m.workspace.secrets ?? {})
 );
-/** A schema slice's team entries in the same runtime shape as the manifest catalogue. */
-export function teamEntries(entries: TeamEntries): { readonly [handle: string]: SourceTeam } {
-	return Object.fromEntries(
-		Object.entries(entries).map(([handle, entry]) => [
-			handle,
-			{ name: entry.name ?? handle, parent: entry.parent ?? null, policies: entry.policies }
-		])
-	);
-}
-export const teams = memo((m): { readonly [handle: string]: SourceTeam } => teamEntries(m.teams));
 /** The manifest with the built-in layer beside the workspace's models, relationships, models and integrations. */
 export const layered = memo((m): EngineManifest => ({
 	...m,

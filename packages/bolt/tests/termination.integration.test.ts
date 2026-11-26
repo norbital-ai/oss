@@ -61,7 +61,6 @@ const manifest = Result.getOrThrow(
 			relay: { description: 'A fast branch beside a slow one', policies: ['p'] }
 		},
 		integrations: {},
-		teams: {},
 
 		mcp: {},
 		apps: {},

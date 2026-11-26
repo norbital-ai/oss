@@ -26,6 +26,9 @@ import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
 import { HOLD_MAX_MS, SmartThrottle, TAKEOVER_MS } from '../src/engine/agent/throttle.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { 't-con': { name: 'Contractors', policies: ['contractor'] } };
 
 const runtime_accounts = [
 	{ id: 'field_wa', integration: 'whatsapp', status: { state: 'connected' } },
@@ -54,7 +57,6 @@ const manifest = Result.getOrThrow(
 			desk: { description: 'Desk', grants: { jobs: { outputs: { default: {} } } } },
 			contractor: { description: 'Contractors', grants: { jobs: { outputs: { default: {} } } } }
 		},
-		teams: { 't-con': { name: 'Contractors', policies: ['contractor'] } },
 		automations: {},
 		
 
@@ -261,6 +263,7 @@ const shared = Effect.runSync(
 			t = Context.get(context, TestWorkspace);
 			throttle = Context.get(context, SmartThrottle);
 			agents = Context.get(context, Agents);
+			yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 			yield* t.db.write({
 				text: `INSERT INTO sys_user (id, email, name, admin, team, phone) VALUES
 			('${ADA}', 'ada@ws.example', 'Ada', true, NULL, '+65 9123 4567'),

@@ -66,7 +66,6 @@ const manifest = Result.getOrThrow(
 		),
 		integrations: {},
 		policies: {},
-		teams: {},
 		automations: {},
 		mcp: {},
 		apps: {},

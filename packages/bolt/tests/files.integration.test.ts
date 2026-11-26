@@ -32,7 +32,6 @@ const manifest = {
 	policies: {},
 	agent: { internal: 'Staff brief.', external: 'External brief.', skills: {} },
 	integrations: {},
-	teams: {},
 	automations: {},
 	mcp: {},
 	apps: {},

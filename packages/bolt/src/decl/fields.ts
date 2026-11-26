@@ -37,11 +37,8 @@ type FileSize = `${bigint}KiB` | `${bigint}MiB` | `${bigint}GiB` | `${bigint}KB`
  * `markdown`: the text is Markdown, rendered as prose and edited as it reads (WYSIWYG); with `images` naming a sibling
  * many-`file` field, pictures pasted or dropped into it are stored there. The others are checked on write.
  */
-/**
- * How a text field is shown and edited: `cel` is a CEL expression, a wrapped code editor; `team` holds a team handle
- * declared in source (`+team.ts`), refused on write when undeclared.
- */
-type TextFormat = 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel' | 'team' | 'policy';
+/** How a text field is shown and edited: `cel` is a CEL expression, a wrapped code editor. */
+type TextFormat = 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel' | 'policy';
 /** The unit a time field is picked in and snapped to (its start; weeks from Monday); the ui's pickers render it. */
 export type {
 	DatePrecision,

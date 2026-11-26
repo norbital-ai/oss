@@ -182,11 +182,9 @@ export class Flattener {
 					)
 				: undefined;
 			const problem =
-				f.team && typeof v === 'string' && !Object.hasOwn(this.m.teams, v)
-					? `'${v}' is not a team declared in source`
-					: unknownPolicy !== undefined
-						? `'${String(unknownPolicy)}' is not a policy declared in source`
-						: decodeValue(f, v, this.m.models[model]?.fields[k], shape);
+				unknownPolicy !== undefined
+					? `'${String(unknownPolicy)}' is not a policy declared in source`
+					: decodeValue(f, v, this.m.models[model]?.fields[k], shape);
 			if (problem !== null) {
 				this.bad(at, problem);
 				continue;

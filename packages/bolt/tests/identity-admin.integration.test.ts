@@ -1,4 +1,4 @@
-// Member administration beyond the basics: source team selection and hierarchy, invitation resend, a
+// Member administration beyond the basics: team selection and hierarchy, invitation resend, a
 // previewed team's Authority, and the membership projection (`bolt.membership` queued in the verb's statement only
 // when the host binds the port, and handed to the port by its platform run).
 import { describe, expect, layer } from '@effect/vitest';
@@ -32,6 +32,7 @@ import {
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { memory_audit_layer } from './support/audit.ts';
+import { teams_sql } from './support/teams.ts';
 
 const m: EngineManifest = {
 	needs: [],
@@ -45,24 +46,25 @@ const m: EngineManifest = {
 		field: { description: '', grants: {} },
 		finance: { description: '', grants: {} }
 	},
-	teams: {
-		Sales: { policies: ['sales', 'finance'] },
-		Field: { policies: ['field'] },
-		Ops: { policies: ['finance'] },
-		Region: { parent: 'Ops', policies: ['sales'] },
-		Depot: { parent: 'Region', policies: [] },
-		Crew: { policies: ['sales'] }
-	},
 	automations: {},
 	mcp: {},
 	apps: {},
 	custom_fields: {},
 	agent: { skills: {} }
 };
+const TEAMS = {
+	Sales: { policies: ['sales', 'finance'] },
+	Field: { policies: ['field'] },
+	Ops: { policies: ['finance'] },
+	Region: { parent: 'Ops', policies: ['sales'] },
+	Depot: { parent: 'Region', policies: [] },
+	Crew: { policies: ['sales'] }
+};
 const Mail = Schema.Struct({ to: Schema.String, text: Schema.String });
 const clock = Date.parse('2026-09-25T00:00:00Z');
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
+	yield* db.write({ text: teams_sql(TEAMS), params: [] });
 	yield* TestClock.setTime(clock);
 	const outbox: (typeof Mail.Type)[] = [],
 		announced: string[] = [];
@@ -133,17 +135,17 @@ const AdministrationFixtureLive = Layer.effect(AdministrationFixture, fixture).p
 );
 
 layer(AdministrationFixtureLive)('identity administration', (it) => {
-	describe('source team choices', () => {
-		it.effect('accepts source handles and refuses forged handles and non-administrators', () =>
+	describe('team choices', () => {
+		it.effect('accepts a team on file and refuses forged ids and non-administrators', () =>
 			Effect.gen(function* () {
 				const { db, h, founder, as, external } = yield* AdministrationFixture;
 				const boss = yield* as(founder);
-				expect(yield* assign_team(h, m, boss, founder, 'Sales')).toBeNull();
-				expect(yield* Effect.flip(assign_team(h, m, boss, founder, 'sales'))).toMatchObject({
+				expect(yield* assign_team(h, boss, founder, 'Sales')).toBeNull();
+				expect(yield* Effect.flip(assign_team(h, boss, founder, 'sales'))).toMatchObject({
 					_tag: 'IdentityRefusal',
 					code: 'not_found'
 				});
-				expect(yield* Effect.flip(assign_team(h, m, boss, founder, 'forged'))).toMatchObject({
+				expect(yield* Effect.flip(assign_team(h, boss, founder, 'forged'))).toMatchObject({
 					_tag: 'IdentityRefusal',
 					code: 'not_found'
 				});
@@ -153,28 +155,25 @@ layer(AdministrationFixtureLive)('identity administration', (it) => {
 					params: [external]
 				});
 				expect(
-					yield* Effect.flip(assign_team(h, m, yield* as(external), founder, 'Field'))
+					yield* Effect.flip(assign_team(h, yield* as(external), founder, 'Field'))
 				).toMatchObject({ _tag: 'IdentityRefusal', code: 'forbidden' });
-				yield* assign_team(h, m, boss, founder, null);
+				yield* assign_team(h, boss, founder, null);
 			})
 		);
 
 		it.effect(
-			'resolves the declared team and its source hierarchy without a team table or inherited parent grants',
+			'resolves the team and its hierarchy without inherited parent grants',
 			() =>
 				Effect.gen(function* () {
 					const { h, founder, as, one } = yield* AdministrationFixture;
 					const boss = yield* as(founder);
-					expect(yield* assign_team(h, m, boss, founder, 'Region')).toBeNull();
+					expect(yield* assign_team(h, boss, founder, 'Region')).toBeNull();
 					const member = yield* as(founder);
 					if (member.actor.kind !== 'member') throw new Error('Expected native member');
 					expect(member.actor.team_path).toEqual(['Region', 'Ops']);
 					expect(member.policies).toEqual(['sales']);
 					expect(member.teamTree).toEqual(expect.arrayContaining(['Region', 'Depot']));
-					expect(yield* one(`SELECT to_regclass('sys_team') IS NULL AS absent`)).toEqual([
-						{ absent: true }
-					]);
-					yield* assign_team(h, m, boss, founder, null);
+					yield* assign_team(h, boss, founder, null);
 				})
 		);
 	});
@@ -186,7 +185,7 @@ layer(AdministrationFixtureLive)('identity administration', (it) => {
 				Effect.gen(function* () {
 					const { db, h, founder, as, one, outbox, external } = yield* AdministrationFixture;
 					const boss = yield* as(founder);
-					const { id } = yield* invite(h, m, boss, { email: 'late@acme.example' });
+					const { id } = yield* invite(h, boss, { email: 'late@acme.example' });
 					yield* TestClock.adjust('8 days'); // past the 7-day expiry
 					const sent = outbox.length;
 					expect(yield* resendInvitation(h, boss, id)).toBeNull();
@@ -217,7 +216,7 @@ layer(AdministrationFixtureLive)('identity administration', (it) => {
 
 	describe('preview as a team', () => {
 		it.effect(
-			'holds the source team policies, never admin; admin-only; an unknown team is not_found',
+			'holds the team policies, never admin; admin-only; an unknown team is not_found',
 			() =>
 				Effect.gen(function* () {
 					const { db, founder, authorities, as, external } = yield* AdministrationFixture;
@@ -268,14 +267,14 @@ layer(AdministrationFixtureLive)('identity administration', (it) => {
 						yield* AdministrationFixture;
 					const boss = yield* as(founder);
 					announced.length = 0;
-					const inv = yield* invite(bound, m, boss, { email: 'new@acme.example' });
+					const inv = yield* invite(bound, boss, { email: 'new@acme.example' });
 					expect(inv).toMatchObject({ id: expect.any(String) });
 					yield* send_code(bound, 'new@acme.example', '5.5.5.5');
 					const s = yield* verify_code(bound, 'new@acme.example', lastCode(), '5.5.5.5');
 					const user = s.user,
 						team = 'Crew';
 					yield* TestClock.adjust('1 second');
-					expect(yield* assign_team(bound, m, boss, user, team)).toBeNull();
+					expect(yield* assign_team(bound, boss, user, team)).toBeNull();
 					yield* TestClock.adjust('1 second');
 					expect(yield* deactivate(bound, boss, user)).toBeNull();
 					yield* TestClock.adjust('1 second');
@@ -348,7 +347,7 @@ layer(AdministrationFixtureLive)('identity administration', (it) => {
 						}
 					};
 					const email = 'birth.acceptance@acme.example';
-					const invitation = yield* invite(host, manifest, yield* as(founder), {
+					const invitation = yield* invite(host, yield* as(founder), {
 						email,
 						team: 'Field'
 					});
@@ -417,7 +416,7 @@ layer(AdministrationFixtureLive)('identity administration', (it) => {
 						}
 					};
 					const auth = yield* as(founder);
-					const sent = yield* inviteMany(host, manifest, auth, [
+					const sent = yield* inviteMany(host, auth, [
 						{ email: 'bulk-one@example.com' },
 						{ email: 'bulk-two@example.com' },
 						{ phone: '+6581234999' }
@@ -436,7 +435,7 @@ layer(AdministrationFixtureLive)('identity administration', (it) => {
 					if (typeof before?.['n'] !== 'number') throw new Error('Missing invitation count');
 					expect(
 						yield* Effect.flip(
-							inviteMany(host, manifest, auth, [
+							inviteMany(host, auth, [
 								{ email: 'valid@example.com' },
 								{ email: 'invalid' }
 							])
@@ -444,7 +443,7 @@ layer(AdministrationFixtureLive)('identity administration', (it) => {
 					).toMatchObject({ _tag: 'IdentityRefusal' });
 					expect(
 						yield* Effect.flip(
-							inviteMany(host, manifest, auth, [
+							inviteMany(host, auth, [
 								{ email: 'same@example.com' },
 								{ email: 'SAME@example.com' }
 							])
@@ -454,7 +453,7 @@ layer(AdministrationFixtureLive)('identity administration', (it) => {
 						before['n']
 					);
 					expect(
-						yield* Effect.flip(inviteMany(host, manifest, yield* as(founder), []))
+						yield* Effect.flip(inviteMany(host, yield* as(founder), []))
 					).toMatchObject({ _tag: 'IdentityRefusal' });
 				})
 		);
@@ -477,7 +476,7 @@ layer(AdministrationFixtureLive)('identity administration', (it) => {
 						}
 					};
 					const host = { ...h, mail };
-					const sent = yield* inviteMany(host, m, auth, [
+					const sent = yield* inviteMany(host, auth, [
 						{ email: 'failed@example.com' },
 						{ email: 'delivered@example.com' }
 					]).pipe(Effect.provide(logger));
@@ -497,7 +496,7 @@ layer(AdministrationFixtureLive)('identity administration', (it) => {
 					expect(delivered).toEqual(['delivered@example.com']);
 					expect(
 						yield* Effect.flip(
-							inviteMany(host, m, { ...auth, admin: false }, [{ email: 'forbidden@example.com' }])
+							inviteMany(host, { ...auth, admin: false }, [{ email: 'forbidden@example.com' }])
 						)
 					).toMatchObject({ _tag: 'IdentityRefusal' });
 				})

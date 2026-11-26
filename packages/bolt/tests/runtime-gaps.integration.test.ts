@@ -11,6 +11,9 @@ import { Port } from '@norbital-ai/host-api';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { act_reply, route_fixture } from './support/route-fixture.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { ops: { policies: ['ops'] } };
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
@@ -53,7 +56,6 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		integrations: {},
-		teams: { ops: { policies: ['ops'] } },
 		mcp: {},
 		apps: {},
 		custom_fields: {},
@@ -138,6 +140,7 @@ const setup = (web: WebRead['Service']['read'] = unused) =>
 			route = yield* route_fixture(context),
 			calls = Context.get(context, Callables),
 			runs = Context.get(context, Runs);
+		yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 		const ops = (yield* t.as(t.member(['ops']))).authority;
 		const admin = (yield* t.as(t.admin)).authority;
 		const authority = () => ops;

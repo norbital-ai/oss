@@ -12,6 +12,7 @@ import { catalog_of } from '../access/pred.ts';
 import { LIMITS, utf8Bytes, type Outcome, type RowData } from '../contracts.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { writableFile } from '../decision.ts';
+import { cyclic, teamGraph } from '../identity/graph.ts';
 import { membershipModels, membershipWriter } from '../identity/teams.ts';
 import type { EngineError } from '../errors.ts';
 import { embedQueued, embedWrites } from '../integrations/embed.ts';
@@ -283,6 +284,21 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 					touched.change.path
 				)
 			);
+	}
+	const teams = f.items.filter((item) => item.change.model === 'sys_team');
+	const [team] = teams;
+	if (team !== undefined) {
+		if (!auth.admin)
+			return none(refused('forbidden', 'Only an administrator can change teams.', team.change.path));
+		// ponytail: the remembered graph; a cycle closed from two activations at once passes, and every walk of the graph ends on one
+		const parents = new Map(Object.entries((yield* teamGraph(e.db)).teams).map(([id, t]) => [id, t.parent]));
+		for (const { change: c } of teams) {
+			const parent = c.op === 'delete' ? undefined : (c.op === 'update' ? c.set : c.values)['parent'];
+			if (typeof parent === 'string' || parent === null) parents.set(named(c), parent);
+		}
+		const looped = teams.find(({ change: c }) => c.op !== 'delete' && cyclic((id) => parents.get(id), named(c)));
+		if (looped !== undefined)
+			return none(refused('invalid_input', 'A team cannot sit under itself.', [...looped.change.path, 'parent']));
 	}
 	const owned = syncOwnership(m, r, f.items);
 	if (owned !== null) return none(owned);

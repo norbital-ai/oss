@@ -67,14 +67,13 @@ type VarField = {
 	readonly of?: string | undefined;
 	readonly email?: boolean | undefined;
 	readonly phone?: boolean | undefined;
-	readonly team?: boolean | undefined;
 };
 /** Whether `f` may compare with actor member `m`. */
 export function member_admits(f: VarField, m: string): boolean {
 	switch (m) {
 		case 'teams':
 		case 'team_tree':
-			return f.team === true;
+			return f.of === 'sys_team';
 		case 'email':
 			return f.email === true;
 		case 'phone':

@@ -45,7 +45,6 @@ const manifest = {
 		follow: { description: 'Waits for a sent quote', input: { until: { kind: 'instant' } }, policies: ['ops'] }
 	},
 	integrations: {},
-	teams: {},
 	mcp: {},
 	apps: {},
 	custom_fields: {},

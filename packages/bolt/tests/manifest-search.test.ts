@@ -14,7 +14,6 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {},
 	integrations: {},
-	teams: {},
 	mcp: {},
 	apps: {},
 	custom_fields: {},

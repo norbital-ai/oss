@@ -78,7 +78,7 @@ export type Kind = Common &
 	(
 		| {
 				readonly kind: 'text';
-				readonly format?: 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel' | 'team' | 'policy';
+				readonly format?: 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel' | 'policy';
 				readonly max?: number;
 				readonly many?: true;
 				/** A `markdown` text's sibling many-`file` field: pictures pasted or dropped into the text are stored there. */
@@ -197,7 +197,7 @@ export const KindSchema: Schema.Codec<Kind> = /* @__PURE__ */ (() => {
 	const Nested = Schema.suspend((): Schema.Codec<Kind> => KindSchema);
 	const Fields = Schema.Record(Schema.String, Nested);
 	const text_arm = descriptor_arm('text', {
-		format: Schema.optionalKey(Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel', 'team', 'policy'])),
+		format: Schema.optionalKey(Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel', 'policy'])),
 		max: Num,
 		many: Bool,
 		images: Str

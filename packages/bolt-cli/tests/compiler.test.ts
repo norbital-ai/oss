@@ -272,7 +272,6 @@ describe('next compiler: discover', () => {
 				'secrets ',
 				'skill triage',
 				'sync notices.messages',
-				'team ',
 				'workspace '
 			]);
 		}).pipe(Effect.provide(NodeServices.layer))
@@ -341,42 +340,6 @@ describe('next compiler: load', () => {
 					{ code: 'load/reserved-field', path: file },
 					{ code: 'load/system-only', path: file }
 				]);
-			} finally {
-				rmSync(root, { recursive: true, force: true });
-			}
-		}).pipe(Effect.provide(NodeServices.layer))
-	);
-	it.live('validates source team composition and hierarchy independently of display labels', () =>
-		Effect.gen(function* () {
-			const root = yield* scratchPath(`compiler-source-access-${randomUUID()}`);
-			const write = (path: string, text: string) => {
-				mkdirSync(dirname(join(root, path)), { recursive: true });
-				writeFileSync(join(root, path), text);
-			};
-			try {
-				write('src/+workspace.ts', "export default { tz: 'UTC', locale: 'en' };");
-				write('src/access_control/policy/+sales.policy.ts', 'export default { grants: {} };');
-				write(
-					'src/access_control/team/+team.ts',
-					"export default { root: { name: 'Shared label', parent: null, policies: ['sales'] }, branch: { name: 'Shared label', parent: 'root', policies: [] }, Root: { policies: ['sales'] } };"
-				);
-				const found = yield* discover(root);
-				expect(found.files).toContainEqual({
-					role: 'team',
-					name: '',
-					path: 'src/access_control/team/+team.ts'
-				});
-				const loaded = yield* load(root, found.files);
-				expect(loaded.errors).toEqual([]);
-				const check = (teams: unknown) =>
-					manifestErrors({ ...loaded.manifest, team: { '': teams } }).map((error) => error.code);
-				expect(check({ role: { policies: ['unknown'] } })).toContain('load/team-policy');
-				expect(check({ role: { policies: [], parent: 'missing' } })).toContain('load/team-parent');
-				expect(
-					check({ a: { policies: [], parent: 'b' }, b: { policies: [], parent: 'a' } })
-				).toContain('load/team-cycle');
-				expect(check({ role: { policies: 'sales' } })).toContain('load/team-shape');
-				expect(check({ role: { policies: [], name: '' } })).toContain('load/team-name');
 			} finally {
 				rmSync(root, { recursive: true, force: true });
 			}
@@ -598,7 +561,6 @@ describe('next compiler: seed packs', () => {
 		policies: {},
 		integrations: {},
 		automations: {},
-		teams: {},
 
 		mcp: {},
 		apps: {},

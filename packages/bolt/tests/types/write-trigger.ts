@@ -28,7 +28,7 @@ automation({
 							accepted_at: { is_null: true },
 							revoked_at: { is_null: true },
 							expires_at: { gt: ctx.now },
-							team: { eq: 'sales' },
+							team: { is_null: false },
 							or: [{ email: { eq: 'a@b.example' } }, { phone: { eq: '+6581234567' } }]
 						}
 					}

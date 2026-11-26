@@ -4,7 +4,7 @@
 // adapter. The contract is exactly these durable fields:
 //
 // - `bolt_schema`: one row; `slice -> 'tables' -> <table>` is the applied schema's store `TableSpec` of each table below.
-// - `sys_user`, keyed `text`: `name` text; `email`, `phone` and `team` optional text; `active` and `admin` bool;
+// - `sys_user`, keyed `text`: `name` text; `email` and `phone` optional text; `active` and `admin` bool;
 //   `phone_key` computed text, `phone`'s digits (`regex_replace(phone, '\D', '')`).
 // - `sys_integration`, keyed `text`: `active` bool.
 // - `bolt_credential`: `instance`, the `sys_integration` id each sealed credential belongs to (an engine table every
@@ -23,7 +23,6 @@ export const HostUser = Schema.Struct({
 	name: Schema.String,
 	email: Schema.NullOr(Schema.String),
 	phone: Schema.NullOr(Schema.String),
-	team: Schema.NullOr(Schema.String),
 	active: Schema.Boolean
 });
 export type HostUser = typeof HostUser.Type;
@@ -41,7 +40,6 @@ const Users = Schema.Struct({
 		name: field('text'),
 		email: optional('text'),
 		phone: optional('text'),
-		team: optional('text'),
 		active: field('bool'),
 		admin: field('bool')
 	}),
@@ -64,7 +62,7 @@ const Instances = Schema.Struct({
 });
 /** undefined_table, undefined_column: the layout is not the contract's. */
 const UNDEFINED = new Set(['42P01', '42703']);
-const USERS = 'SELECT id, name, email, phone, team, active FROM sys_user';
+const USERS = 'SELECT id, name, email, phone, active FROM sys_user';
 
 /** `statements`' answers, read in one snapshot after `table`'s applied layout is admitted. */
 const admitted = (

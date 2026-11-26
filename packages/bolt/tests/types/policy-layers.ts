@@ -2,9 +2,11 @@
 // the model's own declaration. Each `@ts-expect-error` line is a planted mistake from the plan's table; a clean tsc proves
 // every valid literal compiles and every mistake is refused at its literal.
 import { policy } from '../../src/index.ts';
-import type { CreateInput, StoredTree, UpdateInput } from '../../src/index.ts';
+import type { CreateInput, Id, StoredTree, UpdateInput } from '../../src/index.ts';
 import './registry.ts';
 import type { LayerField, OutputName, PathModel, ReadPath, WritePath } from '../../src/decl/names.ts';
+
+declare const sales: Id<'sys_team'>;
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
@@ -52,7 +54,7 @@ export const layered = policy({
 					});
 					return customers.rows.every((c) => c.tier === 'gold')
 						? ctx.allow()
-						: ctx.approve({ steps: [{ name: 'Sales review', teams: ['sales'] }] });
+						: ctx.approve({ steps: [{ name: 'Sales review', teams: [sales] }] });
 				}
 			},
 			update: {

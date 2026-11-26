@@ -14,6 +14,9 @@ import { bindings } from '../src/protocol/http.ts';
 import { IntegrationManager, integration_routes } from '../src/protocol/integrations.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { Readers: { name: 'Readers', policies: ['reader'] } };
 
 const NOW = '2026-10-14T17:30:00.000Z'; // 01:30 on 15 October in Kuala Lumpur
 const TODAY = '2026-10-15';
@@ -47,7 +50,6 @@ const manifest = Result.getOrThrow(
 				grants: { notes: { outputs: { default: { scopes: { notes: { due: { lte: TODAY } } } } } } }
 			}
 		},
-		teams: { Readers: { name: 'Readers', policies: ['reader'] } },
 		automations: {},
 		mcp: {},
 		apps: {},
@@ -78,6 +80,7 @@ it.live(
 					})
 				);
 				const t = Context.get(context, TestWorkspace);
+				yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 				expect(yield* bindings.pipe(Effect.provide(context))).toEqual({
 					now: NOW,
 					today: TODAY,

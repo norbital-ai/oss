@@ -13,7 +13,6 @@ const USERS = {
 		name: { kind: 'text' },
 		email: { kind: 'text', format: 'email', optional: true },
 		phone: { kind: 'text', optional: true },
-		team: { kind: 'text', format: 'team', optional: true },
 		active: { kind: 'bool', default: true },
 		admin: { kind: 'bool', default: false }
 	},
@@ -29,16 +28,16 @@ const slice = (users: object) => ({
 });
 const STORAGE = `
 	CREATE TABLE bolt_schema (one bool PRIMARY KEY DEFAULT true, fingerprint text NOT NULL, slice jsonb NOT NULL);
-	CREATE TABLE sys_user (id text PRIMARY KEY, name text NOT NULL, email text, phone text, team text,
+	CREATE TABLE sys_user (id text PRIMARY KEY, name text NOT NULL, email text, phone text,
 		active boolean NOT NULL DEFAULT true, admin boolean NOT NULL DEFAULT false,
 		phone_key text GENERATED ALWAYS AS (regexp_replace(phone, '\\D', '', 'g')) STORED);
 	CREATE TABLE sys_integration (id text PRIMARY KEY, active boolean NOT NULL);
 	CREATE TABLE bolt_credential (instance text NOT NULL, name text NOT NULL);
-	INSERT INTO sys_user (id, name, email, phone, team, active, admin) VALUES
-		('p-admin', 'Boss', 'Boss@people.test', NULL, 'ops', true, true),
-		('p-email', 'Email', 'Match@people.test', '+65 1111 2222', NULL, true, false),
-		('p-phone', 'Phone', NULL, '+65 1234 5678', NULL, true, false),
-		('p-inactive', 'Inactive', 'old@people.test', NULL, NULL, false, true);
+	INSERT INTO sys_user (id, name, email, phone, active, admin) VALUES
+		('p-admin', 'Boss', 'Boss@people.test', NULL, true, true),
+		('p-email', 'Email', 'Match@people.test', '+65 1111 2222', true, false),
+		('p-phone', 'Phone', NULL, '+65 1234 5678', true, false),
+		('p-inactive', 'Inactive', 'old@people.test', NULL, false, true);
 	INSERT INTO sys_integration VALUES ('paired', true), ('paused', false);
 	INSERT INTO bolt_credential VALUES ('paused', 'creds');
 `;
@@ -72,7 +71,6 @@ layer(Pristine.layer)('recovery storage contract', (it) => {
 					name: 'Phone',
 					email: null,
 					phone: '+65 1234 5678',
-					team: null,
 					active: true
 				});
 				expect((yield* storage.members).map((member) => member.id).sort()).toEqual([

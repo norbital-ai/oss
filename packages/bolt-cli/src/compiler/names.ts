@@ -82,7 +82,6 @@ const PARTS: { part: string; role: Discovered['role']; shape: 'each' | 'spec' | 
 	{ part: 'locales', role: 'locale', shape: 'each' },
 	{ part: 'messages', role: 'messages', shape: 'one' },
 	{ part: 'policies', role: 'policy', shape: 'each' },
-	{ part: 'teams', role: 'team', shape: 'one' },
 	{ part: 'workspace', role: 'workspace', shape: 'one' },
 	{ part: 'secrets', role: 'secrets', shape: 'one' }
 ];

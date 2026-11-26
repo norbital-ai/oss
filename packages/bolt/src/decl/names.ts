@@ -32,7 +32,6 @@ type NamesShape = {
 	/** Each `src/integration/<name>/+integration.ts`: the workspace's definitions (bolt's own are `SystemNames`). */
 	integrations: { [integration: string]: unknown };
 	custom_fields: { [field: string]: { spec: { shape: unknown } } };
-	teams: { [team: string]: unknown };
 	/** The base catalogue `src/i18n/+messages.ts`: its keys are the message keys. */
 	messages: { [key: string]: string };
 	/** Each `src/i18n/+<locale>.messages.ts`: the base's keys, plus native model captions it may translate alone (`Verify`). */
@@ -84,8 +83,6 @@ export type ReadableName = Exclude<ModelName, Ledger>;
 type CustomFields = BuiltinFields & NamesPart<'custom_fields'>;
 /** A custom field name a model may store as `{ kind: 'custom', of }`: a built-in's or the workspace's own. */
 export type CustomFieldName = keyof CustomFields & string;
-/** The team names `+team.ts` declares. */
-export type TeamName = keyof NamesPart<'teams'> & string;
 /** The policy names (`src/access_control/policy/+<name>.policy.ts`). */
 export type PolicyName = keyof NamesPart<'policies'> & string;
 /** The app names (`src/app/<a>/+app.ts`). */

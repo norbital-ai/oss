@@ -69,7 +69,6 @@ const manifest = {
 	},
 	automations: {},
 	integrations: {},
-	teams: {},
 	mcp: {},
 	apps: {},
 	custom_fields: {},

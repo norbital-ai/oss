@@ -63,7 +63,6 @@ const manifest: EngineManifest = {
 			}
 		}
 	},
-	teams: {}
 };
 const EntryPage = Schema.Struct({
 	entries: Schema.Struct({

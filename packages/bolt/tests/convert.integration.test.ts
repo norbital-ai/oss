@@ -34,7 +34,6 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		integrations: {},
-		teams: {},
 		mcp: {},
 		apps: {},
 		custom_fields: {},

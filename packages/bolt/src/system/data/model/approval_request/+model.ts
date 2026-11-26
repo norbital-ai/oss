@@ -21,7 +21,7 @@ export default bind_system_model('approval_request')({
 		steps: { kind: 'int' },
 		/** Every step's name, in order (the flow's `step(name, …)`). */
 		step_names: names,
-		/** The current step's approving team handles. */
+		/** The current step's approving `sys_team` ids. */
 		approver_teams: names,
 		/** The current step's approving members (`sys_user` ids). */
 		approver_users: names,

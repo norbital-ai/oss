@@ -449,7 +449,6 @@ const workspace: EngineManifest = {
 	exposures: {},
 	integrations: {},
 	policies: {},
-	teams: {},
 	automations: {},
 	mcp: {},
 	apps: {},

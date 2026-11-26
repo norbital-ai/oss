@@ -189,7 +189,6 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		const decoded = yield* decode(InviteInput);
 		const result = yield* inviteMany(
 			x.engine.identity,
-			x.engine.manifest,
 			x.authority,
 			decoded.members
 		);

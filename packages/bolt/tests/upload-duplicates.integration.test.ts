@@ -10,7 +10,7 @@ import { json, route_fixture } from './support/route-fixture.ts';
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' }, needs: [], models: {}, relationships: {}, exposures: {}, policies: {},
-	agent: { skills: {} }, integrations: {}, teams: {}, automations: {}, mcp: {}, apps: {}, custom_fields: {}
+	agent: { skills: {} }, integrations: {}, automations: {}, mcp: {}, apps: {}, custom_fields: {}
 } satisfies EngineManifest;
 
 it.live('uploads reuse identical files concurrently, keep changed contents, and isolate uploaders', () => Effect.scoped(Effect.gen(function* () {

@@ -34,7 +34,6 @@ const manifest: EngineManifest = {
 		}
 	},
 	policies: {},
-	teams: {},
 	automations: {}
 };
 const source = `export default { model: { stints: { bodies: {

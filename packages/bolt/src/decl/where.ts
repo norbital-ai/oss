@@ -96,7 +96,7 @@ type DynOk<K> =
 	| (K extends { kind: 'ref' } ? { var: 'actor.party' } : never);
 type DynList<K, S> = S extends true
 	? never
-	: K extends { kind: 'text'; format: 'team' }
+	: K extends { kind: 'ref'; to: 'sys_team' }
 		? { var: 'actor.teams' | 'actor.team_tree' }
 		: never;
 interface ValOf<M, K, S> {

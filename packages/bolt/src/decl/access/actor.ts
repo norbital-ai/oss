@@ -1,5 +1,5 @@
-// `Actor`: who a request runs as. Members hold their authored team policies; the others are static.
-import type { AppName, AutomationName, TeamName } from '../names.ts';
+// `Actor`: who a request runs as. Members hold their teams' policies; the others are static.
+import type { AppName, AutomationName } from '../names.ts';
 import type { Id, RecordRef } from '../values.ts';
 
 /** A transport address of an outside sender (a phone number, a Telegram id, an email address). */
@@ -18,7 +18,7 @@ type Member = {
 	email: string | null;
 	phone: string | null;
 	external: boolean;
-	teams: readonly TeamName[];
+	teams: readonly Id<'sys_team'>[];
 	team_path: readonly string[];
 	admin: boolean;
 	party: RecordRef | null;

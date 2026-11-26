@@ -7,6 +7,9 @@ import { Files } from '../src/engine/ports.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { manifest as base } from './write-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { sales: { policies: ['sales'] } };
 
 const alice = '0199a000-0000-7000-8000-000000000001',
 	bob = '0199a000-0000-7000-8000-000000000002',
@@ -52,7 +55,6 @@ const manifest: EngineManifest = {
 			}
 		}
 	},
-	teams: { sales: { policies: ['sales'] } }
 };
 it.live(
 	'file exports preserve caller row scopes, including a read request fed by arbitrary context',
@@ -86,6 +88,7 @@ it.live(
 				);
 				const t = Context.get(context, TestWorkspace),
 					registry = Context.get(context, RunHandlers);
+				yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 				yield* t.db.write({
 					text: "INSERT INTO sys_user(id,name,kind,team) VALUES ($1,'Alice','staff','sales'),($2,'Bob','staff','sales')",
 					params: [alice, bob]

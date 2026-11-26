@@ -98,7 +98,6 @@ const manifest: EngineManifest = {
 			approval_request: { outputs: { default: {} } }
 		} }
 	},
-	teams: {}
 };
 
 layer(TestWorkspace.layer({ manifest, seed: {

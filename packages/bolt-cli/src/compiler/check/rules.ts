@@ -110,19 +110,11 @@ function workspaceRules({ m, bodies, at }: RuleContext): void {
 	}
 	const binding = m.workspace.memberships;
 	if (binding !== undefined) {
-		const { model, teams } = binding, fields = m.models[model]?.fields;
+		const { model } = binding, fields = m.models[model]?.fields;
 		const issue = (message: string) => at('workspace/memberships', 'workspace', 'workspace', message);
 		if (!fields || model.startsWith('sys_') || m.relationships[model + '.member']?.to !== 'sys_user' ||
-			fields.team?.kind !== 'text' || fields.until?.kind !== 'date' || !fields.until.optional)
-			issue('memberships needs a workspace model with a member ref to sys_user, a text team, and an optional until date');
-		for (const name of teams) if (!Object.hasOwn(m.teams, name)) issue(`memberships: unknown team '${name}'`);
-		if (binding.staff_team !== undefined && !Object.hasOwn(m.teams, binding.staff_team))
-			issue(`memberships: unknown staff baseline team '${binding.staff_team}'`);
-		const grouped = binding.groups?.flat() ?? [];
-		if (new Set(grouped).size !== grouped.length || grouped.some(handle => !teams.includes(handle)))
-			issue('membership groups must contain distinct allowlisted teams, ordered from lowest to highest');
-		if (binding.keep_direct?.some(handle => !grouped.includes(handle)))
-			issue('keep_direct must name a grouped, allowlisted team');
+			m.relationships[model + '.team']?.to !== 'sys_team' || fields.until?.kind !== 'date' || !fields.until.optional)
+			issue('memberships needs a workspace model with a member ref to sys_user, a team ref to sys_team, and an optional until date');
 		const protectedModels = [model];
 		if (binding.bundles) {
 			const { assignments, levels } = binding.bundles;
@@ -130,8 +122,8 @@ function workspaceRules({ m, bodies, at }: RuleContext): void {
 			const until = m.models[assignments]?.fields.until;
 			if (assignments.startsWith('sys_') || levels.startsWith('sys_') || typeof left !== 'string' || left !== right ||
 				m.relationships[assignments + '.member']?.to !== 'sys_user' || until?.kind !== 'date' || !until.optional ||
-				m.models[levels]?.fields.team?.kind !== 'text')
-				issue('membership bundles need member, role and optional until on assignments and a matching role and text team on levels');
+				m.relationships[levels + '.team']?.to !== 'sys_team')
+				issue('membership bundles need member, role and optional until on assignments and a matching role and a team ref to sys_team on levels');
 			protectedModels.push(assignments, levels);
 		}
 		if (new Set(protectedModels).size !== protectedModels.length ||
@@ -611,8 +603,6 @@ function grantRules({ m, at }: RuleContext): void {
 					at('access/create-required', 'policy', p, `${c}: create leaves out '${col}', which ${c} requires; every create would be refused`);
 			}
 		}
-	for (const [team, spec] of Object.entries(m.teams))
-		for (const message of blindWrites(m, spec.policies)) at('access/blind-write', 'team', team, message);
 	for (const [name, a] of Object.entries(m.automations))
 		for (const message of blindWrites(m, a.policies)) at('access/blind-write', 'automation', name, message);
 }

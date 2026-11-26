@@ -154,8 +154,7 @@ const varField = (r: Resolved) =>
 		: {
 				kind: r.kind.kind,
 				email: r.kind.kind === 'text' && r.kind.format === 'email',
-				phone: r.kind.kind === 'text' && r.kind.format === 'phone',
-				team: r.kind.kind === 'text' && r.kind.format === 'team'
+				phone: r.kind.kind === 'text' && r.kind.format === 'phone'
 			};
 
 /** A rule-owned expression scope for a saved filter. The owner checks and resolves these variables before querying;

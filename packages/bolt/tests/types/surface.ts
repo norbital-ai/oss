@@ -1,6 +1,6 @@
-// Type corpus for the declarations `team` and `messages`.
+// Type corpus for the declaration surface: `messages`, models and their derived names.
 // Each `@ts-expect-error` line is a planted mistake; a clean tsc proves both the passes and the rejections.
-import { messages, model, team } from '../../src/index.ts';
+import { messages, model } from '../../src/index.ts';
 import type { InstanceId } from '../../src/index.ts';
 import type { LocaleErrors } from '../../src/decl/verify.ts';
 import './registry.ts';
@@ -20,21 +20,6 @@ import type { State } from '../../src/decl/access/policy.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
-
-// ── team(): keys are TeamName, values name policies ──
-team({ sales: { policies: ['sales_rep'] }, finance: { policies: [] } });
-// @ts-expect-error T1 an unknown policy
-// prettier-ignore
-team({ sales: { policies: ['sales_rap'] } });
-// @ts-expect-error T2 a team is an object with its policy list
-// prettier-ignore
-team({ sales: 'sales_rep' });
-
-// Source handles are case-sensitive and labels do not merge them.
-team({ sales: { policies: ['sales_rep'] }, Sales: { policies: ['sales_rep'] } });
-// @ts-expect-error T3 an unknown source parent
-// prettier-ignore
-team({ sales: { policies: ['sales_rep'], parent: 'missing' } });
 
 // ── messages(): a locale's keys ⊆ the base, checked by the __verify line ──
 messages({ hello: 'Hello' });

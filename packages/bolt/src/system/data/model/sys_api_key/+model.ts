@@ -9,8 +9,8 @@ export default bind_system_model('sys_api_key')({
 		name: { kind: 'text' },
 		prefix: { kind: 'text' },
 		hash: { kind: 'text' },
-		/** The team handle the key acts as, declared in source (`+team.ts`); writes refuse an undeclared handle. */
-		team: { kind: 'text', format: 'team', optional: true },
+		/** The team whose policies the key holds. */
+		team: { kind: 'ref', to: 'sys_team', optional: true, on_delete: 'restrict' },
 		/** Who issued it. */
 		created_by: { kind: 'ref', to: 'sys_user', optional: true },
 		revoked_at: { kind: 'instant', optional: true },

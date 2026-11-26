@@ -33,7 +33,6 @@ export const fixture_manifest = Result.getOrThrow(
 			b: { description: 'b', policies: ['fixture'] }
 		},
 		integrations: {},
-		teams: {},
 		mcp: {},
 		apps: {},
 		groups: {},

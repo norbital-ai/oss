@@ -41,5 +41,5 @@ Store every fact once, on the model whose lifecycle it belongs to; everything el
 ## Runtime configuration, schemas & formulas
 
 - Source defines types, operations, evaluator and invariants; authorized records hold rates, thresholds, formulas, schemas, prompts, templates and effective dates. Extend source when needs exceed that language — never build an unrestricted code field or untyped blob.
-- Use native `state` + locks + policy checks for publishing configuration; version/snapshot config when past results must stay reproducible. Teams, policies and approval routes remain source only.
+- Use native `state` + locks + policy checks for publishing configuration; version/snapshot config when past results must stay reproducible. Policies and approval routes remain source only; teams are `sys_team` rows an administrator edits.
 - `ctx.ai.sys_2.infer` accepts `output: { json_schema, rules? }` (CEL checks); keep server validation authoritative even when rendering with `StructuredData`. Schema properties pick Bolt datatypes via `format: '<datatype>'` or `"x-norbital": { "datatype": "<name>" }` (checked on `$schema` seeds by `bolt check`/`build`). `text` with `format: 'cel'` supplies the formula editor; source compiles/evaluates with Bolt formula exports.

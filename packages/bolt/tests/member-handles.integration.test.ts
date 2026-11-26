@@ -8,10 +8,12 @@ import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { with_accounts } from './support/accounts.ts';
 import { manifest as base } from './write-fixture.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { desk: { policies: ['reporter'] } };
 
 const manifest = {
 	...base,
-	teams: { desk: { policies: ['reporter'] } },
 	policies: { reporter: { description: 'Gets the daily report', grants: {} } },
 	automations: {
 		announce: {
@@ -38,6 +40,7 @@ it.live('a member with Slack and Discord ids gets the notice by direct message t
 			const t = Context.get(context, TestWorkspace),
 				runs = Context.get(context, Runs),
 				outbound = Context.get(context, Outbound);
+			yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 			const ann = t.member(['reporter'], { teams: ['desk'] }),
 				bob = t.member(['reporter'], { teams: ['desk'] });
 			yield* t.as(ann);

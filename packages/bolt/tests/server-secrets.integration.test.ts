@@ -14,7 +14,6 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {},
 	policies: { server: { description: 'Server configuration fixture', grants: {} } },
-	teams: {},
 	automations: { check: { description: 'Check server configuration', policies: ['server'] } },
 	integrations: {},
 	mcp: {},

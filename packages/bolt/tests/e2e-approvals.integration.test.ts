@@ -15,6 +15,9 @@ import {
 	type WorkspaceServices
 } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { sales: { policies: ['sales', 'sales_approval'] }, finance: { policies: ['finance'] }, ops: { policies: [] } };
 
 const manifest: EngineManifest = {
 	needs: [],
@@ -57,7 +60,6 @@ const manifest: EngineManifest = {
 		finance: { description: 'Finance', grants: { orders: { outputs: { default: {} } } } }
 	},
 	integrations: {},
-	teams: { sales: { policies: ['sales', 'sales_approval'] }, finance: { policies: ['finance'] }, ops: { policies: [] } },
 	automations: {},
 	mcp: {},
 	apps: {},
@@ -90,6 +92,7 @@ const setup = Effect.gen(function* () {
 		live = yield* Live,
 		approvals = yield* Approvals,
 		route = yield* route_fixture(context);
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	const rep = t.member(['sales', 'sales_approval']),
 		fin = t.member(['finance']);
 	yield* t.db.write({

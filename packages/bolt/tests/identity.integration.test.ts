@@ -33,6 +33,9 @@ import {
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { memory_audit_layer } from './support/audit.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { Sales: { policies: ['sales'] }, Company: { policies: ['finance'] }, Finance: { policies: ['finance'] } };
 
 const m: EngineManifest = {
 	needs: [],
@@ -42,7 +45,6 @@ const m: EngineManifest = {
 	exposures: {},
 	integrations: {},
 	policies: { sales: { description: '', grants: {} }, finance: { description: '', grants: {} } },
-	teams: { Sales: { policies: ['sales'] }, Company: { policies: ['finance'] }, Finance: { policies: ['finance'] } },
 	automations: {},
 	mcp: {},
 	apps: {},
@@ -56,6 +58,7 @@ const Mail = Schema.Struct({
 });
 const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
+	yield* db.write({ text: teams_sql(TEAMS), params: [] });
 	const keys = yield* load_keys(db);
 	expect(yield* load_keys(db)).toEqual(keys); // 38a(e): a second cell reads the same secrets
 	yield* TestClock.setTime(Date.parse('2026-09-25T00:00:00Z'));
@@ -375,7 +378,7 @@ layer(IdentityFixtureLive)((it) => {
 			() =>
 				Effect.gen(function* () {
 					const { h, as, outbox } = yield* IdentityFixture;
-					yield* invite(h, m, yield* as(founder), { email: 'mailfail@acme.example' });
+					yield* invite(h, yield* as(founder), { email: 'mailfail@acme.example' });
 					const failing: TransportPort = {
 						async send() {
 							throw new Error('smtp down');
@@ -402,7 +405,7 @@ layer(IdentityFixtureLive)((it) => {
 			() =>
 				Effect.gen(function* () {
 					const { db, h, as, one } = yield* IdentityFixture;
-					yield* invite(h, m, yield* as(founder), { email: 'flood@acme.example' });
+					yield* invite(h, yield* as(founder), { email: 'flood@acme.example' });
 					for (let i = 0; i < 5; i++)
 						expect(yield* send_code(h, 'flood@acme.example', `3.3.3.${i}`)).toBeNull();
 					expect(yield* Effect.flip(send_code(h, 'flood@acme.example', '3.3.3.9'))).toMatchObject({
@@ -424,17 +427,17 @@ layer(IdentityFixtureLive)((it) => {
 		);
 
 		it.effect(
-			'invitations: admin-only; inspection is read-only; the invited member holds only its source team policies',
+			'invitations: admin-only; inspection is read-only; the invited member holds only its team policies',
 			() =>
 				Effect.gen(function* () {
 					const { h, as, one, outbox, lastCode } = yield* IdentityFixture;
 					const boss = yield* as(founder);
-					const inv = yield* invite(h, m, boss, { email: 'rep@acme.example', team: 'Sales' });
+					const inv = yield* invite(h, boss, { email: 'rep@acme.example', team: 'Sales' });
 					expect(inv).toMatchObject({ id: expect.any(String) });
 					const id = inv.id;
 					expect(outbox.at(-1)?.text).toContain(`https://acme.example/invite/${id}`);
 					expect(
-						yield* Effect.flip(invite(h, m, boss, { email: 'x@acme.example', team: 'ghost' }))
+						yield* Effect.flip(invite(h, boss, { email: 'x@acme.example', team: 'ghost' }))
 					).toMatchObject({ code: 'not_found' });
 					const before = yield* one('SELECT * FROM sys_invitation WHERE id = $1', id);
 					expect(yield* inspectInvitation(h, id)).toMatchObject({
@@ -450,7 +453,7 @@ layer(IdentityFixtureLive)((it) => {
 					expect(rep.policies).toEqual(['sales']);
 					expect(rep.actor).toMatchObject({ kind: 'member', team_path: ['Sales'], admin: false });
 					expect(yield* inspectInvitation(h, id)).toMatchObject({ status: 'accepted' });
-					expect(yield* Effect.flip(invite(h, m, rep, { email: 'y@acme.example' }))).toMatchObject({
+					expect(yield* Effect.flip(invite(h, rep, { email: 'y@acme.example' }))).toMatchObject({
 						code: 'forbidden'
 					});
 				})
@@ -462,7 +465,7 @@ layer(IdentityFixtureLive)((it) => {
 				Effect.gen(function* () {
 					const { db, h, as, one } = yield* IdentityFixture;
 					const boss = yield* as(founder);
-					const { id } = yield* invite(h, m, boss, { email: 'late@acme.example' });
+					const { id } = yield* invite(h, boss, { email: 'late@acme.example' });
 					expect(yield* Effect.flip(acceptInvitation(h, { user: invited }, id))).toMatchObject({
 						code: 'forbidden'
 					});
@@ -490,30 +493,28 @@ layer(IdentityFixtureLive)((it) => {
 		);
 
 		it.effect(
-			'a source hierarchy changes scopes without inheriting its parent policies; forged member choices are refused',
+			'a team hierarchy changes scopes without inheriting its parent policies; forged member choices are refused',
 			() =>
 				Effect.gen(function* () {
 					const { db, h, as, one } = yield* IdentityFixture;
 					const boss = yield* as(founder);
 					const before = yield* as(invited);
-					const released = new Authorities(
-						{
-							...m,
-							teams: {
-								...m.teams,
-								Sales: { name: 'Sales', parent: 'Company', policies: ['sales'] }
-							}
-						},
-						'r2'
-					);
-					const after = yield* released.member(db, 'bootstrap', invited);
+					yield* db.write({
+						text: "UPDATE sys_team SET parent = 'Company', revision = revision + 1 WHERE id = 'Sales'",
+						params: []
+					});
+					const after = yield* as(invited);
 					expect(after?.key).not.toBe(before.key);
 					expect(after?.actor).toMatchObject({ team_path: ['Sales', 'Company'], teams: ['Sales'] });
 					expect(after?.policies).toEqual(['sales']);
-					expect(yield* Effect.flip(assign_team(h, m, boss, invited, 'sales'))).toMatchObject({
+					yield* db.write({
+						text: "UPDATE sys_team SET parent = NULL, revision = revision + 1 WHERE id = 'Sales'",
+						params: []
+					});
+					expect(yield* Effect.flip(assign_team(h, boss, invited, 'sales'))).toMatchObject({
 						code: 'not_found'
 					});
-					expect(yield* Effect.flip(assign_team(h, m, boss, invited, 'forged'))).toMatchObject({
+					expect(yield* Effect.flip(assign_team(h, boss, invited, 'forged'))).toMatchObject({
 						code: 'not_found'
 					});
 					expect(yield* one('SELECT team FROM sys_user WHERE id = $1', invited)).toEqual([
@@ -557,17 +558,17 @@ layer(IdentityFixtureLive)((it) => {
 		);
 
 		it.effect(
-			'API keys: shown once, authenticate, rotate, revoke; the key chooses a source team without runtime grants',
+			'API keys: shown once, authenticate, rotate, revoke; the key holds its team policies and none of its own',
 			() =>
 				Effect.gen(function* () {
 					const { db, h, as, one, authorities } = yield* IdentityFixture;
 					const boss = yield* as(founder);
-					const k = yield* issueKey(h, m, boss, 'ci', 'Finance');
+					const k = yield* issueKey(h, boss, 'ci', 'Finance');
 					expect(yield* authenticateKey(h, k.key)).toBe(k.id);
 					expect(
 						yield* one('SELECT count(*)::int AS n FROM sys_api_key WHERE hash = $1', k.key)
 					).toEqual([{ n: 0 }]);
-					expect(yield* Effect.flip(issueKey(h, m, boss, 'forged', 'ghost'))).toMatchObject({
+					expect(yield* Effect.flip(issueKey(h, boss, 'forged', 'ghost'))).toMatchObject({
 						code: 'not_found'
 					});
 					expect((yield* authorities.api_key(db, k.id))?.policies).toEqual(['finance']);
@@ -594,7 +595,7 @@ layer(IdentityFixtureLive)((it) => {
 		);
 
 		it.effect(
-			'member and invitation writes retain history while source teams and grants have no mutable history',
+			'member and invitation writes retain history',
 			() =>
 				Effect.gen(function* () {
 					const { one } = yield* IdentityFixture;
@@ -619,9 +620,6 @@ layer(IdentityFixtureLive)((it) => {
 							`SELECT op FROM bolt_history WHERE collection = 'sys_invitation' AND changes->>'email' = 'rep@acme.example'`
 						)
 					).toEqual([{ op: 'create' }]);
-					expect(yield* one(`SELECT to_regclass('sys_team') IS NULL AS absent`)).toEqual([
-						{ absent: true }
-					]);
 				})
 		);
 

@@ -11,7 +11,7 @@ Norbital is a hosted web workspace with isolated Postgres and a bounded server g
 | Hardware/device access (POS, IoT, biometrics, local FS, native push) | integration or manual entry + notifications |
 | Native mobile/desktop app stores | responsive web / mobile shell / envoys |
 | Game-scale real-time multiplayer | turn-based or shared-board collaboration |
-| Runtime editors for source, schema, teams or policies | runtime catalogues for supported variation; source change for new capability |
+| Runtime editors for source, schema or policies | runtime catalogues for supported variation; source change for new capability |
 | Tenant payment via platform billing; legal KYC/e-signature validity; certified statutory filing | integrate a provider; store attestation, workflow, computation, files & audit trail |
 
 ## Certification catalog

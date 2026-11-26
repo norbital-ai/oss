@@ -13,6 +13,9 @@ import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
 import { one_act } from './support/act-one.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { requesters: { policies: ['requester'] }, managers: { policies: ['reviewer'] } };
 
 const requesterId = '0199a000-0000-7000-8000-000000000001',
 	managerId = '0199a000-0000-7000-8000-000000000002';
@@ -73,7 +76,6 @@ const manifest: EngineManifest = {
 			grants: { leaves: { outputs: { default: {} }, update: { verdict: true } } }
 		}
 	},
-	teams: { requesters: { policies: ['requester'] }, managers: { policies: ['reviewer'] } },
 	automations: {
 		heard: { description: 'Hears leaves', policies: ['reviewer'], on: [{ model: 'leaves', verbs: ['create', 'update', 'delete'] }] }
 	}
@@ -129,6 +131,7 @@ const fixture = Effect.gen(function* () {
 	const t = yield* TestWorkspace,
 		writes = yield* Callables,
 		approvals = yield* Approvals;
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	yield* t.db.write({
 		text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Requester','staff','requesters'),($2,'Manager','staff','managers') ON CONFLICT (id) DO NOTHING",
 		params: [requesterId, managerId]

@@ -11,7 +11,6 @@ export const ManifestItemSchema = Schema.Struct({
 		'connection',
 		'mcp',
 		'policy',
-		'team',
 		'relationship',
 		'field',
 		'skill',
@@ -63,7 +62,6 @@ export function manifestItems(
 	add('integration', m.integrations, (name) => `src/integration/${name}/+integration.ts`);
 	add('mcp', m.mcp, (name) => `src/agent/mcp/+${name}.mcp.ts`);
 	add('policy', m.policies, (name) => `src/access_control/policy/+${name}.policy.ts`);
-	add('team', m.teams, () => 'src/access_control/team/+team.ts');
 	add('relationship', m.relationships, (name) => `src/data/model/${name.split('.')[0]}/+model.ts`);
 	add('field', m.custom_fields, (name) => `src/data/custom_field/${name}/+custom_field.ts`);
 	add('skill', m.agent.skills, (name) => `src/agent/skill/${name}/+skill.md`);

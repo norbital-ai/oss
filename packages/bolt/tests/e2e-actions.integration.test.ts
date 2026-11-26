@@ -51,7 +51,6 @@ const manifest = {
 		}
 	},
 	integrations: {},
-	teams: {},
 	automations: {
 		orders_place: {
 			description: 'Place an order with its note',

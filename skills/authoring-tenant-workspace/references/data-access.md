@@ -14,7 +14,7 @@ Use `query` for every read. Exact shape: `import('@norbital-ai/bolt').ReadReques
 
 - `ctx.query` (`PageBolt.query`) subscribes live over SSE on first reactive read (`current`/`loading`/`error`), shares identical queries, and keeps 30s grace + up to 64 inactive client-memory images revalidated by SHA-256 on re-entry (never persisted to browser storage; cleared on release cutover/sign-out).
 - Capture inputs in `$derived` (return `null` for no query). Never mirror into `$state`, poll with `setInterval`, or wire `$effect` refetches. Outside reactivity, `await` reads once or yield as Effect. Run mutations via `fork`/`run` from `@norbital-ai/ui/effect`; mounted DOM resources via `attach`.
-- Pass materialized clock values (`ctx.clock('day').today`, `ctx.clock('minute'|'hour').now`); store refuses relative clock variables in read predicates. Value positions accept `{ field: '<col>' }` or `{ var: 'actor.<name>' }` (`id`, `email`, `phone`, `visitor`, `instance`, `party`; `teams`/`team_tree` under `in` only).
+- Pass materialized clock values (`ctx.clock('day').today`, `ctx.clock('minute'|'hour').now`); store refuses relative clock variables in read predicates. Value positions accept `{ field: '<col>' }` or `{ var: 'actor.<name>' }` (`id`, `email`, `phone`, `visitor`, `instance`, `party`; `teams`/`team_tree` under `in` on a ref to `sys_team` only).
 - Past states: `ctx.history` on pages, root `as_of` in server code.
 
 ## No N+1, transforms, writes & aggregates

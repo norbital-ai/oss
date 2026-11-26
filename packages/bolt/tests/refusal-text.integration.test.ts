@@ -37,7 +37,6 @@ const manifest = {
 			capabilities: { automations: ['restock'] }
 		}
 	},
-	teams: {},
 	automations: { restock: { description: 'Restocks', policies: ['ops'] } },
 	mcp: {},
 	apps: {},

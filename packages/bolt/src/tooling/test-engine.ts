@@ -1612,7 +1612,11 @@ export const test_engine = <P extends TestPorts = never>(
 					party: null,
 					...over
 				};
-				const team = actor.teams.find((name) => Object.hasOwn(m.teams, name)) ?? null;
+				for (const team of actor.teams)
+					pending.push({
+						text: 'INSERT INTO sys_team (id, name) VALUES ($1,$1) ON CONFLICT DO NOTHING',
+						params: [team]
+					});
 				pending.push({
 					text: 'INSERT INTO sys_user (id, email, phone, name, kind, admin, party, team) VALUES ($1,$2,$7,$3,$4,$5,$6::jsonb,$8) ON CONFLICT DO NOTHING',
 					params: [
@@ -1623,7 +1627,7 @@ export const test_engine = <P extends TestPorts = never>(
 						actor.admin,
 						actor.party === null ? null : JSON.stringify(actor.party),
 						actor.phone,
-						team
+						actor.teams[0] ?? null
 					]
 				});
 				return { actor, id: actor.id, policies, admin: actor.admin };

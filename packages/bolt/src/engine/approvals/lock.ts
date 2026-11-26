@@ -6,7 +6,7 @@ import { actor_ref } from '../access/actor.ts';
 // commit statement, so the lock is pieces of that statement; an approval decision's own rollback is exempt.
 import { Effect, Option, Schema } from 'effect';
 import type { EngineActor } from '../contracts.ts';
-import { relations, teams, type EngineManifest, type GrantData } from '../manifest.ts';
+import { relations, type EngineManifest, type GrantData } from '../manifest.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { DbError } from '@norbital-ai/host-api';
 import type { Catalog } from '@norbital-ai/store';
@@ -89,16 +89,14 @@ export function lockPieces(
 		'under_approval',
 		"(SELECT h.id::text || ' Under approval: the system raised this request. Approve or reject it; its record cannot be changed.' FROM ap_hit h WHERE h.route ? '__boltReadGuards' LIMIT 1)"
 	);
-	const names = literal(
-		JSON.stringify(Object.fromEntries(Object.entries(teams(m)).map(([handle, t]) => [handle, t.name ?? handle])))
-	);
 	c.assertWith(
 		'NOT EXISTS (SELECT 1 FROM ap_hit WHERE NOT eligible)',
 		'under_approval',
 		`(SELECT h.id::text || ' Under approval: ' || CASE WHEN h.state = 'ChangesRequested'
 			THEN coalesce(u.name, u.email, 'the requester')
 			ELSE coalesce((SELECT string_agg(x, ' or ') FROM (
-				SELECT coalesce(${names}::jsonb ->> s, s) AS x FROM jsonb_array_elements_text(h.route -> 'steps' -> h.step -> 'teams') s
+				SELECT coalesce(t.name, s) AS x FROM jsonb_array_elements_text(h.route -> 'steps' -> h.step -> 'teams') s
+					LEFT JOIN sys_team t ON t.id = s
 				UNION ALL SELECT coalesce(su.name, su.email, s) FROM jsonb_array_elements_text(h.route -> 'steps' -> h.step -> 'users') s
 					LEFT JOIN sys_user su ON su.id::text = s) w), 'its approvers') END
 			|| ' may change it.' FROM ap_hit h LEFT JOIN sys_user u ON u.id::text = h.requestor_user WHERE NOT h.eligible LIMIT 1)`

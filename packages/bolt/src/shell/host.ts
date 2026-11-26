@@ -78,6 +78,7 @@ import { BoltError, CODES, PHASES } from '../protocol/errors.ts';
 import { addressBucket, charges_for, macKey, type RateKind } from '../engine/access/rate.ts';
 import { admit_visitor } from '../engine/callables/index.ts';
 import { Authorities, preview_as } from '../engine/identity/actor.ts';
+import { teamGraph } from '../engine/identity/graph.ts';
 import {
 	acceptInvitation,
 	authenticateKey,
@@ -100,7 +101,7 @@ import { inbox, inboxOf, inboxReads } from './inbox/data.ts';
 import { instance_messages } from './integration/messages.ts';
 import { runList, visible_run_names } from '../engine/runs/rows.ts';
 import { outputFiles } from '../engine/runs/output-files.ts';
-import { settings, SettingsOp, applySettings, teamName } from './settings/data.ts';
+import { settings, SettingsOp, applySettings } from './settings/data.ts';
 import { catalog_of } from '../engine/access/pred.ts';
 import { bindingsAt } from '../engine/query/reader.ts';
 import { request as read_request, type ReadIR } from '../protocol/reads.ts';
@@ -618,7 +619,7 @@ const makeShell = Effect.gen(function* () {
 					preview:
 						team === null
 							? { user, by: p.impersonatedBy, ...(impersonate ? { impersonate: true as const } : {}) }
-							: { team, name: teamName(m, team), by: p.impersonatedBy },
+							: { team, name: (yield* teamGraph(h.db)).teams[team]?.name ?? team, by: p.impersonatedBy },
 					...expiresAt
 				};
 			}

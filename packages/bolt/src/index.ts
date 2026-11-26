@@ -7,7 +7,6 @@
 // workspace setting.
 export { custom_field } from './decl/custom-field.ts';
 export { policy } from './decl/access/policy.ts';
-export { team } from './decl/access/team.ts';
 export { mcp } from './decl/runtime/agent.ts';
 export type {
 	WorkspaceTheme,

@@ -31,7 +31,6 @@ const manifest: EngineManifest = {
 		}
 	},
 	policies: {},
-	teams: {},
 	automations: {}
 };
 const untyped = (acts: { readonly [callable: string]: Json }) => acts;

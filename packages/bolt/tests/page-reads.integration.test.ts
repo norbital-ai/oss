@@ -80,7 +80,6 @@ const manifest = Result.getOrThrow(
 				grants: { orders: { outputs: { summary: { history: true } } } }
 			}
 		},
-		teams: {},
 		automations: {},
 		mcp: {},
 		custom_fields: {

@@ -12,14 +12,14 @@ type Flat<T> = { [K in keyof T]: T[K] };
 
 is<Eq<ColumnValue<'sys_user', 'kind'>, 'staff' | 'external' | 'anonymous'>>();
 is<Eq<ColumnValue<'sys_user', 'email'>, string | null>>();
-is<Eq<ColumnValue<'sys_user', 'team'>, string | null>>();
+is<Eq<ColumnValue<'sys_user', 'team'>, Id<'sys_team'> | null>>();
 is<Eq<ColumnValue<'approval_request', 'id'>, Id<'approval_request'>>>();
 is<Eq<'sys_run' extends SystemName ? true : false, true>>();
 is<Eq<'sys_session' extends ModelName ? true : false, false>>();
 const staff: Where<'sys_user'> = { kind: { eq: 'staff' }, active: { eq: true } };
 // @ts-expect-error S1 a stored user's kind is staff, external or anonymous, unlike an actor's member kind
 const member: Where<'sys_user'> = { kind: { eq: 'member' } };
-// a member's team is a source handle: `actor.teams` / `actor.team_tree` compare it in a list
+// a member's team is a ref to sys_team: `actor.teams` / `actor.team_tree` compare it in a list
 const inTree: Where<'sys_user'> = { team: { in: { var: 'actor.team_tree' } } };
 // @ts-expect-error S1 a team operand only on a team field
 const notTeam: Where<'sys_user'> = { email: { in: { var: 'actor.teams' } } };

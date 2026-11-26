@@ -60,7 +60,6 @@ const manifest: EngineManifest = {
 		}
 	},
 	integrations: {},
-	teams: {},
 	custom_fields: {},
 	mcp: {},
 	agent: { skills: {} }

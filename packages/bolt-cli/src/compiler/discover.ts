@@ -16,7 +16,7 @@ type Role = (typeof ROLES)[number]['role'];
 
 /**
  * A discovered role file. `name` is the path-derived name: the folder's (`orders`, `hr/kiosk`) or the file's
- * (`sales_rep`); a page is `<app>/<page>`, a sync `<model>.<sync>`; singletons (`workspace`, `team`, …) have `''`.
+ * (`sales_rep`); a page is `<app>/<page>`, a sync `<model>.<sync>`; singletons (`workspace`, `secrets`, …) have `''`.
  */
 export type Discovered = { role: Role; name: string; path: string };
 export type Diagnostic = {

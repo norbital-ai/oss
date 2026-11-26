@@ -15,6 +15,9 @@ import { manifest as orders } from './engine-fixture.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { one_act } from './support/act-one.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { crew: { name: 'Crew', policies: ['staff'] } };
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
@@ -42,7 +45,6 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		apps: {},
-		teams: { crew: { name: 'Crew', policies: ['staff'] } },
 		automations: {
 			provision: {
 				description: 'A profile for each new or changed member',
@@ -66,6 +68,7 @@ type Jar = Map<string, string>;
 const call = (j: Jar, path: string, body: unknown, headers: Record<string, string> = {}) =>
 	Effect.gen(function* () {
 		const t = yield* TestWorkspace;
+		yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 		const cookie = [...j].map(([k, v]) => `${k}=${v}`).join('; ');
 		const res = yield* t.handle(
 			new Request(`${ORIGIN}${path}`, {

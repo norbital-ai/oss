@@ -779,7 +779,7 @@
 						variant="inset"
 						icon="link"
 						title={t('No API keys yet.')}
-						hint={t('Issue a key so a source team can call this workspace.')}
+						hint={t('Issue a key so a team can call this workspace.')}
 					/>
 				{/snippet}
 			</Table>

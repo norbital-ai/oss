@@ -1,13 +1,12 @@
-// Actor resolution: membership chooses an authored team handle; its policies and hierarchy come from source.
-// Descendants scope teamTree without inheriting grants. Static actors hold their declared policies.
+// Actor resolution: a member holds their teams' policies, read from the team graph. Descendants scope teamTree
+// without inheriting grants. Static actors hold their declared policies.
 import { bindingsAt } from '../query/reader.ts';
 import { memberTeams } from './teams.ts';
 import { sql } from '../db/sql.ts';
-import type { SourceTeam } from '../../decl/access/team.ts';
 import { compile_authority, withHeld, type Holder } from '../access/authority.ts';
 import { open_sql } from '../approvals/sql.ts';
 import type { Authority, EngineActor } from '../contracts.ts';
-import { teams, type EngineManifest } from '../manifest.ts';
+import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Clock, Effect, Schema } from 'effect';
@@ -23,6 +22,7 @@ import {
 	SESSION_MEMO_MS
 } from './session.ts';
 import { envoySpec } from '../envoys/spec.ts';
+import { closure, path, teamGraph } from './graph.ts';
 const UserSchema = Schema.Struct({
 	id: Schema.String,
 	email: Schema.NullOr(Schema.String),
@@ -45,9 +45,6 @@ const UserSchema = Schema.Struct({
 	revision: Schema.Number
 });
 type UserRow = typeof UserSchema.Type;
-type TeamGraph = {
-	readonly [handle: string]: SourceTeam;
-};
 export class Authorities {
 	private readonly cache = new Map<string, Authority>();
 	private readonly holds = new Map<
@@ -194,8 +191,8 @@ export class Authorities {
 			function* (this: Authorities) {
 				const u = yield* this.row(db, publication, userId);
 				if (u === null) return null;
-				const graph = teams(this.m),
-					direct = (u.granted_teams ?? (u.team === null ? [] : [u.team])).filter(team => Object.hasOwn(graph, team));
+				const graph = yield* teamGraph(db),
+					direct = u.granted_teams ?? (u.team === null ? [] : [u.team]);
 				const actor: EngineActor = {
 					kind: 'member',
 					id: u.id,
@@ -210,7 +207,7 @@ export class Authorities {
 				};
 				const policies = [
 					...new Set([
-						...direct.flatMap(team => graph[team]?.policies ?? []),
+						...direct.flatMap(team => graph.teams[team]?.policies ?? []),
 						...(u.signup ? (signup_of(this.m)?.policies ?? []) : [])
 					])
 				];
@@ -221,7 +218,7 @@ export class Authorities {
 						policies,
 						teamTree: [...new Set(direct.flatMap(team => closure(graph, team)))]
 					},
-					`${preview ? 'preview' : 'member'}:${u.id}:${u.revision}${u.granted_teams === undefined ? '' : ':' + JSON.stringify(direct)}`
+					`${preview ? 'preview' : 'member'}:${u.id}:${u.revision}:${graph.revision}${u.granted_teams === undefined ? '' : ':' + JSON.stringify(direct)}`
 				);
 				const member = u.granted_on === undefined ? compiled : { ...compiled, membershipDay: u.granted_on };
 				return member.admin ? member : yield* withHeld(this.m, member, yield* this.held(db, u.id, direct));
@@ -262,9 +259,9 @@ export class Authorities {
 			}.bind(this)
 		);
 	}
-	/** Preview a source team with its declared grants; administrator authority is cleared. */
+	/** Preview a team with its policies; administrator authority is cleared. */
 	team(
-		_db: TenantDb,
+		db: TenantDb,
 		previewer: Extract<
 			EngineActor,
 			{
@@ -275,9 +272,8 @@ export class Authorities {
 	) {
 		return Effect.gen(
 			function* (this: Authorities) {
-				const graph = teams(this.m);
-				if (!Object.hasOwn(graph, team)) return null;
-				const definition = graph[team];
+				const graph = yield* teamGraph(db),
+					definition = Object.hasOwn(graph.teams, team) ? graph.teams[team] : undefined;
 				if (definition === undefined) return null;
 				const actor: EngineActor = {
 					...previewer,
@@ -289,13 +285,13 @@ export class Authorities {
 				};
 				const authority = yield* this.compile(
 					{ actor, admin: false, policies: definition.policies, teamTree: closure(graph, team) },
-					`preview:team:${team}:${previewer.id}`
+					`preview:team:${team}:${previewer.id}:${graph.revision}`
 				);
 				return { ...authority, preview: { by: previewer.id, team } };
 			}.bind(this)
 		);
 	}
-	/** An API key selects a source team; the secret never supplies policies. */
+	/** An API key holds its team's policies; the secret never supplies any. */
 	api_key(db: TenantDb, keyId: string) {
 		return Effect.gen(
 			function* (this: Authorities) {
@@ -311,12 +307,11 @@ export class Authorities {
 				if (k === undefined || typeof k['id'] !== 'string' || typeof k['revision'] !== 'number')
 					return null;
 				const team = typeof k['team'] === 'string' ? k['team'] : undefined;
-				const graph = teams(this.m),
-					policies =
-						team === undefined || !Object.hasOwn(graph, team) ? [] : (graph[team]?.policies ?? []);
+				const graph = yield* teamGraph(db),
+					policies = team === undefined ? [] : (graph.teams[team]?.policies ?? []);
 				return yield* this.compile(
 					{ actor: { kind: 'api_key', key: k['id'] }, admin: false, policies },
-					`api_key:${k['id']}:${k['revision']}`
+					`api_key:${k['id']}:${k['revision']}:${graph.revision}`
 				);
 			}.bind(this)
 		);
@@ -478,23 +473,3 @@ export const preview_as = Effect.fn('Bolt.preview_as')(function* (
 		impersonatedBy: real.actor.id
 	};
 });
-/** A source team and every authored descendant (`actor.team_tree`). */
-function closure(graph: TeamGraph, root: string): string[] {
-	const out = [root];
-	for (let i = 0; i < out.length; i++)
-		for (const [handle, team] of Object.entries(graph))
-			if (team.parent === out[i] && !out.includes(handle)) out.push(handle);
-	return out;
-}
-function path(graph: TeamGraph, root: string): string[] {
-	const out: string[] = [],
-		seen = new Set<string>();
-	for (let handle: string | null = root; handle !== null && !seen.has(handle);) {
-		seen.add(handle);
-		const team: SourceTeam | undefined = graph[handle];
-		if (team === undefined) break;
-		out.push(team.name);
-		handle = team.parent;
-	}
-	return out;
-}

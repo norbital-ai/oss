@@ -10,6 +10,9 @@ import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { Requesters: { policies: ['requester'] }, Reviewers: { policies: ['reviewer'] } };
 
 /** An ad hoc manifest's acts: no generated callable names type them. */
 const acts = (input: Readonly<Record<string, Json>>) => input;
@@ -56,7 +59,6 @@ const manifest: EngineManifest = {
 		},
 		reviewer: { description: 'Reviews', grants: { items: { outputs: { default: {} } } } }
 	},
-	teams: { Requesters: { policies: ['requester'] }, Reviewers: { policies: ['reviewer'] } }
 };
 const guest = program(`export default {
  policy:{requester:{grants:{items:{create:{verdict:function*(_rows,ctx){return ctx.approve({ steps: [{ name: 'Review', teams: ['Reviewers'] }] });}}}}}}
@@ -93,6 +95,7 @@ const fixture = Effect.gen(function* () {
 		TestWorkspace.layer({ manifest, guest: yield* guest, db: Layer.succeed(TenantDb, counted) })
 	);
 	const t = Context.get(context, TestWorkspace);
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	const admin = yield* t.as(t.admin);
 	const requester = yield* t.as(
 		t.member(['requester'], { teams: ['Requesters'], team_path: ['Requesters'] })
@@ -214,6 +217,8 @@ it.live('a write routed to approval of N rows costs what one row costs', () =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const f = yield* fixture;
+			// the first request reads the team graph, remembered after it
+			yield* f.requester.act(acts({ 'items.create': items(1) }));
 			yield* both('approval', (n) =>
 				Effect.gen(function* () {
 					const m = yield* f.measure(f.requester.act(acts({ 'items.create': items(n) })));

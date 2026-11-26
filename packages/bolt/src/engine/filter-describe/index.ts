@@ -199,7 +199,7 @@ function spans(kind: 'date' | 'instant', today: string, tz: string): FilterValue
 }
 
 function fieldOptions(
-	f: Pick<FieldInfo, 'kind' | 'many' | 'period_of' | 'team' | 'email'>,
+	f: Pick<FieldInfo, 'kind' | 'many' | 'period_of' | 'email'>,
 	s: Kind | undefined,
 	optional: boolean,
 	tz: string,
@@ -243,7 +243,6 @@ function fieldOptions(
 			});
 	} else if (k === 'bool') for (const v of YES_NO) add(v.label, v.arg);
 	else if (k === 'text') {
-		if (f.team) add('my team', { var: 'actor.teams' });
 		if (f.email) add('my email', { var: 'actor.email' });
 	} else if (NUMERIC.has(k)) {
 	} else if (k === 'date' || k === 'instant' || k === 'time') {
@@ -367,7 +366,7 @@ const FILTER_SYSTEM_PROMPT = `You translate a user's natural-language view descr
   - \`{ "var": "actor.id" }\` on \`sys_user\` ref fields (\`eq\`/\`ne\`)
   - \`{ "var": "actor.party" }\` on party ref fields when listed (\`eq\`/\`ne\`)
   - \`{ "var": "actor.email" }\` on email text fields (\`eq\`/\`ne\`)
-  - \`{ "var": "actor.teams" }\` on team text fields (\`in\`)
+  - \`{ "var": "actor.teams" }\` on \`sys_team\` ref fields (\`in\`)
 - **One-relations**:
   - Match by looked-up record ID: \`{ "<rel>": { "is": { "id": { "eq": "<id>" } } } }\` (or \`in\` for multiple IDs). Do not mix \`id\` with other keys in the same \`is\` object.
   - Match by related fields (up to 2 hops): \`{ "<rel>": { "is": { "<field>": ... } } }\`.
@@ -984,7 +983,6 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 					if (f.many) info['many'] = true;
 					if (s?.optional === true) info['optional'] = true;
 					if (f.period_of !== undefined) info['period_of'] = f.period_of;
-					if (f.team) info['actor_var'] = 'actor.teams';
 					if (f.email) info['actor_var'] = 'actor.email';
 					if (hint !== undefined) info['help'] = hint;
 					if (s?.kind === 'enum') info['values'] = [...s.values];

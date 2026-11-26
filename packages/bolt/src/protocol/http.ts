@@ -38,6 +38,7 @@ import {
 	resetAfter,
 	type Charge
 } from '../engine/access/rate.ts';
+import { teamGraph } from '../engine/identity/graph.ts';
 import { lazyKeys } from '../engine/identity/session.ts';
 import {
 	admit_visitor,
@@ -1138,13 +1139,9 @@ export const BoltRoutes = {
 									deciders: catalog.deciders,
 									settings,
 									spent: yield* spent(db, null),
-									// the policies a member can hold: those a source team names (automation and kiosk policies hold no member)
+									// the policies a member can hold: those a team names (automation and kiosk policies hold no member)
 									policies: [
-										...new Set(
-											Object.values(m.teams).flatMap((team) =>
-												'policies' in team ? team.policies : team
-											)
-										)
+										...new Set(Object.values((yield* teamGraph(db)).teams).flatMap((team) => team.policies))
 									].sort()
 								}
 							}

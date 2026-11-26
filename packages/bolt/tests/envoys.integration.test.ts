@@ -20,6 +20,9 @@ import { NOTICES } from '../src/engine/envoys/index.ts';
 import { simulatedProviders, startSimulator } from '../../providers/src/simulator/index.ts';
 import { hookServer, host } from '../../providers/tests/kit.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices, respond_system_1 } from '../../bolt-cli/src/test/index.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { 't-con': { name: 'Contractors', policies: ['contractor'] } };
 import { layer } from '../../bolt-cli/src/test/effect.ts'; // hook:decisions
 
 const present = <A>(value: A | null | undefined): A => {
@@ -73,7 +76,6 @@ const manifest = {
 			grants: {}
 		}
 	},
-	teams: { 't-con': { name: 'Contractors', policies: ['contractor'] } },
 	automations: {},
 	
 
@@ -202,6 +204,7 @@ const fileScope = Effect.runSync(Scope.make());
 afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
 const setup = Effect.gen(function* () {
 	const t = yield* TestWorkspace;
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	if (kit === undefined)
 		yield* t.db.write({
 			text: `INSERT INTO sys_user (id, email, name, admin, team, phone) VALUES

@@ -37,7 +37,6 @@ const manifest = Result.getOrThrow(
 				}
 			}
 		},
-		teams: {},
 		automations: {
 			put: {
 				description: 'Create or update one rate',

@@ -10,6 +10,9 @@ import { decode_projected_manifest, type EngineManifest } from '../src/engine/ma
 import { ShellBootAnswer } from '../src/shell/api-types.ts';
 import { Outcome, WireError } from '../src/protocol/schema.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { Staff: { policies: ['staff'] } };
 
 const page = { title: 'Home' };
 const card = { title: 'T', description: 'd', icon: 'i' };
@@ -138,7 +141,6 @@ const source = {
 			pages: { home: page }
 		}
 	},
-	teams: { Staff: { policies: ['staff'] } },
 	automations: {},
 	mcp: {},
 	custom_fields: {},
@@ -166,6 +168,7 @@ const call = (
 ) =>
 	Effect.gen(function* () {
 		const t = yield* TestWorkspace;
+		yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 		const cookie = cookieOf(j);
 		const res = yield* t.handle(
 			new Request(`${ORIGIN}${path}`, {

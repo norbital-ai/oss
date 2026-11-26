@@ -42,7 +42,7 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 	model: {
 		bolt: ['model', 'ModelLiteral', 'CreateInput', 'UpdateInput', 'WriteCtx', 'CarriedWrites', 'Kind']
 	},
-	access: { bolt: ['team', 'policy', 'StoredTree', 'ApprovalFlow', 'Verdict'] },
+	access: { bolt: ['policy', 'StoredTree', 'ApprovalFlow', 'Verdict'] },
 	automation: {
 		bolt: ['automation', 'AutomationCtx', 'EffectCtx', 'Notice', 'Notify', 'Recipient', 'ApprovalRecipient'],
 		'bolt/errors': ['Refusal']
@@ -253,7 +253,7 @@ The default mode is a durable job. \`mode: 'call'\` returns its typed \`output\`
 
 A model answers \`yield* ctx.ai.sys_2.infer({ system: '<role>', prompt: '<task>', output: { kind: 'object', fields: { <field>: { kind: 'text' } } } })\` with the \`output\`'s value (text when absent).
 
-Runtime accounts are durable \`sys_integration\` rows, created in Settings or through \`sys_integration.create\`; source declares no connection slots. \`yield* ctx.notify({ title: '<title>', to: [{ team: '<team>' }], via: [instance_id('<integration>', account)] })\` reaches each recipient in the app and on the selected account. Built-in conversation definitions need no duplicate source declaration.
+Runtime accounts are durable \`sys_integration\` rows, created in Settings or through \`sys_integration.create\`; source declares no connection slots. \`yield* ctx.notify({ title: '<title>', to: [{ policy: '<policy>' }], via: [instance_id('<integration>', account)] })\` reaches each recipient in the app and on the selected account. Built-in conversation definitions need no duplicate source declaration.
 
 For a daily channel message, read the intended active workspace account (\`owner\` null, with its intended \`envoy\`) and use \`yield* ctx.send(instance_id('whatsapp', account), { to: '<recipient handle or conversation id>', text: '<message>' })\` in the cron body. Import \`instance_id\` from \`@norbital-ai/bolt\`. Refuse when the account is missing or ambiguous; never silently choose another account. Sends are durably queued, and the provider's acknowledgement and retry outcome appear on the message. Retries of an automation may repeat committed sends: do not promise exactly-once delivery. The recipient's later replies use that account's envoy and the same conversation, with delivered messages in context.
 
@@ -287,7 +287,7 @@ export default model('<name>', {
 Accounts and envoys are runtime records: \`sys_envoy\` holds the assistant's name, task and policies; \`sys_integration\` holds one account, its configuration, optional envoy and durable sealed pairing. Create any number of workspace accounts with no owner. Settings → Envoys creates an envoy then pairs its provider; Settings → Connections creates and configures other workspace accounts. Keep a supplied \`+integration.svelte\` companion.
 
 For native setup in a root web conversation, read \`describe_workspace { names: ['system'] }\`; use the returned capability and account id with \`page { path, configure }\`. The native form collects credentials directly from the person. Envoys and delegated agents have no user tab. Never ask for a secret in chat or invent an envoy source file. Cron jobs send through a concrete paired workspace account with \`ctx.send\`; see the automation card.`,
-	access: `A policy is one file; a grant names only verbs its model declares (never grant \`delete\` unless the model declares \`delete: {}\`). State transitions use \`update: { moves: 'all' }\` or \`moves: { <state_field>: ['<from>-><to>'] }\`. Every team is in the one team file:
+	access: `A policy is one file; a grant names only verbs its model declares (never grant \`delete\` unless the model declares \`delete: {}\`). State transitions use \`update: { moves: 'all' }\` or \`moves: { <state_field>: ['<from>-><to>'] }\`. Teams are \`sys_team\` rows an administrator edits (a name, an optional parent and the policies its members hold); source declares none and holds a team only as an id read from a row. A policy file:
 
 \`\`\`ts
 // src/access_control/policy/+<policy>.policy.ts
@@ -297,11 +297,6 @@ export default policy({
 	description: '<what holders may do>',
 	grants: { <model>: { outputs: { default: {} }, create: {}, update: { moves: 'all' } } }
 });
-
-// src/access_control/team/+team.ts
-import { team } from '@norbital-ai/bolt';
-
-export default team({ <team>: { name: '<Team name>', policies: ['<policy>'] } });
 \`\`\``,
 	page: `An app is its folder: \`+app.ts\` and one \`+<page>.page.svelte\` per page. Use message keys in \`+app.ts\` (\`title\`, \`description\`, \`pages.<page>.title\`) declared in \`src/i18n/+messages.ts\` (and \`+<lang>.messages.ts\` for extra languages). Always pass \`{ctx}\` to \`<Table>\`, \`<Board>\` and \`<RecordShell>\`:
 

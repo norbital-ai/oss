@@ -40,7 +40,6 @@ const manifest = {
 			grants: { products: { outputs: { default: {} }, create: {}, update: {}, delete: {} } }
 		}
 	},
-	teams: {},
 	automations: {},
 	mcp: {},
 	apps: {},

@@ -15,6 +15,9 @@ import { rowApproval } from '../src/engine/approvals/lock.ts';
 import { inboxRequests } from '../src/engine/approvals/inbox.ts';
 import { Checkpoint } from '../src/engine/approvals/snapshot.ts';
 import { authority } from './write-fixture.ts';
+import { id_of } from '../src/decl/id.ts';
+
+const team = Schema.decodeUnknownSync(id_of('sys_team'));
 
 const actor = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
 	kind: 'member',
@@ -108,8 +111,8 @@ describe('approval flows', () => {
 	});
 	it('snapshots literal steps and refuses an empty route', () => {
 		const verdict = Verdict.approve({
-			steps: [{ name: 'HR', teams: ['finance'] }],
-			superseded_by: ['sales', 'sales']
+			steps: [{ name: 'HR', teams: [team('finance')] }],
+			superseded_by: [team('sales'), team('sales')]
 		});
 		expect(Verdict.dataOf(verdict)).toEqual({
 			kind: 'approve',

@@ -16,6 +16,9 @@ import {
 } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { act_reply, q_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { finance: { policies: ['reviewer'] }, sales: { policies: ['rep'] } };
 
 const ACME = '0199a000-0000-4000-8000-0000000000a1';
 const N1 = '0199a000-0000-4000-8000-0000000000b1',
@@ -119,7 +122,6 @@ const manifest: EngineManifest = {
 			}
 		}
 	},
-	teams: { finance: { policies: ['reviewer'] }, sales: { policies: ['rep'] } },
 	automations: {},
 	mcp: {},
 	apps: {},
@@ -163,6 +165,7 @@ const workspace = Layer.unwrap(
 );
 const setup = Effect.gen(function* () {
 	const t = yield* TestWorkspace;
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	const route = yield* route_fixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
 	return { t, route, rep: yield* t.as(t.member(['rep'], { teams: ['sales'] })) };
 });

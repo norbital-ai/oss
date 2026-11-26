@@ -1062,10 +1062,6 @@ declare module '../../src/index.ts' {
 		skills: {
 			quoting: true;
 		};
-		teams: {
-			finance: { policies: readonly [] };
-			sales: { policies: readonly ['sales_rep'] };
-		};
 		workspace: {
 			tz: 'Asia/Singapore';
 			locale: 'en-SG';

@@ -13,6 +13,9 @@ import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
 import { one_act } from './support/act-one.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { requesters: { policies: ['requester'] }, reviewers: { policies: ['reviewer'] } };
 
 const recordId = '0199a000-0000-7000-8000-000000000001',
 	requesterId = '0199a000-0000-7000-8000-000000000002',
@@ -43,7 +46,6 @@ const manifest: EngineManifest = {
 			grants: { documents: { outputs: { default: {} }, update: {} } }
 		}
 	},
-	teams: { requesters: { policies: ['requester'] }, reviewers: { policies: ['reviewer'] } }
 };
 const guest = program(`export default { policy: { requester: { grants: { documents: {
 	update: { verdict: function* (changes, ctx) { return ctx.approve({ steps: [{ name: 'Review', teams: ['reviewers'] }] }); } }
@@ -95,6 +97,7 @@ it.live('rejection conflicts when the record or approval changes before the deci
 			const t = Context.get(context, TestWorkspace),
 				writes = Context.get(context, Callables),
 				approvals = Context.get(context, Approvals);
+			yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 			yield* t.db.write({
 				text: `INSERT INTO sys_user (id, name, kind, team) VALUES
 	($1, 'Requester', 'staff', 'requesters'), ($2, 'Reviewer', 'staff', 'reviewers')`,

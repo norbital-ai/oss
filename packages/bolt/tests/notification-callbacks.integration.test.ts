@@ -18,6 +18,9 @@ import { FacilityFailure } from '@norbital-ai/host-api';
 import { admin, manifest as base } from './write-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { one_act } from './support/act-one.ts';
+import { teams_sql } from './support/teams.ts';
+
+const TEAMS = { authors: { policies: ['author'] }, reviewers: { policies: ['reviewer'] }, restricted: { policies: ['restricted'] } };
 
 const recipient = '0199a000-0000-7000-8000-000000000001';
 const requester = '0199a000-0000-7000-8000-000000000002';
@@ -49,7 +52,6 @@ const manifest: EngineManifest = {
 			outputs: { default: { scopes: { orders: { title: { eq: 'visible' } } } } }, create: {}
 		} } }
 	},
-	teams: { authors: { policies: ['author'] }, reviewers: { policies: ['reviewer'] }, restricted: { policies: ['restricted'] } }
 };
 const member = (id: string, team: 'authors' | 'reviewers' | 'restricted'): MemberActor => ({
 	kind: 'member', id, email: null, phone: null, external: false,
@@ -90,6 +92,7 @@ export default {
 };`)
 	}));
 	const t = Context.get(context, TestWorkspace), writes = Context.get(context, Callables);
+	yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
 	yield* t.db.write({
 		text: `INSERT INTO sys_user(id,name,kind,team,admin) VALUES
 		($1,'Reviewer','staff','reviewers',false),($2,'Requester','staff','authors',false),

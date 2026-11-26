@@ -43,7 +43,6 @@ const manifest = (
 	),
 	policies,
 	integrations: {},
-	teams: {},
 	automations: {},
 
 	mcp: {},
