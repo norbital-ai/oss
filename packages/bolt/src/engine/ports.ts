@@ -1,4 +1,4 @@
-// Host ports as services (D4, B.1): what the engine asks of its host, by capability, never by provider.
+// Host ports as services: what the engine asks of its host, by capability, never by provider.
 // Every member fails typed — the facility's failure or `Unavailable`. A port is required; one the host may leave out
 // takes `off` explicitly (`Facilities`, `@norbital-ai/host-api`), and only then answers `Unavailable`. Walls are the caller's
 // (`Port.call`). The tenant database is `TenantDb` (`db/tenant-db.ts`).

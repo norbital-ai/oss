@@ -329,7 +329,7 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 		apps: m.apps,
 		groups: m.groups ?? {}
 	};
-	// hook:ui-kit — the client stylesheet: ui's tokens + Tailwind, scanning the shell and the workspace's pages
+	// the client stylesheet: ui's tokens + Tailwind, scanning the shell and the workspace's pages
 	// generated inputs sit at a fixed path under the workspace, so a rebuild is byte for byte the same
 	const gen = join(root, '.norbital', 'cache', 'client'),
 		styles = join(gen, 'client.css');
@@ -340,7 +340,7 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 		// first) hold generated or copied code, never a class source (.gitignore or not)
 		`@import ${key(createRequire(import.meta.url).resolve('@norbital-ai/ui/base.css'))};\n@source ${key(SHELL)};\n@source ${key(root)};\n@source not ${key(join(root, '.norbital'))};\n@source not ${key(out)};\n${themeStyles}`
 	);
-	// hook:server-cli — the messages: the base (`+messages.ts`) under the workspace's matching `+<locale>.messages.ts`
+	// the messages: the base (`+messages.ts`) under the workspace's matching `+<locale>.messages.ts`
 	const reps = files
 		.filter((f) => f.role === 'representation')
 		.map((f) => `${key(f.name)}: () => import(${key(join(root, f.path))})`);
@@ -356,7 +356,7 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 	// the base plus every locale catalog: the shell selects by the viewer's choice
 	const base = files.find((f) => f.role === 'messages'),
 		locales = files.filter((f) => f.role === 'locale');
-	// hook:shell — the account menu's versions: the workspace's, this Bolt's and the building Node's. The
+	// the account menu's versions: the workspace's, this Bolt's and the building Node's. The
 	// entry sets them: the shared platform layer (Nav's module) carries nothing of one workspace or build host
 	const versions = {
 		workspace: yield* version(join(root, 'package.json')),

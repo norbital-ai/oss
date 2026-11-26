@@ -129,7 +129,7 @@
 			if (match !== undefined) on_theme?.(match);
 		}
 	});
-	// the versions `bolt build` bakes into the client (L-BOLT-073); absent when the shell is mounted unbuilt (tests)
+	// the versions `bolt build` bakes into the client; absent when the shell is mounted unbuilt (tests)
 	const build = typeof __BOLT_BUILD__ === 'undefined' ? null : __BOLT_BUILD__;
 	const mod = shortcutLabel('');
 	const withKey = (label: string, key: string) => `${label} · ${mod}${key}`;

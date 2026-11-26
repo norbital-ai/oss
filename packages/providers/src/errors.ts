@@ -1,4 +1,4 @@
-// What a provider fails with (D3): one tag per way it fails, each a decoded value. `to_drivers` (abi.ts) hands them across
+// What a provider fails with: one tag per way it fails, each a decoded value. `to_drivers` (abi.ts) hands them across
 // the driver ABI in the shape the engine reads: a refusal as the engine's `SendRefused`, any other as itself (an
 // `Error` named by its tag).
 import { Schema } from 'effect';

@@ -1074,7 +1074,7 @@
 			?.focus({ preventScroll: true });
 	}
 
-	// hook:view-ui — inside the shell's sheet the panel's header is the sheet's (one header: mark, title, conversations); the
+	// inside the shell's sheet the panel's header is the sheet's (one header: mark, title, conversations); the
 	// sheet adds full screen and close, and its left edge resizes it
 	const toSheet = getContext<((s: Snippet | null) => void) | undefined>(
 		Symbol.for('ui.sheet.header')
@@ -1282,7 +1282,7 @@
 	</aside>
 {/snippet}
 
-<!-- hook:agent-ui — the panel is one card surface edge to edge (the sheet's body padding given back); the transcript and the composer
+<!-- the panel is one card surface edge to edge (the sheet's body padding given back); the transcript and the composer
 	share one responsive conversation column -->
 <div
 	{@attach lifetime}

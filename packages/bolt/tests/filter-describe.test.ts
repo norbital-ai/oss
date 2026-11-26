@@ -151,7 +151,6 @@ const caller = (
 	automations: [],
 	limits: [],
 	teamTree: [],
-	scopes: {},
 	capabilities: { apps: [], syncs: [], tools: [], mcp: [] },
 	actor: {
 		kind: 'member',

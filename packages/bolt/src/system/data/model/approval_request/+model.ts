@@ -1,5 +1,5 @@
-// An approval request: today's readable face of an approval — its status, the step it waits on, the
-// names of every step, and the teams and members that decide — kept under its name (R3). Read by its participants;
+// An approval request: the readable face of an approval — its status, the step it waits on, the
+// names of every step, and the teams and members that decide — kept under its name. Read by its participants;
 // written by the approvals engine. At most one open request per record: the lock refuses a second.
 import { bind_system_model } from '../../../../decl/model.ts';
 

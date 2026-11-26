@@ -1,4 +1,4 @@
-// The one read request (P3, decisions 1, 4, 7, 8): a page's `bolt.query`, an automation's or policy's `ctx.query` and the
+// The one read request: a page's `bolt.query`, an automation's or policy's `ctx.query` and the
 // agent's `read` tool send the same JSON tree: one model root, reading one named output (`default` when absent),
 // then one key per nested relation. Native resolved paths stay within `LAYER_MAX_DEPTH` segments. `decode_read_request` refuses anything but that JSON (an unknown option, a sixth level,
 // `output`/`as_of`/`after` below a root, a function); `plan_read_request` checks the paths against the declarations and
@@ -7,7 +7,7 @@ import { Predicate, Result, Schema } from 'effect';
 import type { Json } from '../decl/values.ts';
 import { LAYER_MAX_DEPTH, type ExposureSpec } from '../decl/model.ts';
 
-/** Every list's default and largest `limit`: a root page and each nested many-layer per parent row (decision 7). */
+/** Every list's default and largest `limit`: a root page and each nested many-layer per parent row. */
 export const READ_LIMIT = 10_000;
 const Fields = Schema.Array(Schema.String);
 const Aggregate = Schema.Struct({

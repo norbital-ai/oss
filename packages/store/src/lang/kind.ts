@@ -1,4 +1,4 @@
-// kind (D7): the one field-kind table. The kind literal a model, an input or a shape declares (structurally, so ui
+// kind: the one field-kind table. The kind literal a model, an input or a shape declares (structurally, so ui
 // and store need no bolt dependency), its traits, and its Schema: `input_schema(spec)` is the one validator of input and
 // stored values (callables, write flatten, IR literals, configuration, feed rows, AI output kinds). A value is JSON: a
 // decimal is its exact text, a date `YYYY-MM-DD`, an instant ISO UTC `…Z`; arithmetic is Effect's `BigDecimal` and `DateTime`.

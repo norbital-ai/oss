@@ -1,6 +1,6 @@
 // Bolt's reads beside the store's (`@norbital-ai/store`: read, get, aggregate, similar): history, a read request (one
 // layer map over several roots), the transform's `after`, and the shell's agent and inbox reads; a declared (dynamic)
-// read and a revision `get`; and the one decoder of a read call off the wire (D15).
+// read and a revision `get`; and the one decoder of a read call off the wire.
 import { Effect, Predicate, Result, Schema } from 'effect';
 import {
 	aggregate,
@@ -40,7 +40,7 @@ type HistoryAt =
 	| { readonly _tag: 'Instant'; readonly instant: string }
 	| { readonly _tag: 'Revision'; readonly revision: number }
 	| { readonly _tag: 'Before'; readonly before: string };
-/** Every read a crossing carries (wire discriminant `kind`, D15): the store's, and Bolt's own. */
+/** Every read a crossing carries (wire discriminant `kind`): the store's, and Bolt's own. */
 export type ReadIR =
 	| StoreReadIR
 	| {
@@ -329,7 +329,7 @@ export const request = Effect.fn('Bolt.read.request')(function* (
 								: {})
 						};
 					}
-					// `{}` reads every field the layer exposes (decision 8)
+					// `{}` reads every field the layer exposes
 					return fields === undefined
 						? { fields: null, whole: true, relations }
 						: { fields: ['id', ...fields], relations };
@@ -414,7 +414,7 @@ export const request = Effect.fn('Bolt.read.request')(function* (
 /** The engine's own paged read (never off the wire), with `limit`/`after` or `all`. */
 export const read = (cat: Catalog, model: string, q: Obj): Effect.Effect<ReadIR, BoltError> =>
 	store(storeRead(cat, model, q));
-/** `get(model, id, { select?, revision? })`; L-BOLT-181: a revision get is the history fold, not a table read. */
+/** `get(model, id, { select?, revision? })`; a revision get is the history fold, not a table read. */
 export const get = Effect.fn('Bolt.read.get')(function* (
 	cat: Catalog,
 	model: string,

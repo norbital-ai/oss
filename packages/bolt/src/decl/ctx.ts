@@ -1,5 +1,5 @@
-// What server bodies see and the write shapes they call with (X-24): rows, `query` (the one read of records; `history`
-// reads one record's revisions), `act`, write results, and each body's ctx. Every ctx member answers an Effect with typed failures (D8): bodies are generators that
+// What server bodies see and the write shapes they call with: rows, `query` (the one read of records; `history`
+// reads one record's revisions), `act`, write results, and each body's ctx. Every ctx member answers an Effect with typed failures: bodies are generators that
 // `yield*` them. Pages read through the same `query` (`page/page-bolt.ts`).
 import type { Effect } from 'effect';
 import type { Cursor } from '@norbital-ai/store';
@@ -44,7 +44,7 @@ import type {
 	WritePath
 } from './names.ts';
 import type { StartInput } from './runtime/facilities.ts';
-import type { LayerWhere, OrderBy, Where } from './where.ts'; // hook:query (OrderBy)
+import type { LayerWhere, OrderBy, Where } from './where.ts';
 import type {
 	Decimal,
 	IanaZone,
@@ -55,13 +55,13 @@ import type {
 	Json
 } from './values.ts';
 
-// ── effects (D8) ──
+// ── effects ──
 /**
  * What a `ctx` member answers: an Effect succeeding with `A` and failing with its typed failures `E`, `yield*`ed in a
- * generator body. One interface with declared variance keeps the check cost flat (G1).
+ * generator body. One interface with declared variance keeps the check cost flat (G1 scale fixture).
  */
 export interface Eff<out A, out E = never> extends Effect.Effect<A, E> {}
-/** A body's failure: every failure is tagged (D3), and a body requires no service. */
+/** A body's failure: every failure is tagged, and a body requires no service. */
 export type BodyError = { readonly _tag: string };
 /**
  * What a ctx-bearing body returns: a generator (`function*`) whose return is the body's output.
@@ -166,7 +166,7 @@ export type HistoryOptions<C = string> = {
 	output?: OutputName<C>;
 };
 
-// ── read requests (decisions 1, 4, 7, 8): one layer map for pages, `ctx.query`, policies and the agent ──
+// ── read requests: one layer map for pages, `ctx.query`, policies and the agent ──
 // A request names models at its root, with one nested node per declared relation. Each model is a root once. Every list (a root page or a nested
 // many-layer) defaults to `limit` 10,000 (the host cap) and the root's default order; only a root pages (`after`, `next`).
 // JSON only: the same value crosses the page wire, `ctx.query` and the agent tool (`protocol/read-request.ts`).
@@ -364,7 +364,7 @@ export interface Clock {
 	today_in(zone: IanaZone): PlainDate;
 }
 
-// ── writes: trees typed from the model's write layers (decision 6: every write is a batch of them) ──
+// ── writes: trees typed from the model's write layers (every write is a batch of them) ──
 type OptionalOf<T, Cols extends string> = {
 	[F in Cols]: OmittableOnInsert<T, F> extends true ? F : never;
 }[Cols];
@@ -451,7 +451,7 @@ type Verbs<C, S = ExposureSpecOf<C>> =
 			: never)
 	| (S extends { update: unknown } ? 'update' : never)
 	| (S extends { delete: unknown } ? 'delete' : never);
-/** Every callable: a model's generated write verb (X-1, X-24). */
+/** Every callable: a model's generated write verb. */
 export type Callable = {
 	[C in ModelName]: `${C}.${Verbs<C>}`;
 }[ModelName];
@@ -590,7 +590,7 @@ export interface Act {
 // ── contexts ──
 // Contexts are interfaces with declared variance: measuring the variance of a generic alias over a large names index
 // cost seconds per body (G1 scale fixture).
-// ── policy verdicts (decision 3): one per write verb, the root's policy only ──
+// ── policy verdicts: one per write verb, the root's policy only ──
 /** Where a refusal points: the offending row's index in the batch and, on create and update, a root field. */
 type RefuseWhere<M, V> = V extends 'create' | 'update'
 	? { readonly row?: number; readonly field?: LayerColumn<M, V, M> }

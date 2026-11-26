@@ -184,7 +184,7 @@ export type ShellBoot = {
 	actor: EngineActor | null;
 	name: string | null;
 	admin: boolean;
-	/** Rule 39: the member or team being previewed and the administrator previewing. */
+	/** The member or team being previewed and the administrator previewing. */
 	preview: { user: string; by: string; impersonate?: true } | { team: string; name: string; by: string } | null;
 	/** The host's banner for this member (`ShellHost.notice`: a billing notice). */
 	notice?: ShellNotice;

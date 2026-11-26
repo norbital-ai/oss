@@ -55,7 +55,7 @@ export const attachmentsFor = Effect.fn('Agents.attachments')(function* (
 
 /**
  * The host-independent attachment reader: an image as model-compatible bytes, a text file as its text. Every other file
- * is parsed by `read_file` (plan 12), never here.
+ * is parsed by `read_file`, never here.
  */
 export function file_attachments(
 	db: TenantDbShape,

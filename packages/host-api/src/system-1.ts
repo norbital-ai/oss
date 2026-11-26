@@ -91,7 +91,7 @@ const walkJson = (v: Json, leaf: (x: Json) => Json | undefined): Json => {
 	return isObj(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walkJson(x, leaf)])) : v;
 };
 
-/** A provider's HTTP refusal as the facility failure it maps to (P37); `undefined` is an ordinary failure. Hosts share it. */
+/** A provider's HTTP refusal as the facility failure it maps to; `undefined` is an ordinary failure. Hosts share it. */
 export function refusal_of(status: number, body: string): FacilityFailure | undefined {
 	if (status < 400 || status >= 500) return undefined;
 	const message = body.slice(0, 500) || `the provider refused the request (${status})`;

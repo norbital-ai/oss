@@ -1,4 +1,4 @@
-// The driver ABI, the engine's side (D10b). A provider is the host's, from another module graph, so a link stays the
+// The driver ABI, the engine's side. A provider is the host's, from another module graph, so a link stays the
 // Promise + AbortSignal + JSON contract of `driver.ts`. `openLink` and `linkCalls` are the one adapter: every call is an
 // Effect whose interruption aborts the provider's signal; an answer is decoded, a rejection keeps its fence or becomes
 // a facility failure (a send's refusal its `SendRefused`), and a missing operation fails `Unavailable`.

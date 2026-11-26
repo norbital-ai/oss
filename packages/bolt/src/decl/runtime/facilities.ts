@@ -1,5 +1,5 @@
 // What server code may cause beyond its own write: runs, notices, and the automation-only I/O
-// facilities. Each answers an Effect (D8); a facility fails with `FacilityFailure` or `Unavailable` (`../errors.ts`).
+// facilities. Each answers an Effect; a facility fails with `FacilityFailure` or `Unavailable` (`../errors.ts`).
 import { Schema } from 'effect';
 import type { Actor } from '../access/actor.ts';
 import type { Eff } from '../ctx.ts';

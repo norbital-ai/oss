@@ -1,4 +1,4 @@
-// The driver ABI, the providers' side (D10b). A provider is written as Effects (`ProviderDef`); the engine is another
+// The driver ABI, the providers' side. A provider is written as Effects (`ProviderDef`); the engine is another
 // module graph and calls it through the Promise + AbortSignal contract (`Provider`, `Link`, `DriverOpen`). `to_drivers`
 // is the one adapter: every call runs on the host's runner, an aborted signal interrupts it, a refusal crosses as the
 // engine's `SendRefused` and any other failure as itself; a link's resources live in its own scope, closed by `close`.

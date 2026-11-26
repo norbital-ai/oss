@@ -1,7 +1,7 @@
-// formula (D21, M1): user-edited rules as CEL text, compiled against a context declared with field-kind
+// formula: user-edited rules as CEL text, compiled against a context declared with field-kind
 // literals (object roots included) and evaluated over plain values. The numeric mode belongs to the context:
-// 'decimal' (default) evaluates money and decimals exactly as Effect's `BigDecimal`, 'float' in doubles (hr's law, D21).
-// Registered functions keep today's `registerFunction` signatures, so hr's law seed (`.age_on(`, `.birthday(`) runs
+// 'decimal' (default) evaluates money and decimals exactly as Effect's `BigDecimal`, 'float' in doubles (hr's law).
+// Registered functions keep the `registerFunction` signatures, so hr's law seed (`.age_on(`, `.birthday(`) runs
 // unchanged; object roots are `map<string, dyn>` for them, and their member paths are checked here instead.
 import { Environment, type ASTNode, type ParseResult } from '@marcbachmann/cel-js';
 import { children } from './cel-ast.ts';
@@ -86,7 +86,7 @@ type FormulaContext<R extends Roots = Roots, M extends Mode = Mode, D = undefine
 	R,
 	M
 > & {
-	/** M1: the typed builder from the caller's rows to this context's values, when one was declared. */
+	/** The typed builder from the caller's rows to this context's values, when one was declared. */
 	readonly derive: D;
 };
 type Derive<R extends Roots> = ((rows: never) => ValuesOf<R>) | undefined;
@@ -126,7 +126,7 @@ function celType(k: Kind, mode: Mode): string {
 	return EXACT.has(k.kind) ? 'Decimal' : 'int';
 }
 
-/** Maps inside cel-js (a map literal) reach registered functions as plain objects, as today's rows did. */
+/** Maps inside cel-js (a map literal) reach registered functions as plain objects, as rows do. */
 const plain = (v: unknown): unknown =>
 	v instanceof Map
 		? Object.fromEntries([...v].map(([k, x]) => [k, plain(x)]))
@@ -195,7 +195,7 @@ function arithmetic(env: Environment, mode: Mode) {
 
 /**
  * A formula context: its roots (field-kind literals), numeric mode, registered CEL functions (`{ signature, fn }`,
- * today's `registerFunction`) and, for derived roots (M1), a typed `derive(rows)` builder.
+ * `registerFunction`) and, for derived roots, a typed `derive(rows)` builder.
  */
 export function context<const R extends Roots, D extends Derive<R> = undefined>(
 	roots: R,

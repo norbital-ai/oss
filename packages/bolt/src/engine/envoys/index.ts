@@ -1,4 +1,4 @@
-// Envoys (authority by P32). An envoy is a runtime `sys_envoy` row
+// Envoys. An envoy is a runtime `sys_envoy` row
 // deployed on a workspace conversation instance (`sys_integration.envoy`, active, no owner); every turn runs as the
 // `envoy` actor on that instance. The ingest statement queues one `envoys.admit` run per new live message there, so a
 // crash between ingest and admission loses no turn. Admission reads the instance and the envoy's spec as they are now
@@ -54,10 +54,10 @@ export type EnvoysConfig = {
 	announce: (at: string) => Effect.Effect<void>;
 	/** The name a notice uses for this workspace. */
 	workspace?: string;
-	/** Rule 60a: System 1 triage, when the host binds its port. */
+	/** System 1 triage, when the host binds its port. */
 	triage?: Pick<Throttle, 'envoy' | 'hold' | 'release'>;
 };
-/** Rule 59: fixed, recorded replies; internal text never reaches a sender. */
+/** Fixed, recorded replies; internal text never reaches a sender. */
 export const NOTICES = {
 	rate_limited:
 		'You are sending messages faster than I can answer. Please wait a moment and send your message again.',
@@ -334,7 +334,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		yield* track(drain(a.conversation));
 		return 'queued';
 	});
-	/** Rule 60: the row itself becomes the agent's queued input under its own sender; one row is history and transcript. */
+	/** The row itself becomes the agent's queued input under its own sender; one row is history and transcript. */
 	const QUEUE = (
 		state: 'queued' | 'pending'
 	) => `addressed = true, refused = NULL, role = 'user', state = '${state}', mode = 'agent', "as" = $2::jsonb,
@@ -369,7 +369,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		const r = yield* cfg.agents.drain(conversation, { onWrite: live(conversation) });
 		return { ran: r.ran, sent: yield* ship(conversation) };
 	});
-	/** Chat replies leave while the turn works: each finished assistant row is shipped as it is written (today's live updates). */
+	/** Chat replies leave while the turn works: each finished assistant row is shipped as it is written (live updates). */
 	const live = (conversation: string) => (row: { role: string | null }) =>
 		row.role === 'assistant' ? ship(conversation) : Effect.succeed(0);
 	const ship = Effect.fn('Agents.ship')(function* (conversation: string) {

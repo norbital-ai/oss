@@ -25,7 +25,6 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 		collision_padding = 8,
 		text,
 		content_class,
-		arrow_classes: _arrowClasses,
 		trigger,
 		content,
 		on_open_change,
@@ -55,8 +54,6 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 		text?: string | undefined;
 		/** Classes on the content surface. */
 		content_class?: string;
-		/** Kept for compatibility with arrow-styled callers. */
-		arrow_classes?: string;
 		/** The element it describes; spread the given `props` onto it. */
 		trigger: Snippet<[{ props: Record<string, unknown> }]>;
 		/** A rich body, in place of `text`. */

@@ -492,7 +492,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 				),
 				(answer) => page_of(answer, name)
 			);
-		// hook:agent-ui — a later page stays live (its index is the pages behind it; a cursor restored from the URL has none)
+		// a later page stays live (its index is the pages behind it; a cursor restored from the URL has none)
 		if (kind === 'model')
 			return pageRead(
 				name,

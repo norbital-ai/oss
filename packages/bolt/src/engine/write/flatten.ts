@@ -519,7 +519,7 @@ export function decodeValue(
 			return str && Object.hasOwn(spec.states, v) ? null : `'${String(v)}' is not a state`;
 		case 'int':
 			return Number.isSafeInteger(v) ? null : 'expected a whole number';
-		// D6: an authored literal, decimal text or a number
+		// an authored literal, decimal text or a number
 		case 'decimal':
 		case 'money':
 			return Result.isSuccess(
@@ -529,7 +529,7 @@ export function decodeValue(
 				: 'expected a decimal';
 		case 'bool':
 			return typeof v === 'boolean' ? null : 'expected true or false';
-		// D6: a date and an instant are their ISO text, the one shape the wire carries both ways
+		// a date and an instant are their ISO text, the one shape the wire carries both ways
 		case 'date':
 			return Result.isSuccess(Schema.decodeUnknownResult(input_schema({ kind: 'date' }))(v))
 				? null
@@ -546,7 +546,7 @@ export function decodeValue(
 				(f.arms ?? []).includes(v['model'])
 				? null
 				: `expected { model, id } with model one of ${(f.arms ?? []).join(', ')}`;
-		// X-11: a date period `{ from, to | null }` (inclusive), an instant period `{ start, end | null }`; empty or inverted refused
+		// a date period `{ from, to | null }` (inclusive), an instant period `{ start, end | null }`; empty or inverted refused
 		case 'period': {
 			const date = f.period_of === 'date',
 				[lo, hi] = date ? ['from', 'to'] : ['start', 'end'];

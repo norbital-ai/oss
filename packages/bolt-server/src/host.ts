@@ -1,4 +1,4 @@
-// bolt-server's example untethered host (plan 01): its OWN adapters composed into one `Facilities` record and the
+// bolt-server's example untethered host: its OWN adapters composed into one `Facilities` record and the
 // `serving` parts around it, from typed settings. The example `norbital.host.ts` (`../example/`) reads those settings
 // from its environment; nothing here reads env. Nothing is guessed: an unconfigured member is `off`, and `activate`'s
 // needs check refuses a bundle that needs it.
@@ -66,7 +66,7 @@ export type HostSettings = {
 	transactional: Transactional;
 	providers: { readonly [F in Facility]?: Provider };
 	/**
-	 * The AI facility (P35, P39): `sys1` the sys_1 model id (`openai`: a structured-output chat model; `decisions`:
+	 * The AI facility: `sys1` the sys_1 model id (`openai`: a structured-output chat model; `decisions`:
 	 * Jev/OpenRouter's Decisions API; `openai-decisions`: OpenAI's native Decisions API).
 	 * `sys2` maps model classes to model ids; `embed` maps embedding names to models.
 	 */

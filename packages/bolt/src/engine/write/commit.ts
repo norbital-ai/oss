@@ -20,8 +20,8 @@ import { Live, Wake, Links } from '../services.ts';
 import { toOwnSql } from '../access/pred.ts';
 import type { Where } from '@norbital-ai/store/kind';
 import { q, cells, null_row_sql, type Catalog } from '@norbital-ai/store';
-import { enqueue, next_due, PARTS, PARTS_TABLE, queue_effects, type Writer } from '../runs/queue.ts'; // hook:automations
-import { syncOutboxPiece } from '../sync/write.ts'; // hook:syncs (H3)
+import { enqueue, next_due, PARTS, PARTS_TABLE, queue_effects, type Writer } from '../runs/queue.ts';
+import { syncOutboxPiece } from '../sync/write.ts';
 import { purgeProposals } from '../approvals/erase.ts';
 import {
 	answer,
@@ -90,16 +90,16 @@ export type Commit = {
 	/** An engine sync rollback owns peer recovery explicitly, outside the ordinary outbox hook. */
 	rollback?: true;
 	/**
-	 * hook:syncs — pieces after `allp` (a sync read page's cursor, id map and version stamps), in a split act's last
+	 * Pieces after `allp` (a sync read page's cursor, id map and version stamps), in a split act's last
 	 * statement only. `rows` names the act's rows (`c`, `id`, `revision`): `allp`, and the rows its earlier statements parked.
 	 */
 	pieces?: (c: Chain, rows: string) => void;
-	/** Rule 26: the write callbacks' reads, re-digested under the table lock ahead of the writes (`checked`). */
+	/** The write callbacks' reads, re-digested under the table lock ahead of the writes (`checked`). */
 	fingerprints?: readonly Fingerprint[];
 	/** Native prior automation query intent, fixed across retries and persisted for held approvals. */
 	readGuards?: ReadGuards;
 	/**
-	 * Rule 38e: the direct pieces are `erased` revisions. Remove drops every revision of every deleted row; anonymise
+	 * The direct pieces are `erased` revisions. Remove drops every revision of every deleted row; anonymise
 	 * drops `purge` fields from the targets' earlier revisions (a revision left empty goes). Durable audit defers the
 	 * history purge until complete external acknowledgement. Both drop notices linking a deleted row.
 	 */
@@ -610,7 +610,7 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 		);
 	if (first && x.runs.length > 0) enqueue(c, x.runs, { when: GATED, conflict: 'replace' });
 	if ((x.notices?.length ?? 0) > 0) noticeInsert(c, 'notices', x.notices ?? [], x.now, GATED, m.teams, m.workspace.signup?.policies, m.workspace);
-	if (last) x.pieces?.(c, part === undefined ? 'allp' : c.cte('actp', `SELECT c, id, revision FROM allp UNION ALL SELECT c, id, revision FROM ${PARTS}`)); // hook:syncs
+	if (last) x.pieces?.(c, part === undefined ? 'allp' : c.cte('actp', `SELECT c, id, revision FROM allp UNION ALL SELECT c, id, revision FROM ${PARTS}`));
 
 	// in the act's own order (the input's; `records[0]` is what was written), anything else after by model and id; a
 	// split act's last statement reads the earlier statements' rows back, at the revision a later roll-up left them
@@ -796,7 +796,7 @@ export function compile_outcome_record(
 /** Columns history never keeps: the generated search document and the platform embedding. */
 const UNHISTORIED = `ARRAY['bolt_search', 'bolt_embedding', 'bolt_record_label']`;
 /**
- * Rule 38e(a–c): purge prior history and notices while retaining the direct erasure's own receipt. With durable audit
+ * Purge prior history and notices while retaining the direct erasure's own receipt. With durable audit
  * (`operation`, the statement's audit operation) the purge waits for the external acknowledgement instead.
  */
 function erasePieces(c: Chain, erasures: readonly NonNullable<Commit['erase']>[], operation: string | null): void {
@@ -952,7 +952,7 @@ export const runCommit = Effect.fn('Bolt.runCommit')(function* (
 		};
 	return answers;
 });
-/** The act's rule 26 re-digests (its callbacks' reads and its read guards'), each a statement ahead of its writes. */
+/** The act's re-digests (its callbacks' reads and its read guards'), each a statement ahead of its writes. */
 export const checked = (x: Commit): Sql[] =>
 	fingerprintChecks(x, [...(x.fingerprints ?? []), ...(x.readGuards?.fingerprints ?? [])]);
 /** A guarded provisional write and its post-image approval baseline settle in the same locked native batch. */

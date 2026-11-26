@@ -146,7 +146,7 @@ export type ToolContext = {
 	/** The ingests this engine is running: a restart leaves none, so one marked running elsewhere was cut short. */
 	reading: Set<string>;
 	validators: Validators;
-	/** The host's ingest port (plan 12, Norbital Convert): a file as HTML and its images. Absent: no document ingests. */
+	/** The host's ingest port (Norbital Convert): a file as HTML and its images. Absent: no document ingests. */
 	ingest?:
 		| ((
 				file: { sha256: string; name: string; mime: string; key: string; size: number },

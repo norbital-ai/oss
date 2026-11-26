@@ -118,8 +118,7 @@ const member = (
 	automations: [],
 	capabilities: { apps: [], tools: o.tools ?? [], mcp: [], syncs: [] },
 	limits: [],
-	teamTree: [],
-	scopes: {}
+	teamTree: []
 });
 const manifest: EngineManifest = {
 	needs: [],

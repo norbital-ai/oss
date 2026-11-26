@@ -1,4 +1,4 @@
-// The built-in layer's rows as the adapters answer them (`db/wire.ts` `parse`; H2): a row's type is derived from its
+// The built-in layer's rows as the adapters answer them (`db/wire.ts` `parse`): a row's type is derived from its
 // model declaration in `src/system` — its key, fields, computed fields and FKs — and its Schema is built from the same
 // declaration, so neither is a hand copy. A Schema is named for its table: a malformed row is refused naming it.
 import { Schema } from 'effect';

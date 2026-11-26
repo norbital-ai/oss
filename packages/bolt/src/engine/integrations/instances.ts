@@ -216,7 +216,7 @@ const Admin = Schema.Struct({
 	revision: Schema.Number
 });
 /**
- * Where a branch change's captured images go: the serving generations on the environment epoch (Rule 61) its statement
+ * Where a branch change's captured images go: the serving generations on the environment epoch its statement
  * read, whose live lanes route them as their own commits.
  */
 export type BranchPublication = (epoch: string, captured: readonly Captured[]) => void;

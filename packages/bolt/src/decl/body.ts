@@ -1,4 +1,4 @@
-// A body as declarations store it and the guest calls it by path (D8). Effect-free: a bundle without a generator body
+// A body as declarations store it and the guest calls it by path. Effect-free: a bundle without a generator body
 // imports this module and carries no Effect.
 import type { ValueOf } from './fields.ts';
 import type { BodyReturn } from './ctx.ts';
@@ -30,7 +30,7 @@ const seed_body = <A extends readonly unknown[]>(body: (...args: A) => unknown) 
 /**
  * A body as a declaration stores it: a generator through the guest edge, its ctx the argument at `at` (-1: none). The
  * wrapper runs only at the guest ABI; authored bodies retain their generator signatures. The edge's `install()` sets
- * `wrap` only in a bundle that carries generator bodies, so a body-free bundle carries no Effect (D8).
+ * `wrap` only in a bundle that carries generator bodies, so a body-free bundle carries no Effect.
  */
 export function attached<A extends readonly unknown[], O>(
 	body: GeneratorBody<A, O>, at: number

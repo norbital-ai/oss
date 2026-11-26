@@ -71,17 +71,17 @@ and goes full screen from its header.
 	let depth = $state(0);
 	const t = ui_text();
 	const me = {};
-	// hook:view-ui — a record view inside claims this header for its label, pills and actions: one header, not two
+	// a record view inside claims this header for its label, pills and actions: one header, not two
 	let claimed = $state<Snippet | null>(null);
 	setContext(Symbol.for('ui.sheet.header'), (s: Snippet | null) => (claimed = s));
-	// hook:view-ui — the line above the claimed heading (a record's model, "Variation"): a row of its own, so the toggles
+	// the line above the claimed heading (a record's model, "Variation"): a row of its own, so the toggles
 	// centre on the title, not on the two lines
 	let eyebrow = $state<string | null>(null);
 	setContext(Symbol.for('ui.sheet.eyebrow'), (text: string | null) => (eyebrow = text));
-	// hook:view-ui — a record view inside names the dialog for screen readers: its own heading, never the model noun alone
+	// a record view inside names the dialog for screen readers: its own heading, never the model noun alone
 	let name = $state<string | null>(null);
 	setContext(Symbol.for('ui.sheet.name'), (text: string | null) => (name = text));
-	// hook:view-ui — the record's actions beside full screen
+	// the record's actions beside full screen
 	let chrome = $state<{ tools: Snippet } | null>(null);
 	setContext(Symbol.for('ui.sheet.chrome'), (c: { tools: Snippet } | null) => (chrome = c));
 	// an overlay is a new page edge, a new tab hierarchy and a new record frame (an opener's carried record is not a parent)

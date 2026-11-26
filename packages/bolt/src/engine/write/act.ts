@@ -14,7 +14,7 @@ import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { writableFile } from '../decision.ts';
 import { membershipModels, membershipWriter } from '../identity/teams.ts';
 import type { EngineError } from '../errors.ts';
-import { embedQueued, embedWrites } from '../integrations/embed.ts'; // hook:integrations
+import { embedQueued, embedWrites } from '../integrations/embed.ts';
 import { layered } from '../manifest.ts';
 import { coalescing, memo_reads } from '../query/engine.ts';
 import { writerOf } from '../runs/queue.ts';

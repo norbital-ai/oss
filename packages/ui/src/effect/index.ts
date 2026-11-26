@@ -1,4 +1,4 @@
-// `@norbital-ai/ui/effect` (D9): the one Svelte edge. A page's Effects run on the browser runtime its mount creates
+// `@norbital-ai/ui/effect`: the one Svelte edge. A page's Effects run on the browser runtime its mount creates
 // (`mount_edge(ManagedRuntime.make(ShellLive))` in the shell, the root layout in a host app): `run` hands `{#await}` a
 // Promise, `fork` runs an event handler's effect, `observe` owns streamed state and `attach` runs a scoped
 // fiber for an element's lifetime. Every fiber runs in the mounted runtime's scope, so unmounting interrupts them all.
@@ -61,7 +61,7 @@ function forked<A, E>(effect: Effect.Effect<A, E>): Fiber.Fiber<A, unknown> {
 /** For `{#await run(effect)}`: resolves with the success, rejects with the tagged failure for `{:catch}` to render. */
 export const run = <A, E>(effect: Effect.Effect<A, E>): Promise<A> => {
 	const fiber = forked(effect);
-	// repository-health:allow EFF2 -- D9's rendering edge exposes this owned fiber as a Promise for Svelte await blocks.
+	// repository-health:allow EFF2 -- The rendering edge exposes this owned fiber as a Promise for Svelte await blocks.
 	return new Promise((resolve, reject) => {
 		fiber.addObserver((exit) =>
 			Exit.isSuccess(exit) ? resolve(exit.value) : reject(Cause.squash(exit.cause))

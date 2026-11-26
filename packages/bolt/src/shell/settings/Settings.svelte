@@ -253,7 +253,7 @@
 		form = { keyName: '', keyTeam: '' };
 	}
 
-	// L-COL-199: the workspace's logo, when the host lets an administrator edit it; a saved change reloads the shell's branding
+	// the workspace's logo, when the host lets an administrator edit it; a saved change reloads the shell's branding
 	// svelte-ignore state_referenced_locally
 	let brand = $state<{ logo: string | null }>({ logo: workspace.logo ?? null });
 	/** The host's ceiling on an inline logo (a `data:` URL's length). */

@@ -113,14 +113,9 @@ const KERNEL = `You operate inside a Bolt workspace: models are tables declared 
 const SOURCE = `# Source
 This workspace's source is yours to change. Edits stay in your working tree until you commit them; a merge takes commits live once the person approves it. Data a merge depends on travels as a migration in your commits, never as a write on live.`;
 
-/**
- * What an envoy is called when its workspace declared no name. A tenant's active release is a built artifact that
- * outlives the template it came from, so an artifact built before envoys were named is still served: the name reaching
- * here is then empty, and the generic wording is what the prompt and the decider used before names existed. Empty is
- * never put in a sentence — `names you ()` is worse than not naming it at all.
- */
+/** What an envoy with a blank name is called: an empty name is never put in a sentence. */
 const UNNAMED_ENVOY = 'the assistant';
-/** The name an envoy answers to: the one its workspace declared, or the generic wording when there is none. */
+/** The name an envoy answers to: its row's, or the generic wording when that is blank. */
 export const envoyName = (name: unknown): string =>
 	(typeof name === 'string' ? name.trim() : '') || UNNAMED_ENVOY;
 /**

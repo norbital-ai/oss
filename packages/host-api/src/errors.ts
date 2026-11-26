@@ -2,7 +2,7 @@
 // the release that branches on them.
 import { Schema } from 'effect';
 
-/** A facility failure's kinds: `too_large` and `invalid` pass a provider's own limit refusal through (P37). */
+/** A facility failure's kinds: `too_large` and `invalid` pass a provider's own limit refusal through. */
 export const FACILITY_KINDS = [
 	'upstream',
 	'timeout',
@@ -25,7 +25,7 @@ export class FacilityFailure extends Schema.TaggedError<FacilityFailure>()('Faci
 	}
 }
 
-/** An optional facility with no provider bound (P19), or an instance not paired: the facility and why. */
+/** An optional facility with no provider bound, or an instance not paired: the facility and why. */
 export class Unavailable extends Schema.TaggedError<Unavailable>()('Unavailable', {
 	facility: Schema.String,
 	reason: Schema.String

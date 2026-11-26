@@ -422,7 +422,7 @@ export const makeTurnIo = Effect.fn('Agents.makeTurnIo')(function* (deps: TurnIo
 			...(detail !== undefined && inApp(conv) ? { detail } : {}),
 			...(current.usage.calls === 0 ? {} : { usage: { ...current.usage } })
 		});
-		// hook:wiring — a failed turn is a workspace log line naming the real reason; only an absent port is the missing provider
+		// a failed turn is a workspace log line naming the real reason; only an absent port is the missing provider
 		const message =
 			code === 'unavailable' && detail === NO_AI ? 'AI provider not configured' : (detail ?? code);
 		yield* log({

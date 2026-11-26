@@ -33,7 +33,7 @@ import { duration, due_at, iso } from './time.ts';
 import { waitJson } from './wait.ts';
 
 /**
- * Rule 54: a run retries a transient failure and a write that lost a race. The guest settles an act conflict as a
+ * A run retries a transient failure and a write that lost a race. The guest settles an act conflict as a
  * refusal with code `conflict`, so that one is read off the refusal.
  */
 export const retriable = (outcome: GuestOutcome): boolean =>

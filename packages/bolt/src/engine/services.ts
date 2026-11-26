@@ -61,10 +61,10 @@ import type { Verb } from './write/act.ts';
 export type ShapeOf<K> = K extends Context.Key<infer _I, infer S> ? S : never;
 
 // ── manifest and guest limits ──
-/** The decoded manifest of this activation (K3 `decode_manifest`). */
+/** The decoded manifest of this activation (`decode_manifest`). */
 export class Manifest extends Context.Service<Manifest, EngineManifest>()('bolt/Manifest') {}
 
-/** The guest walls the engine holds (E4 reads them; tests override them); CPU is the host's. */
+/** The guest walls the engine holds (guest crossings read them; tests override them); CPU is the host's. */
 export type GuestLimitsShape = {
 	readonly memory_mib: number;
 	readonly crossings: {
@@ -100,7 +100,7 @@ type ActivationShape = {
 };
 export class Activation extends Context.Service<Activation, ActivationShape>()('bolt/Activation') {}
 
-// ── reads (E3) ──
+// ── reads ──
 export type ReadsShape = {
 	/** One batch = one crossing and one pipelined round trip; answers in order. */
 	readonly run: (
@@ -113,7 +113,7 @@ export type ReadsShape = {
 };
 export class Reads extends Context.Service<Reads, ReadsShape>()('bolt/Reads') {}
 
-// ── writes (E5a) ──
+// ── writes ──
 /** The commit an act planned, before its statement runs (a batch recorder or proposal replay takes it). */
 export type PlannedCommit = {
 	readonly commit: Omit<Commit, 'key' | 'digest' | 'issuedAt' | 'rate'>;
@@ -129,7 +129,7 @@ export type PlannedCommit = {
 	readonly reads?: readonly string[];
 };
 /**
- * A remote sync's read page (B6): one act on the sync's own model, judged by no grant. The input is `verb: 'upsert'`,
+ * A remote sync's read page: one act on the sync's own model, judged by no grant. The input is `verb: 'upsert'`,
  * `on_conflict: 'update'`, rows `{ id, ...fields }`: every row names its id (the id map's record, or one minted
  * replay-stably for a new remote record), and an id with no stored row is CREATED with that id (this mode only). The
  * model's `create.transform` / `update.transform` run on the split; lock constraints refuse incoming changes as they do local writes.
@@ -165,9 +165,9 @@ export type ActRequest = {
 	readonly authority: Authority;
 	readonly bindings: Bindings;
 	readonly invocationId: string;
-	/** Rule 25: the revision the caller last read of each row its input names. */
+	/** The revision the caller last read of each row its input names. */
 	readonly observed?: { readonly [id: string]: number } | undefined;
-	/** Rule 28: required on `upsert`. */
+	/** Required on `upsert`. */
 	readonly on_conflict?: NativeWriteConflict | undefined;
 	/** A per-record restore (`history.restore`): the record's revision is recorded as restored from `revision`. */
 	readonly restored?: { readonly id: string; readonly revision: number } | undefined;
@@ -183,12 +183,12 @@ export type ActResult = {
 	readonly v: number;
 };
 
-// ── callables (E6) ──
-/** A callable name decoded once (`parse_callable`, M3): a generated verb or an automation. */
+// ── callables ──
+/** A callable name decoded once (`parse_callable`): a generated verb or an automation. */
 export type ParsedCallable =
 	| { readonly _tag: 'Verb'; readonly model: string; readonly verb: Verb }
 	| { readonly _tag: 'Automation'; readonly automation: string };
-/** Rule 33a: `Server` is `ctx.act`/`ctx.query` from server code; everything else (`/act`, `/q`, the page client, HTTP, agent) is `Client`. */
+/** `Server` is `ctx.act`/`ctx.query` from server code; everything else (`/act`, `/q`, the page client, HTTP, agent) is `Client`. */
 export type Entry = 'Client' | 'Server';
 export type CallerContext = {
 	readonly authority: Authority;
@@ -310,7 +310,7 @@ export class Automations extends Context.Service<Automations, AutomationsShape>(
 	'bolt/Automations'
 ) {}
 
-// ── approvals (E6) ──
+// ── approvals ──
 export type ApprovalFilter = {
 	readonly ids?: readonly string[] | undefined;
 	readonly model?: string | undefined;
@@ -339,7 +339,7 @@ export type ApprovalsShape = {
 };
 export class Approvals extends Context.Service<Approvals, ApprovalsShape>()('bolt/Approvals') {}
 
-// ── decisions (E6) ──
+// ── decisions ──
 /** Who initiated a `sys_1` decision call: conversation `triage` or workspace `author` code (`ctx.ai.sys_1.decide`). */
 export type DecisionUse = 'triage' | 'author';
 export type DecisionsShape = {
@@ -351,7 +351,7 @@ export type DecisionsShape = {
 };
 export class Decisions extends Context.Service<Decisions, DecisionsShape>()('bolt/Decisions') {}
 
-// ── identity (E7) ──
+// ── identity ──
 /** A resolved session. */
 export type Authenticated = {
 	readonly user: string;
@@ -364,7 +364,7 @@ export type Authenticated = {
 export type IdentityShape = {
 	/** A session token (cached, `Cache.make`); no live session fails `IdentityRefusal`. */
 	readonly authenticate: (token: string) => Effect.Effect<Authenticated, IdentityRefusal>;
-	/** Rule 37: compiled once per `key` = (actor, affiliation revision, source release). */
+	/** Compiled once per `key` = (actor, affiliation revision, source release). */
 	readonly authority: (
 		holder: Holder,
 		key?: string | undefined
@@ -377,14 +377,14 @@ export class HostIdentity extends Context.Service<
 	import('./identity/session.ts').IdentityHost
 >()('bolt/HostIdentity') {}
 
-// ── live (E8) ──
+// ── live ──
 /** One registered view: its read (re-answered when a commit touches what it read). */
 export type LiveView = {
 	readonly read: ReadIR;
 	readonly known?: string;
 };
 export type LiveShape = {
-	/** Rule 66: routes one commit's RETURNING set through the commit lane; synchronous (`Queue.offerUnsafe`); answers the lane `v`. */
+	/** Routes one commit's RETURNING set through the commit lane; synchronous (`Queue.offerUnsafe`); answers the lane `v`. */
 	readonly publish: (captured: readonly Captured[]) => number;
 	/** The lane sequence of the last commit. */
 	readonly v: Effect.Effect<number>;
@@ -397,10 +397,10 @@ export type LiveShape = {
 		read: LiveView
 	) => Effect.Effect<void, EngineError>;
 	readonly drop: (conn: string, view: string) => Effect.Effect<void>;
-	/** Rule 66: an authority change re-answers the connection's views. */
+	/** An authority change re-answers the connection's views. */
 	readonly authorize: (conn: string, authority: Authority) => Effect.Effect<void, EngineError>;
 	readonly authorityOf: (conn: string) => Effect.Effect<Option.Option<Authority>>;
-	/** Rule 66: a generation change closes every connection with `{ release }`. */
+	/** A generation change closes every connection with `{ release }`. */
 	readonly close: (release: string) => Effect.Effect<void>;
 	/** Every published commit has been routed. */
 	readonly settled: Effect.Effect<void>;
@@ -412,7 +412,7 @@ export type LiveShape = {
 };
 export class Live extends Context.Service<Live, LiveShape>()('bolt/Live') {}
 
-// ── runs, run handlers, deadlines, wake (E9) ──
+// ── runs, run handlers, deadlines, wake ──
 export type RetrySpec = { readonly attempts: number; readonly backoff: string };
 /** A platform run's handler (`bolt.embed`, a sync's read, …), run as the workspace's own work. */
 export type RunHandler = (
@@ -445,7 +445,7 @@ export type RunHandlersShape = {
 	readonly resting: RunRestOf;
 	readonly retry: (name: string) => Effect.Effect<Option.Option<RetrySpec>>;
 };
-/** The bottom service that breaks the runs ↔ areas cycle (D4). */
+/** The bottom service that breaks the runs ↔ areas cycle. */
 export class RunHandlers extends Context.Service<RunHandlers, RunHandlersShape>()(
 	'bolt/RunHandlers'
 ) {}
@@ -501,7 +501,7 @@ export class RunEnds extends Context.Service<RunEnds, PubSub.PubSub<readonly str
 	'bolt/RunEnds'
 ) {}
 
-// ── conversations, envoys, turns (E11) ──
+// ── conversations, envoys, turns ──
 export type ConversationsShape = {
 	/** Inbound messages and delivery reports an instance's link hands over. */
 	readonly receive: (
@@ -548,7 +548,7 @@ export class Envoys extends Context.Service<Envoys, EnvoysShape>()('bolt/Envoys'
 
 /** Who runs a conversation's turn: the in-app agent, or the envoy on its instance. */
 export type TurnVia = 'Agent' | 'Envoy';
-/** The bottom service that breaks triage ↔ envoys ↔ agents (D4). */
+/** The bottom service that breaks triage ↔ envoys ↔ agents. */
 export type TurnsShape = {
 	readonly drain: (
 		conversation: string,
@@ -563,7 +563,7 @@ export type TurnsShape = {
 export type SystemTask = TaskStart & { readonly policies?: readonly string[] | undefined };
 export class Turns extends Context.Service<Turns, TurnsShape>()('bolt/Turns') {}
 
-// ── agents (E12a) ──
+// ── agents ──
 /** One turn's drain: whether it ran, and the reply it settled. */
 export type TurnResult = { readonly ran: boolean; readonly reply: MessageRow | null };
 export type AgentsShape = {
@@ -691,7 +691,7 @@ export type AgentsShape = {
 };
 export class Agents extends Context.Service<Agents, AgentsShape>()('bolt/Agents') {}
 
-// ── links (E10a) ──
+// ── links ──
 export type OutboundFile = {
 	readonly id: string;
 	readonly name: string;
@@ -728,7 +728,7 @@ export type LinksShape = {
 };
 export class Links extends Context.Service<Links, LinksShape>()('bolt/Links') {}
 
-// ── outbound conversation messages (E10b) ──
+// ── outbound conversation messages ──
 export type OutboundShape = {
 	/** One delivery pass over the queued outbound rows. */
 	readonly deliver: Effect.Effect<{ readonly sent: number; readonly failed: number }, EngineError>;
@@ -750,13 +750,13 @@ export type OutboundShape = {
 };
 export class Outbound extends Context.Service<Outbound, OutboundShape>()('bolt/Outbound') {}
 
-// ── guest crossings (E4) ──
+// ── guest crossings ──
 /** Bytes of a crossing ride `bins`, referenced from `args` as `{ "$bin": n }`. */
 type Bins = { readonly bins?: readonly Uint8Array[] | undefined };
-/** One facility member's call; E4's `lower()` decodes `args` per member. */
+/** One facility member's call; `lower()` decodes `args` per member. */
 type FacilityArm<T extends string> = { readonly _tag: T; readonly args: readonly Json[] } & Bins;
 export type FacilityCall = { [K in FacilityMember]: FacilityArm<K> }[FacilityMember];
-/** A guest request to the host, decoded once at the crossing (M2); calls issued before the microtask queue drains cross together. */
+/** A guest request to the host, decoded once at the crossing; calls issued before the microtask queue drains cross together. */
 export type CrossCall =
 	| {
 			readonly _tag: 'read';
@@ -830,7 +830,7 @@ export type TelemetryShape = {
 };
 export class Telemetry extends Context.Service<Telemetry, TelemetryShape>()('bolt/Telemetry') {}
 
-// ── facilities (E10b, `engine/facilities.ts`, shared by every host) ──
+// ── facilities (`engine/facilities.ts`, shared by every host) ──
 export type FacilitiesShape = {
 	/** One facility crossing by its `_tag`, through the host's ports; a failure is the answer, never a failure of this Effect. */
 	readonly dispatch: (call: FacilityCall) => Effect.Effect<CrossAnswer>;

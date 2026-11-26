@@ -309,7 +309,6 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 					align="start"
 					side_offset={6}
 					content_class="max-w-96 border bg-popover text-popover-foreground"
-					arrow_classes="text-popover"
 				>
 					{#snippet trigger({ props })}
 						<button

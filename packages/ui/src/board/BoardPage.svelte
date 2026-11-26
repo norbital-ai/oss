@@ -99,7 +99,7 @@
 	const query = $derived(
 		JSON.stringify({ of, where, order_by, search, fields, page_size, index, after })
 	);
-	// hook:agent-ui — later pages stay live
+	// later pages stay live
 	const page = $derived.by(() => {
 		// Count metadata can rebuild an equivalent lane filter; keep its existing query and pages.
 		void query;

@@ -1,4 +1,4 @@
-// The engine's private objects (X-18): bookkeeping no author position, catalogue entry or page names, so none of it is
+// The engine's private objects: bookkeeping no author position, catalogue entry or page names, so none of it is
 // a model. Every table the engine reads as a record is a system model (`src/system/**`), planned like a workspace's.
 // This is the ONE registry of the rest, each with why it is not a model. Idempotent (`if not exists`, `or replace`),
 // re-asserted on every apply (`apply_migrations`) and never dropped; a private table may reference a system table, so they

@@ -153,7 +153,7 @@ const pruned = Effect.fn('Bolt.pruned')(function* (
 	return res.rows.map((r) => String(r['id']));
 });
 /**
- * Rule 30: a ref column accepts an `Id` or the target's key values (`{ code: 'ACME' }`). One read per target resolves
+ * A ref column accepts an `Id` or the target's key values (`{ code: 'ACME' }`). One read per target resolves
  * every key-valued ref; one that names no row refuses `not_found { field, row }`.
  */
 export const importRefs = Effect.fn('Bolt.importRefs')(function* (

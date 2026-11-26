@@ -1,4 +1,4 @@
-// Port calls (L-BOLT-288, 289): every host port call runs under its wall, and a port's throw or bad answer is a typed
+// Port calls: every host port call runs under its wall, and a port's throw or bad answer is a typed
 // facility failure, never a throw. `Port.fromPromise` is for Promise ports across an ABI (providers and host services).
 import { Duration, Effect, Option, Predicate, Schema } from 'effect';
 import { FetchHttpClient, HttpClient } from 'effect/http';

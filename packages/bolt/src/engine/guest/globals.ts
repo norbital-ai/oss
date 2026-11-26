@@ -1,4 +1,4 @@
-// Rule 6: the guest's global surface beyond ECMAScript, exactly what the prelude installs. Self-contained (no DOM or
+// The guest's global surface beyond ECMAScript, exactly what the prelude installs. Self-contained (no DOM or
 // node types), so the guest program is typed against this and nothing else. The parity test checks it both ways.
 type Bytes = ArrayBuffer | ArrayBufferView;
 interface GuestURLSearchParams extends Iterable<[string, string]> {

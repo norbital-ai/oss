@@ -1,4 +1,4 @@
-// `off`: the one way a host leaves a facility member out (plan 01). It is a value, so it crosses HOST_API's module graphs
+// `off`: the one way a host leaves a facility member out. It is a value, so it crosses HOST_API's module graphs
 // by its tag, never by identity.
 /** The marker a host passes in place of a facility member it does not provide; that member then fails `unavailable`. */
 export const off = { _tag: 'Off' } as const;

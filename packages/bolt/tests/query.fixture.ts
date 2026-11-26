@@ -189,8 +189,7 @@ export const rep: Authority = {
 	automations: [],
 	capabilities: { apps: [], syncs: [], tools: [], mcp: [] },
 	limits: [],
-	teamTree: ['t1', 't2'],
-	scopes: {}
+	teamTree: ['t1', 't2']
 };
 /** A clerk: reads only the `brief` output of the northern accounts and their orders, never `default`. */
 export const clerk: Authority = {

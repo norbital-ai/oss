@@ -385,8 +385,7 @@ export class Authorities {
 							actor: linked,
 							admin: false,
 							policies: spec.policies,
-							teamTree: mine.teamTree,
-							scopes: mine.scopes
+							teamTree: mine.teamTree
 						},
 						`envoy-bound:${at}:${mine.key}`
 					);
@@ -395,8 +394,7 @@ export class Authorities {
 						actor: linked,
 						admin: false,
 						policies: [...new Set([...spec.policies, ...mine.policies])],
-						teamTree: mine.teamTree,
-						scopes: mine.scopes
+						teamTree: mine.teamTree
 					},
 					`envoy-dm:${at}:${mine.key}`
 				);

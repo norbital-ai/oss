@@ -22,7 +22,7 @@ const Rows = Schema.Struct({
 /** The inbox's reads: a caller with reads of its own sends them in the same trip, and answers with `inboxOf`. */
 export const inboxReads = (auth: Authority, member: string) => [
 	inboxSql(auth),
-	// L-BOLT-354: an inbox notice is one row per member, fanned out when it was written; the member reads their own
+	// an inbox notice is one row per member, fanned out when it was written; the member reads their own
 	sql(
 		`SELECT id, title, body, link, at::text AS at, read_at IS NOT NULL AS read FROM sys_notification WHERE member = $1
 		ORDER BY at DESC LIMIT ${INBOX_LIMIT}`,

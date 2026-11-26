@@ -1,4 +1,4 @@
-// Grant predicates: a grant's `Where` literal → `Pred` through the query area's normalizer (one K3 decode for reads and
+// Grant predicates: a grant's `Where` literal → `Pred` through the query area's normalizer (one decode for reads and
 // grants), the little Pred algebra the Authority compiler needs, and the JS judge of pre/post-images.
 import { Effect } from 'effect';
 import type { Where } from '@norbital-ai/store/kind';

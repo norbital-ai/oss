@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// `FilesPort.download` for a host that keeps files itself (compute model P21): the request goes out under the public
+// `FilesPort.download` for a host that keeps files itself: the request goes out under the public
 // network policy with every redirect hop checked again; the body is media by its first bytes or nothing is stored; it
 // streams into the store a part at a time, so a download holds about one part whatever its size. A refusal, a body past
 // the cap or a stall aborts the upload.

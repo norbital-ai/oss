@@ -17,7 +17,7 @@ export type McpHost = {
 };
 export type McpTool = { server: string; name: string; description: string; input: Json };
 
-/** Rule 58: the servers a held policy's capabilities name (an administrator holds every declared one). */
+/** The servers a held policy's capabilities name (an administrator holds every declared one). */
 export const mcpServers = (
 	m: Pick<EngineManifest, 'mcp'>,
 	a: Authority

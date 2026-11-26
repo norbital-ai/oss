@@ -299,7 +299,7 @@
 	/** `/semantic`: the box's text, nearest in meaning, on Enter. */
 	const meaning = () =>
 		on_probe?.(text.trim() === '' ? null : { index: 'semantic', input: text.trim() });
-	// repository-health:allow EFF3 -- D13: this selection helper only updates presentation state and focuses the rendered input.
+	// repository-health:allow EFF3 -- This selection helper only updates presentation state and focuses the rendered input.
 	async function pick(i: SearchIndex) {
 		if (i.why !== null) return;
 		index = i.name;

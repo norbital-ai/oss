@@ -1,4 +1,4 @@
-// The workspace and its navigation (X-19): `workspace()`, `app()` with its page files, `group()`.
+// The workspace and its navigation: `workspace()`, `app()` with its page files, `group()`.
 // The path supplies an app or group's name and the compiler checks its child declarations.
 import { Schema } from 'effect';
 import type { Checked, Exact } from '../fields.ts';
@@ -82,7 +82,7 @@ type WorkspaceBase = {
 	/** Origins pages may connect to beyond the workspace. */
 	csp?: { connect?: readonly `https://${string}`[] };
 	/** `triage: false` turns off System 1 triage of the in-app agent. */
-	agent?: { triage?: false }; // hook:triage
+	agent?: { triage?: false };
 	/** Who may join without an invitation; absent, only invited members join. */
 	signup?: Signup;
 	/**
@@ -146,7 +146,7 @@ type WorkspaceFor = {
 	convert?: { to: readonly ConvertTarget[] };
 	/** Origins pages may fetch (model weights); scripts stay same-origin. */
 	csp?: { connect?: readonly `https://${string}`[] };
-	/** Rule 60a (hook:triage): the in-app agent is triaged where the host binds the port; `false` opts out. */
+	/** The in-app agent is triaged where the host binds the port; `false` opts out. */
 	agent?: { triage?: false };
 	/** Self sign-up by a proven email or mobile number; the build checks `party.match` names text fields. */
 	signup?: SignupFor;

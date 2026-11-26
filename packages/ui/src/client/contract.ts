@@ -118,7 +118,7 @@ export type RunHandle = Effect.Effect<ActSuccess, ActFailure> & {
 /** In-request automation output, with no durable run identity. */
 export type CallHandle = Effect.Effect<Value | undefined, ActFailure> & { readonly mode: 'call'; readonly automation: string };
 export type AutomationHandle = RunHandle | CallHandle;
-/** Rule 56's run row as its viewer may read it. */
+/** A run row as its viewer may read it. */
 export type RunRow = {
 	id: string;
 	automation: string;
@@ -275,7 +275,7 @@ export type ViewBolt = {
 		model: string,
 		q: { where?: Json; order_by?: Json }
 	): { where: Json; order_by?: Json; dropped: readonly { path: string; message: string }[] };
-	/** Rule 16a `filter.describe`: present only when the host binds `decisions` or `ai`; rejects when no filter could be built. */
+	/** `filter.describe`: present only when the host binds `decisions` or `ai`; rejects when no filter could be built. */
 	describe?:
 		| ((
 				model: string,
@@ -289,7 +289,7 @@ export type ViewBolt = {
 				onStep?: (step: DescribeStep) => void
 		  ) => Effect.Effect<{ where?: Json; order_by?: Json; steps?: readonly DescribeStep[] }, Error>)
 		| undefined;
-	/** Rule 16b `filter.options`: the same condition catalogue a description is offered, so the builder renders exactly what it may author. */
+	/** `filter.options`: the same condition catalogue a description is offered, so the builder renders exactly what it may author. */
 	options?(
 		model: string,
 		fields?: readonly {

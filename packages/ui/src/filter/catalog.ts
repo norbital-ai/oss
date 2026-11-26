@@ -245,7 +245,7 @@ export function resolve(cat: Catalog, model: string, path: string): Resolved | n
 			if (targets.length === 0 || (rel.targets.length > 1 && arm === undefined)) return null; // an arc is named by its arm
 			if (last)
 				return { leaf: 'rel', targets, nullable: rel.optional === true, label: rel.label ?? name };
-			if (i >= 2) return null; // two hops, as today's builder
+			if (i >= 2) return null; // two hops at most
 			const target = targets[0];
 			if (target === undefined) return null;
 			c = target;

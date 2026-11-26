@@ -1,4 +1,4 @@
-// Embeddings on an OpenAI-compatible endpoint (OpenRouter, or any `/v1` that serves `/embeddings`), and P39's check
+// Embeddings on an OpenAI-compatible endpoint (OpenRouter, or any `/v1` that serves `/embeddings`), and the check
 // that every `sys_2` and embedding model a host binds takes images. The one implementation every host uses
 // as one shared provider implementation.
 import { Crypto, Duration, Effect, Schedule, Schema } from 'effect';
@@ -146,7 +146,7 @@ export const open_ai_embeddings = <E>(config: EmbeddingsConfig<E>) => {
 	});
 };
 
-/** One system's models for P39: the ones to check against the provider's published metadata. */
+/** One system's models: the ones to check against the provider's published metadata. */
 type ModalityCheck = {
 	readonly system: 'sys_2' | 'embed';
 	readonly endpoint: Endpoint;
@@ -154,7 +154,7 @@ type ModalityCheck = {
 };
 
 /**
- * P39 before activation: each model must take images, by the provider's published metadata (`GET /models` and
+ * Before activation: each model must take images, by the provider's published metadata (`GET /models` and
  * `/embeddings/models`, `architecture.input_modalities`, as OpenRouter publishes them). One message per refused model, naming the system, the model id and its modalities. `tolerate_unread`: a
  * listing that did not answer is no evidence against a model (one blip must not refuse the host); it is
  * logged and passed.

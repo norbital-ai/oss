@@ -94,7 +94,7 @@ export type NoticeContext = {
 		{ readonly requester: string | null; readonly approvers: typeof ApprovalRecipients.Type } | undefined;
 };
 
-/** H1: notices as an author returns them (one or a list) → `noticeInsert` rows, recipients expanded and checked. */
+/** Notices as an author returns them (one or a list) → `noticeInsert` rows, recipients expanded and checked. */
 export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 	notices: unknown,
 	ctx: NoticeContext
@@ -183,7 +183,7 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 	return rows;
 });
 
-/** A document attachment converted (H5) into a file the notification delivery owns; a stored file stays as it is. */
+/** A document attachment converted into a file the notification delivery owns; a stored file stays as it is. */
 const attached = (attachment: Attachment) =>
 	'document' in attachment
 		? convertDocument(attachment.document, {

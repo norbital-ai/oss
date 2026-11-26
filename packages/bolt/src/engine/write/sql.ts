@@ -1,5 +1,5 @@
 // The write area's SQL plumbing: the `WITH` chain builder behind the one write statement, its idempotency gate and
-// outcome, notices and rate charges, the SQLSTATE map (G3), invocation-minted ids and the transform's fingerprints.
+// outcome, notices and rate charges, the SQLSTATE map, invocation-minted ids and the transform's fingerprints.
 import type { Json } from '../../decl/values.ts';
 import type { TeamEntries } from '../../decl/access/team.ts';
 import { memberTeams } from '../identity/teams.ts';
@@ -166,7 +166,7 @@ export function gate(
 const reopens = (idem: string, issuedAt: string) => `${idem}.issued_at < ${issuedAt} - interval '24 hours'
 	AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=${idem}.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL)`;
 /**
- * Rule 26's re-digests as statements of their own, ahead of the act's statements in its locked transaction: a read's
+ * The re-digests as statements of their own, ahead of the act's statements in its locked transaction: a read's
  * rows are held only while its own digest is taken, never beside the other reads and the writes. Each answers no row,
  * and asserts only where the act's gate will open: a committed key answers its stored outcome.
  */

@@ -96,7 +96,7 @@
 		}
 	});
 	function keydown(event: KeyboardEvent): void {
-		// plain Tab toggles plan mode (L-BOLT-541); an open `/` or `@` menu takes Tab first, a modified Tab moves focus
+		// plain Tab toggles plan mode; an open `/` or `@` menu takes Tab first, a modified Tab moves focus
 		if (
 			event.key === 'Tab' &&
 			!event.shiftKey &&

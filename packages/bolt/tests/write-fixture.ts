@@ -134,8 +134,7 @@ export const authority = (models: Authority['models'], admin = false): Authority
 	automations: [],
 	capabilities: { apps: [], syncs: [], tools: [], mcp: [] },
 	limits: [],
-	teamTree: [],
-	scopes: {}
+	teamTree: []
 });
 export const admin = authority({}, true);
 export { arm };

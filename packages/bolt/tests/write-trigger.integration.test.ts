@@ -186,7 +186,7 @@ layer(workspace)('write triggers', (it) => {
 			// the listener's body: every run it gets rewrites the same member, as that run (a person starts the chain)
 			let run: number | undefined, refused: unknown;
 			for (let hop = 0; hop < 20; hop++) {
-				const wrote = yield* Effect.result(setHandles(h, run === undefined ? admin : { ...admin, run: { depth: run, holder: { actor: admin.actor, policies: [], admin: true, teamTree: [], scopes: {} } } }, boss, {
+				const wrote = yield* Effect.result(setHandles(h, run === undefined ? admin : { ...admin, run: { depth: run, holder: { actor: admin.actor, policies: [], admin: true, teamTree: [] } } }, boss, {
 					telegram: `hop${hop}`
 				}));
 				if (Result.isFailure(wrote)) {

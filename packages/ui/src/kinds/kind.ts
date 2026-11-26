@@ -56,7 +56,7 @@ export function minorDigits(currency: string): number {
 		() => 2
 	);
 }
-/** A money field's currency: the literal code, the named sibling field's value, or the workspace default (X-8). */
+/** A money field's currency: the literal code, the named sibling field's value, or the workspace default. */
 export function currencyOf(
 	kind: KindOf<'money'>,
 	row: { readonly [f: string]: unknown } = {},
@@ -133,7 +133,7 @@ export function fileProblem(
 	if (file.size > sizeBytes(kind.max)) return `${file.name}: over ${kind.max}`;
 	return null;
 }
-/** Rule 72: at most 20 files per field. */
+/** At most 20 files per field. */
 export const MAX_FILES = 20;
 
 // ── enum and state values: the catalog's words, else the value in words ──

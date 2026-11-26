@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // `bolt build` writes the release into `.norbital/`: the BUNDLE a host runs (`bundle/`: `artifact.json`, `manifest.json`
-// (C1, pure data), `schema.sql`, `guest.mjs` (tenant code only) with its `guest-assets/<sha256>`, `client/**`,
+// (pure data), `schema.sql`, `guest.mjs` (tenant code only) with its `guest-assets/<sha256>`, `client/**`,
 // `server/**`, `assets/**`, `skills/**`, `migrations/**` and `workspace/**`, the agent's `workspace_grep` source and a
 // host language tool's type setup), the SOURCE Studio edits (`source/`) and the SEED packs (`seed/<pack>/`), each with
 // its own digest in `release.json`. Every host activates the bundle through `read_artifact`.

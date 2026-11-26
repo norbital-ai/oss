@@ -1,4 +1,4 @@
-// The manifest the engine consumes (C1, H1): the declaration literals by path-derived name, bodies stripped (an attached
+// The manifest the engine consumes: the declaration literals by path-derived name, bodies stripped (an attached
 // body is marked `true`), decoded once at each boundary that reads one (`bolt check`, `read_artifact`). Its parts are the
 // runtime codecs. Authored literals additionally have the compiler's narrower name/type checks. Every part and the
 // manifest's own shape (the workspace, teams, policies and agent text) decodes exactly: an unknown part or a workspace
@@ -163,7 +163,7 @@ const Workspace = Schema.Struct({
 	csp: Schema.optionalKey(
 		Schema.Struct({ connect: Schema.optionalKey(Schema.Array(Schema.String)) })
 	),
-	agent: Schema.optionalKey(Schema.Struct({ triage: Schema.optionalKey(Schema.Literal(false)) })), // hook:triage
+	agent: Schema.optionalKey(Schema.Struct({ triage: Schema.optionalKey(Schema.Literal(false)) })),
 	signup: Schema.optionalKey(Signup),
 	memberships: Schema.optionalKey(Schema.Struct({
 		model: Schema.String,
@@ -247,7 +247,7 @@ const manifestFields = {
 	automations: Schema.Record(Schema.String, AutomationData),
 	mcp: Schema.Record(Schema.String, McpData),
 	apps: Schema.Record(Schema.String, AppData),
-	/** `+group.ts` literals: nav groups of apps. */ // hook:shell
+	/** `+group.ts` literals: nav groups of apps. */
 	groups: Schema.optionalKey(Schema.Record(Schema.String, GroupSpec)),
 	custom_fields: Schema.Record(Schema.String, CustomFieldData),
 	agent: Agent
@@ -264,7 +264,7 @@ const options = { errors: 'all', onExcessProperty: 'error' } as const;
 const decode = Schema.decodeUnknownResult(EngineManifest, options),
 	decodeProjected = Schema.decodeUnknownResult(Schema.Struct(manifestFields), options);
 const invalid = (e: Schema.SchemaError) => new ManifestInvalid({ issues: e.message.split('\n') });
-/** The one manifest decoder (A.4): every artifact read. */
+/** The one manifest decoder: every artifact read. */
 export const decode_manifest = (u: unknown): Result.Result<EngineManifest, ManifestInvalid> =>
 	Result.mapError(decode(u), invalid);
 /** `bolt check`'s evaluated manifest (`project_manifest`), decoded, with its needs recorded. */
@@ -421,7 +421,7 @@ function resolvedMessages(m: LoadedManifest, workspace: Readonly<Record<string, 
 	};
 }
 
-/** P1's loaded manifest as the engine's, before `decode_manifest`: `+secrets.ts` joins the workspace as `secrets`. */
+/** The loaded manifest as the engine's, before `decode_manifest`: `+secrets.ts` joins the workspace as `secrets`. */
 export function project_manifest(m: LoadedManifest): unknown {
 	const workspace = object(m.workspace['']);
 	const secrets = m.secrets[''];

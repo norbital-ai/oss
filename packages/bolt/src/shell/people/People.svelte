@@ -69,7 +69,7 @@
 			}
 			return result.success;
 		});
-	/** Rule 39: a member id, or `{ team }`. */
+	/** A member id, or `{ team }`. */
 	const preview = Effect.fn('People.preview')(function* (target: string, impersonate = false) {
 		const r = yield* Effect.result(api.preview(impersonate ? { user: target, impersonate: true } : target));
 		if (r._tag === 'Success') location.assign(based('/'));

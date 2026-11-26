@@ -25,7 +25,7 @@ import type {
 	WritePath
 } from '../names.ts';
 import type { Id, NonEmpty } from '../values.ts';
-import type { GroupName } from '../runtime/names.ts'; // hook:access
+import type { GroupName } from '../runtime/names.ts';
 import type { ModelWhere } from '../where.ts';
 
 // ── names a grant uses ──
@@ -193,7 +193,7 @@ export type Grant<C extends ModelName> = {
 	update?: Declares<C, 'update'> extends true ? WriteGrant<C, 'update'> : never;
 	delete?: Declares<C, 'delete'> extends true ? DeleteGrant<C> : never;
 };
-/** Rule 38c: identity models are read-only to every policy: their `default` output or a named one (`directory`), rows by scope. */
+/** Identity models are read-only to every policy: their `default` output or a named one (`directory`), rows by scope. */
 type IdentityGrant<C extends ModelName> = {
 	outputs?: { [O in OutputName<C>]?: ReadGrant<C, O> };
 };

@@ -1,5 +1,5 @@
-// The agent panel's pure projections of its transcript rows: the orb's mark (L-BOLT-436), the context view (L-BOLT-546)
-// and the model-change dividers (L-BOLT-547). Each is a function of the rows alone, so a reload shows the same thing.
+// The agent panel's pure projections of its transcript rows: the orb's mark, the context view
+// and the model-change dividers. Each is a function of the rows alone, so a reload shows the same thing.
 import { Array as Arr, Option, Predicate, Schema } from 'effect';
 import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
 import type { StudioView, ToolView } from '@norbital-ai/host-api';

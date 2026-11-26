@@ -128,7 +128,7 @@ export const CODES = [
 export type Code = (typeof CODES)[number];
 
 const fault = (status: number) => ({ status, transient: false });
-/** Rule 54: a run retries only these — a facility `upstream`/`timeout`/`rate_limited` or an act `conflict`. */
+/** A run retries only these — a facility `upstream`/`timeout`/`rate_limited` or an act `conflict`. */
 const retry = (status: number) => ({ status, transient: true });
 /** Every declared code's HTTP status and whether a run retries it. */
 export const CODE = {

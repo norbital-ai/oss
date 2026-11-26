@@ -52,7 +52,7 @@ export type RestorePreview = {
 		restored: Json;
 	}[];
 };
-/** X-20: what a `+representation.svelte` receives, `{ view: RecordView<'<model>'> }`. */
+/** What a `+representation.svelte` receives, `{ view: RecordView<'<model>'> }`. */
 export type RecordView<C extends string = string> =
 	| { model: C; mode: 'view' | 'edit'; record: RecordOf<C>; capabilities?: RecordCapabilities }
 	| { model: C; mode: 'create'; values: Partial<InsertOf<C>> };

@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The tenant's secrets key held by the host (`KeysPort`, F21): AES-256-GCM envelopes `iv ‖ tag ‖ ciphertext` bound to
+// The tenant's secrets key held by the host (`KeysPort`): AES-256-GCM envelopes `iv ‖ tag ‖ ciphertext` bound to
 // `aad`; the key never reaches the engine.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { Effect, Result } from 'effect';

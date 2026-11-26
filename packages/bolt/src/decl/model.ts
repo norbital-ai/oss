@@ -335,7 +335,7 @@ export type RefField = {
 
 // ── exposure: what callers read and send, as layer maps ──
 /**
- * Layer maps (decision 1): a flat object keyed by path in the read or write tree. `'<model>'` is the root layer,
+ * Layer maps: a flat object keyed by path in the read or write tree. `'<model>'` is the root layer,
  * `'<model>.<rel>'` a layer under it, one relation (a ref, an inverse many-relation or an owned child) per segment, at most
  * `LAYER_MAX_DEPTH` segments. A layer's parent path is declared too. The literal types the root's own fields; a deeper
  * layer's names are proved by `bolt check` (`model/layer`), which resolves each path to the model behind it.

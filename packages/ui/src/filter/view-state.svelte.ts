@@ -261,7 +261,7 @@ export function viewState(
 			describeError = null;
 			describeSteps = [];
 		},
-		/** Rule 16a: the description's `Where` and `OrderBy` replace the rows (and the sort, when it asks for one). */
+		/** The description's `Where` and `OrderBy` replace the rows (and the sort, when it asks for one). */
 		describe(text: string): Effect.Effect<boolean> {
 			return Effect.suspend(() => {
 				const fail = (why?: Error) => {

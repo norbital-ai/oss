@@ -19,7 +19,7 @@ import type { Write } from '../write/commit.ts';
 export const EMBED = 'bolt.embed';
 const COLUMN = 'bolt_embedding';
 const PAGE = 100;
-/** Rule 72: the queue's 10,000 ids per run; past it the run queues one continuation. */
+/** The queue's 10,000 ids per run; past it the run queues one continuation. */
 const RUN_IDS = 10_000;
 
 /** A stored file reference, as much of it as the embedder reads. */
@@ -34,7 +34,7 @@ const EmbedRow = Schema.Struct({
 const semanticOf = (m: EngineManifest, c: string) => m.models[c]?.search?.semantic;
 
 /**
- * The act's part (hook:write): an update naming a semantic source field also nulls the embedding; a create's is null
+ * The act's part: an update naming a semantic source field also nulls the embedding; a create's is null
  * already. `stale`: some written row needs a vector, so the statement queues `embedQueued`.
  */
 export function embedWrites(
@@ -85,7 +85,7 @@ function assertWidth(
 /**
  * The platform run: every semantic model's rows with no vector, a page at a time, one `embed` call per page. A
  * row that changed after it was read keeps its null (its own write queued the next run). A port failure fails the
- * run with the facility's kind (`upstream`/`timeout` retry). Rule 25a: a page whose guarded write stores 0 of
+ * run with the facility's kind (`upstream`/`timeout` retry). A page whose guarded write stores 0 of
  * its rows stops the run `no_progress`; after 10,000 rows the run queues one continuation and ends. A row whose `file`
  * source holds an image embeds that image (its bytes from the files port); every other row embeds its text sources.
  * ponytail: one vector per row, so the first image wins over the text; a non-image file is not embedded.

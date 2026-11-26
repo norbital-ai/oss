@@ -27,7 +27,7 @@ export const base_path = (publicUrl: string): string =>
  */
 export const canonical_path = (path: string): string =>
 	path.replace(/\/{2,}/g, '/').replace(/(.)\/$/, '$1');
-/** The C8 wire table's data endpoints; hooks, the manifest and host ops are routed by their own owners. */
+/** The wire table's data endpoints; hooks, the manifest and host ops are routed by their own owners. */
 export const PATHS = {
 	q: `${BOLT}/q`,
 	act: `${BOLT}/act`,
@@ -102,7 +102,7 @@ export type {
 	WireRead
 } from './schema.ts';
 
-/** Rule 32: an outcome's status (200, 202, 409, 504, a refusal 400/403/404/429 or 422); 202 is two kinds, told apart by `kind`. */
+/** An outcome's status (200, 202, 409, 504, a refusal 400/403/404/429 or 422); 202 is two kinds, told apart by `kind`. */
 const OUTCOME_STATUS: { readonly [K in Exclude<ActOutcome['kind'], 'refused'>]: number } = {
 	committed: 200,
 	pending_approval: 202,
@@ -142,7 +142,7 @@ export const wire_error = (e: unknown): { status: number; body: WireError } =>
 	e instanceof BoltError
 		? { status: CODE[e.code].status, body: { error: { code: e.code, message: e.message } } }
 		: { status: 500, body: { error: { code: 'internal', message: 'The request failed.' } } };
-/** Rule 32: public and API-key actors receive codes only (and the structured `field`, `row` and `data`). */
+/** Public and API-key actors receive codes only (and the structured `field`, `row` and `data`). */
 export function redact(o: ActOutcome, actor: EngineActor): ActOutcome {
 	return o.kind === 'refused' && (actor.kind === 'envoy' || actor.kind === 'api_key')
 		? {

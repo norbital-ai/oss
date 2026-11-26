@@ -4,7 +4,7 @@ import { Array, Effect, FileSystem, Path, Predicate, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
 import { type Diagnostic, type Discovered, sourcePath } from './discover.ts';
 import { ROLES, with_syncs, type LoadedManifest as Manifest } from '@norbital-ai/bolt/tooling';
-import { SYSTEM_COLUMNS } from '@norbital-ai/store'; // hook:write
+import { SYSTEM_COLUMNS } from '@norbital-ai/store';
 import { tree_digest } from '@norbital-ai/host-api';
 import { SKILL_BYTES, SKILL_FILE } from '@norbital-ai/host-api';
 
@@ -229,7 +229,7 @@ export function manifestErrors(
 			}
 		}
 	}
-	// hook:write — every row carries the system columns; a model field of the same name would shadow one (`revision` is the
+	// every row carries the system columns; a model field of the same name would shadow one (`revision` is the
 	// row version every update checks), so it is refused here rather than as a duplicate column at migration
 	if (layer === 'workspace') {
 		for (const [name, d] of Object.entries(manifest.model)) {

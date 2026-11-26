@@ -26,7 +26,7 @@ export type DbBatch = {
 };
 /** What a host's database adapter implements, as Effects failing with the driver's `DbError`. */
 export type RawDb = {
-	/** Read statements share one snapshot and answer in order; rows are relayed as JSON (D5). */
+	/** Read statements share one snapshot and answer in order; rows are relayed as JSON. */
 	readonly read: (statements: readonly Sql[]) => Effect.Effect<readonly Rows[], DbError>;
 	/** An act's one write statement, with fixed deadlines and native locks before execution. */
 	readonly write: (statement: Sql, lock?: Lock) => Effect.Effect<Rows, DbError>;

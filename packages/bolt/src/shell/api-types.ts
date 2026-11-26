@@ -1,7 +1,7 @@
-// The shell routes' client (`shell_api`, B.2) as Effects (D9): each member answers its value or fails with `ShellError`,
-// today's `Answer<T>` refusal (the wire error, its HTTP status, and on a signed-out boot the workspace the access pages
-// show). Agent acts answer their `Outcome`: a refusal there is a business answer the panel renders. Pinned for
-// R6a (the implementation in `runtime.ts`) and R6b (the Svelte components that run it on the ui edge).
+// The shell routes' client (`shell_api`) as Effects: each member answers its value or fails with `ShellError`,
+// the `Answer<T>` refusal (the wire error, its HTTP status, and on a signed-out boot the workspace the access pages
+// show). Agent acts answer their `Outcome`: a refusal there is a business answer the panel renders. Shared by
+// the implementation in `runtime.ts` and the Svelte components that run it on the ui edge.
 import { Schema, type Effect } from 'effect';
 import type { FileRef } from '@norbital-ai/store/kind';
 import type { Attachment } from '../decl/runtime/integration.ts';
@@ -525,7 +525,7 @@ export type ShellApi = {
 	integration(instance: string): ReturnType<typeof integration_client>;
 	/** Every definition with the providers this host offers for it: the envoys' channels. */
 	integration_offers(): ReturnType<typeof integration_offers>;
-	/** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
+	/** The workspace's logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 	organization(logo: string | null): Call<void>;
 	/** The Feedback dialog's words and images (panel uploads) for the host (`ShellPorts.feedback`), from `route`'s page. */
 	feedback(text: string, attachments: readonly { readonly id: string }[], route: string): Call<void>;
@@ -547,7 +547,7 @@ export type ShellApi = {
 	studio_run(op: StudioOp): Call<StudioView>;
 	studio_file(commit: string, path: string): Call<StudioFile | null>;
 	studio_inspect(input: StudioInspectInput): Call<StudioInspection>;
-	/** Rule 39: a member id, `{ team }`, or `null` to end the preview. */
+	/** A member id, `{ team }`, or `null` to end the preview. */
 	preview(target: string | { team: string } | { user: string; impersonate: true } | null): Call<void>;
 	/** `access.explain`: the caller's own Authority, or (administrators) a member's or team's. */
 	explain(target?: { user: string } | { team: string }): Call<Json>;

@@ -29,8 +29,7 @@ const HolderSchema = Schema.Struct({
 	policies: Schema.Array(Schema.String),
 	admin: Schema.Boolean,
 	platform: Schema.optionalKey(Schema.Boolean),
-	teamTree: Schema.optionalKey(Schema.Array(Schema.String)),
-	scopes: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String)))
+	teamTree: Schema.optionalKey(Schema.Array(Schema.String))
 });
 export const RowSchema = Schema.Struct({
 	id: Schema.String,

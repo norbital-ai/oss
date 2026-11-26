@@ -33,7 +33,7 @@ export type PathTest =
 	| { readonly op: 'contains'; readonly arg: Json };
 /** The element an `each` quantifies over, as a `path` names its field. */
 export const ELEMENT = '$e';
-/** The normalized `Where` (K3): one evaluator in SQL, one in JS (live routing). */
+/** The normalized `Where`: one evaluator in SQL, one in JS (live routing). */
 export type Pred =
 	| { readonly t: 'const'; readonly value: boolean }
 	| { readonly t: 'and' | 'or'; readonly of: readonly Pred[] }
@@ -137,7 +137,7 @@ export type Pred =
 	  };
 
 // ── pages, order, projection ──
-/** Rule 9: a limit or everything, never a default. `after` is bound to the query's AST hash. */
+/** A limit or everything, never a default. `after` is bound to the query's AST hash. */
 export type Limit = {
 	readonly _tag: 'Limit';
 	readonly limit: number;

@@ -57,7 +57,7 @@ const BOLT_INDEX = join(BOLT, `index${EXT}`);
 const ENTRY = 'virtual:bolt-guest',
 	BYTES = '?bytes',
 	BYTES_ID = '\0bolt-bytes:';
-// The guest edge (D8): a module under root with a generator body imports and installs it first, so `attached` wraps the
+// The guest edge: a module under root with a generator body imports and installs it first, so `attached` wraps the
 // body; a bundle without one (`blank`) carries neither the edge nor Effect.
 const EDGE = `import { install as __boltEdge } from ${JSON.stringify(join(BOLT, 'decl', 'runtime', `guest${EXT}`))}; __boltEdge();`;
 const SCRIPT = /\.[cm]?[jt]sx?$/,
@@ -148,7 +148,7 @@ type CompilerOptions = {
 	bolt?: string;
 	migrations?: 'generate' | 'verify';
 	squash?: string;
-	/** Rule 6's evaluation CPU budget is a gate for `bolt check` and CI; a test run on a busy machine measures load, not the workspace. */
+	/** The evaluation CPU budget is a gate for `bolt check` and CI; a test run on a busy machine measures load, not the workspace. */
 	timing?: boolean;
 	/** Run the whole-program type check here (default) or leave it to a warm host type service. */
 	types?: boolean;
@@ -496,7 +496,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 	};
 });
 
-// Rule 2's evaluation context: a frozen clock and a seeded `Math.random` (mulberry32), installed before the module runs.
+// The evaluation context: a frozen clock and a seeded `Math.random` (mulberry32), installed before the module runs.
 const FREEZE = `{ const T = ${FROZEN}, D = Date;
 	globalThis.Date = class extends D { constructor(...a) { if (a.length === 0) super(T); else super(...a); } static now() { return T; } };
 	let s = 0x2545f491; Math.random = () => { s = s + 0x6d2b79f5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }`;

@@ -22,7 +22,7 @@
 			if (carried === undefined && page === undefined) page = page_contexts(model);
 		})
 	);
-	// hook:agent-ui — the sheet's accessible title is the record's own heading, which the `RecordShell` inside claims (the
+	// the sheet's accessible title is the record's own heading, which the `RecordShell` inside claims (the
 	// record's label, or the author's title); nothing to pass here
 </script>
 

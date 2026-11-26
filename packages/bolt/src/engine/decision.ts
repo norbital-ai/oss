@@ -299,10 +299,10 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 				a.id,
 				JSON.stringify([{ id }]),
 				!a.external,
-				// admins read in-app files; an envoy thread's only through the rule above (owner 2026-09-26)
+				// admins read in-app files; an envoy thread's only through the rule above
 				o.authority.admin,
 				owner,
-				// an ingest's files are grouped under its output entry (plan 12)
+				// an ingest's files are grouped under its output entry
 				JSON.stringify([{ files: [{ id }] }])
 			]
 		});

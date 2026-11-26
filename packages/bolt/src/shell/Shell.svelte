@@ -446,7 +446,7 @@
 			get zone() {
 				return boot?.workspace.tz;
 			},
-			// a money field without its own currency reads in the workspace's (X-8)
+			// a money field without its own currency reads in the workspace's
 			get currency() {
 				return config.manifest.workspace.currency;
 			},
@@ -1084,7 +1084,7 @@
 			</div>
 		{:else}
 			<span hidden {@attach initialPageMounted}></span>
-			<!-- hook:view-ui — a page sits inset from the sidebar; a page's own AppShell inset finds this owner and stays flush -->
+			<!-- a page sits inset from the sidebar; a page's own AppShell inset finds this owner and stays flush -->
 			<svelte:boundary>
 				{#if requires.length === 0}
 					<Bound size="fill" inset><Page ctx={pageContext()} /></Bound>
@@ -1203,7 +1203,7 @@
 {/snippet}
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<!-- hook:view-ui — the sidebar's width, the left bound of a maximised or widened right sheet (0 where no sidebar shows) -->
+<!-- the sidebar's width, the left bound of a maximised or widened right sheet (0 where no sidebar shows) -->
 <div
 	class="contents"
 	onclick={intercept}

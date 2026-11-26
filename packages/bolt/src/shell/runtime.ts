@@ -231,7 +231,7 @@ export function shell_api(
 			call(Invitation, 'GET', `${PATHS.session.invitation}/${encodeURIComponent(id)}`),
 		accept: (id: string) => done('POST', PATHS.session.invitation, { id }),
 		mark_notices_read: (ids: readonly string[]) =>
-			act('sys_notification.mark_read', { ids: [...ids] }), // L-BOLT-354
+			act('sys_notification.mark_read', { ids: [...ids] }),
 		mark_all_notices_read: () => act('sys_notification.mark_read', { all: true }),
 		runs: (o: { automation?: string; limit?: number } = {}) =>
 			call(
@@ -254,7 +254,7 @@ export function shell_api(
 				'GET',
 				`${SHELL}/runs/log?${new URLSearchParams({ id, access, ...(after === undefined ? {} : { after }) })}`
 			),
-		stop_run: (id: string) => call(RunViewAnswer, 'POST', `${SHELL}/runs/stop`, { id }), // hook:runtime
+		stop_run: (id: string) => call(RunViewAnswer, 'POST', `${SHELL}/runs/stop`, { id }),
 		settings: () => call(SettingsAnswer, 'GET', `${SHELL}/settings`),
 		settings_op: (op: string, input: Json) =>
 			call(Schema.Json, 'POST', `${SHELL}/settings`, { op, input }),
@@ -262,7 +262,7 @@ export function shell_api(
 		integration: instances,
 		integration_offers: () =>
 			integration_offers({ base: based(`${BOLT}/integrations/`), fetch: f }),
-		/** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
+		/** The workspace's logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 		organization: (logo: string | null) => done('POST', `${SHELL}/organization`, { logo }),
 		feedback: (text, attachments, route) =>
 			done('POST', `${SHELL}/feedback`, { text, attachments: [...attachments], route }),
@@ -376,7 +376,7 @@ export function shell_api(
 			page_result: (message: string, result: PageResult) =>
 				act('sys_message.page_result', { message, result }),
 			claim_page_action: (message: string) => act('sys_message.claim_page_action', { message }),
-			/** hook:attachments — one panel attachment to `/__bolt/files/sys_conversation.inputs`: its `FileRef`, or the refusal. */
+			/** One panel attachment to `/__bolt/files/sys_conversation.inputs`: its `FileRef`, or the refusal. */
 			upload: (file: File) =>
 				transport
 					.upload(based(`${PATHS.files}sys_conversation.inputs`), file, {
@@ -409,10 +409,10 @@ export function shell_api(
 							);
 						})
 					),
-			respond_now: (conversation: string) => act('sys_conversation.respond_now', { conversation }), // hook:triage
+			respond_now: (conversation: string) => act('sys_conversation.respond_now', { conversation }),
 			confirm: (message: string, approve: boolean) =>
 				act('sys_message.confirm', { message, approve }),
-			// hook:agent-ui — the agent's remaining generated actions
+			// the agent's remaining generated actions
 			set_agent: (conversation: string, agent: string) =>
 				act('sys_conversation.set_agent', { conversation, agent }),
 			file: (message: string, about: { model: string; id: string } | null) =>
@@ -635,9 +635,9 @@ export function shell_bolt(
 			catalog: boot.catalog,
 			read_catalog: boot.read_catalog,
 			operation_outputs: boot.operation_outputs,
-			/* hook:query (bolt.decode) */ describe:
+			describe:
 				boot.visitor === null && boot.ai_unconfigured !== true,
-			/* hook:decisions */ ...(options.messages === undefined
+			...(options.messages === undefined
 				? {}
 				: { messages: options.messages }),
 			...(f === undefined ? {} : { fetch: f }),

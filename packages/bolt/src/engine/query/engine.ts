@@ -1,4 +1,4 @@
-// The read engine (A4): one batch = one pipelined round trip. Identical reads run once; an index search's
+// The read engine: one batch = one pipelined round trip. Identical reads run once; an index search's
 // probe runs before the round trip and its re-rank after. Nothing is clamped: `all` past its cap is `too_large`.
 import { uuid } from '../port.ts';
 import {
@@ -114,7 +114,7 @@ const checkedRead = <A>(read: () => A) =>
 					)
 	});
 const too_large = (message: string) => BoltError.make('too_large', 'deliver', message);
-/** H8: while provided, every read this engine runs adds the models it touched, so a view re-runs on exactly those. */
+/** While provided, every read this engine runs adds the models it touched, so a view re-runs on exactly those. */
 export const ReadDeps = Context.Reference<Set<string> | undefined>('bolt/ReadDeps', {
 	defaultValue: () => undefined
 });
@@ -451,7 +451,7 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 			probe.where === undefined
 				? undefined
 				: yield* where(cat, ir.model, probe.where).pipe(Effect.mapError(from_store));
-		// a rerank measures the whole row: a narrowed select is widened for it and narrowed back after (hook:reads)
+		// a rerank measures the whole row: a narrowed select is widened for it and narrowed back after
 		const selected = bodies.rerank === undefined ? undefined : ir.select;
 		const want = selected?.fields ?? null;
 		const c = yield* exposure_of(cat, ir.model).pipe(Effect.mapError(from_store));
@@ -771,7 +771,7 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 	return { catalog: cat, run };
 }
 /**
- * Rule 12: a batch's composable statements as one statement. Each one's rows fold into one jsonb array (each row as
+ * A batch's composable statements as one statement. Each one's rows fold into one jsonb array (each row as
  * its `to_jsonb`, in the statement's own order) beside its ordinal, so N reads cost one statement and one snapshot;
  * any other statement rides the same round trip as itself. Placeholders are renumbered into one parameter list
  * (compiled reads bind only `$n` placeholders; their literals hold no `$<digit>`); past the bind cap the batch

@@ -1,7 +1,7 @@
 // The type machine: every type a store call takes or answers, computed from the schema's own type `S` (`typeof` a
 // `schema(…)` value) — a host's literal schema, or the one a Bolt workspace compiles. Nothing is registered globally.
 //
-// Cost (F28, `bolt/src/decl/where.ts`): a schema's index (`Index<S>`) is one mapped type over its tables, so each
+// Cost (`bolt/src/decl/where.ts`): a schema's index (`Index<S>`) is one mapped type over its tables, so each
 // table's columns, refs and inverses are computed once per schema and then read by indexed access. Positions that take
 // a literal (`where`, `select`, `with`) are plain object types over a known table, so an unknown key is an excess
 // property, and TS checks a fresh literal against the instantiated type, not a constraint over every table.

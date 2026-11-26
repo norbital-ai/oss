@@ -1,4 +1,4 @@
-// `Pred` → JS (K3): the second evaluator, for live routing and tests. It must answer exactly as the SQL compiler does
+// `Pred` → JS: the second evaluator, for live routing and tests. It must answer exactly as the SQL compiler does
 // (`sql.ts`); a randomized test holds the two equal. A null never matches (SQL's unknown collapses to false), `ne` and
 // negated membership use "distinct from", and `not` negates the collapsed value.
 import { DateTime, Predicate } from 'effect';

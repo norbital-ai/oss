@@ -74,7 +74,7 @@ const forbidden = (need: Need | undefined, message: string): Outcome => ({
 });
 
 /**
- * Rule 35 before any guest code: every (path, column) the batch writes, and every child path it acts on, must be named
+ * Before any guest code: every (path, column) the batch writes, and every child path it acts on, must be named
  * by one of the root's arms of that verb (a `with` child is written through its root's access point, never its own);
  * the arms naming all of them admit the batch.
  */
@@ -158,7 +158,7 @@ const VerdictSchema = Schema.Union([
 ]);
 
 /**
- * Rule 35's guest half: each admitting arm's `verdict` judges the verb's batch (invocation kind `policy`, workspace reads
+ * The guest half: each admitting arm's `verdict` judges the verb's batch (invocation kind `policy`, workspace reads
  * within a transform's budget). Any `allow` executes, an arm without a verdict among them; else the first `approve` in
  * the team's policy order holds the batch for its flow; else the first `refuse` refuses it (its `row` indexes `input`).
  */

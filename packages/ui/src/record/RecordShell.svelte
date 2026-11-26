@@ -105,7 +105,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	import { Effect } from 'effect';
 	import { fork, observe_once } from '../effect/index.js';
 	import { contentMotion } from '../form/content-motion.js';
-	// The record frame (X-20): label, state pill, actions, the UI tab, authored tabs and Runs. One tab row: a nested
+	// The record frame: label, state pill, actions, the UI tab, authored tabs and Runs. One tab row: a nested
 	// shell shows its body only, and a tab a page's own strip already shows is not repeated. The record's header carries
 	// the record/approval toggle for native proposals and the history scrubber: a past revision shows
 	// read-only in the body. Without a body it renders the model's `+representation.svelte` or the generated view.

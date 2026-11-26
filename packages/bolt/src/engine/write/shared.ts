@@ -387,8 +387,8 @@ export function appRules(
 }
 
 /**
- * Rules 42, 72: what a failed guest invocation answers. A throw from tenant code is `internal` (its message reaches
- * members only); a budget keeps its own code; anything else is a platform fault, thrown with its cause (72a).
+ * What a failed guest invocation answers. A throw from tenant code is `internal` (its message reaches
+ * members only); a budget keeps its own code; anything else is a platform fault, thrown with its cause.
  */
 export function guestFailure(error: BoltError): Effect.Effect<Outcome, BoltError> {
 	switch (error.code) {

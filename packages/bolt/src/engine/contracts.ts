@@ -68,7 +68,7 @@ export function facility_wall_ms(member: FacilityMember, crossing_wall_ms?: numb
 /** Size of wire text in UTF-8, including non-ASCII characters. */
 export const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteLength;
 
-// ── the tenant database (C11 per activation) ──
+// ── the tenant database (per activation) ──
 /** What operands resolve against, fixed per invocation (a replay keeps `now` and `today`). */
 export type Bindings = {
 	now: string;
@@ -191,12 +191,11 @@ export type Authority = {
 		mcp: readonly string[];
 	};
 	limits: readonly LimitRule[];
-	/** Actor variables: `actor.team_tree`, `actor.scopes.<policy>`. */
+	/** The actor variable `actor.team_tree`. */
 	teamTree: readonly string[];
-	scopes: { readonly [policy: string]: readonly string[] };
 };
 
-// ── the guest (C2) ──
+// ── the guest ──
 export type InvocationKind =
 	| 'create'
 	| 'update'

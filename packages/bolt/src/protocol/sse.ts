@@ -1,4 +1,4 @@
-// The one SSE writer (B.2): the live stream, an integration instance's status stream and the shell's Studio events are
+// The one SSE writer: the live stream, an integration instance's status stream and the shell's Studio events are
 // each a `Stream` of values answered as `text/event-stream`.
 import { Stream } from 'effect';
 import * as Sse from 'effect/encoding/Sse';

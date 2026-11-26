@@ -39,7 +39,7 @@ const reviewer = (r: Request, auth: Authority) => {
 		? undefined
 		: m;
 };
-/** Rule 46: an approver of the current step: a member of one of its teams, or one of its users. */
+/** An approver of the current step: a member of one of its teams, or one of its users. */
 export const canApprove = (r: Request, auth: Authority): boolean => {
 	const step = r.route.steps[r.step],
 		m = reviewer(r, auth);

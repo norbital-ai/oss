@@ -25,7 +25,7 @@ export const ImageMetadataSchema = Schema.Struct({
 	})
 });
 
-/** What an ingest answers (plan 12) with its image bytes decoded by `bytes`: Convert's wire (base64) or the port's ABI. */
+/** What an ingest answers with its image bytes decoded by `bytes`: Convert's wire (base64) or the port's ABI. */
 export const ingest_answer = <B extends Schema.Codec<Uint8Array, unknown>>(bytes: B) => {
 	const fields = {
 		images: Schema.Array(Schema.Struct({ name: Schema.String, mime: Schema.String, bytes })),
@@ -55,7 +55,7 @@ export const ingest_answer = <B extends Schema.Codec<Uint8Array, unknown>>(bytes
 /** Schema of Norbital Convert's ingest answer, its images as bytes. */
 export const IngestedSchema = ingest_answer(Schema.Uint8Array);
 /**
- * Plan 12, Norbital Convert's ingest: parsing only, never OCR; a host may add a scanned page's transcript under its image in a `data-read` section. A `document` (pdf, office, html, text, images, audio) is
+ * Norbital Convert's ingest: parsing only, never OCR; a host may add a scanned page's transcript under its image in a `data-read` section. A `document` (pdf, office, html, text, images, audio) is
  * sanitised HTML, one block element per line (audio: one `<section data-speaker data-start data-end>` per segment); `data`
  * (a spreadsheet, CSV or JSON) is its cells as `{ sheets }`, or a JSON file's own value. `images` are referenced by name.
  */

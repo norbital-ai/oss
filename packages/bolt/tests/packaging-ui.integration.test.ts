@@ -88,7 +88,6 @@ describe('/runs', () => {
 					automations,
 					limits: [],
 					teamTree: [],
-					scopes: {},
 					actor: {
 						kind: 'member',
 						id,

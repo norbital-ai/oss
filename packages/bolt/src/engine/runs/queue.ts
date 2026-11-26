@@ -165,7 +165,6 @@ export const holderOf = (a: Authority): Holder =>
 		policies: a.policies,
 		admin: a.admin,
 		teamTree: a.teamTree,
-		scopes: a.scopes,
 		...(a.actor.kind === 'system' && !('automation' in a.actor.by) ? { platform: true } : {})
 	};
 export const writerOf = (a: Authority): Writer => {

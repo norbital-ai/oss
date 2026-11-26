@@ -1,4 +1,4 @@
-// `@norbital-ai/ui` (Appendix D.2): the views, the field kinds and inputs, `Form`/`Field`, and the primitives.
+// `@norbital-ai/ui`: the views, the field kinds and inputs, `Form`/`Field`, and the primitives.
 // Layout is `./layout`.
 // The views take the page's `ctx` as a prop; the shell provides the representation registry once per page.
 // A model-backed view is exported typed by what its naked prop names (`Workspace` in `./model/types.ts`): the component

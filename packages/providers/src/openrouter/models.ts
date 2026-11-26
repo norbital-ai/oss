@@ -31,7 +31,7 @@ export type ModelCatalogue = {
 };
 const Listing = Schema.Struct({ data: Schema.Array(Model) });
 
-/** Both provider lists are read once; an unavailable listing remains explicit for P39. */
+/** Both provider lists are read once; an unavailable listing remains explicit for the modality check. */
 export const models = Effect.fn('OpenRouter.models')(function* (endpoint: Endpoint) {
 	const call = jsonApi(
 		endpoint.base_url,

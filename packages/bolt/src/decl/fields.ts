@@ -455,7 +455,7 @@ export type ValidField<T, F> = T extends
 /** String keys whose values fit a specification, shared by declaration field and remote-record checks. */
 export type KeyFor<R, V> = { [K in keyof R]: R[K] extends V ? K : never }[keyof R] & string;
 type FieldsOfKind<F, K> = KeyFor<F, { kind: K }>;
-// X-8: a money field names its currency unless `+workspace.ts` sets one
+// a money field names its currency unless `+workspace.ts` sets one
 type MoneyCurrency<T> = T extends { currency: string }
 	? unknown
 	: NamesPart<'workspace'> extends { currency: string }

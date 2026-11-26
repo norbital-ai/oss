@@ -187,7 +187,7 @@ export type AgentPorts = {
  */
 export type HostPorts = {
 	readonly facilities: Facilities;
-	/** Rule 61: this environment's epoch (a fork's rows are never sent). */
+	/** This environment's epoch (a fork's rows are never sent). */
 	readonly epoch?: string;
 	/** `<tenant>/<environment>`: the deadlines scope and the log key. */
 	readonly scope: string;
@@ -321,7 +321,7 @@ export type ActiveWorkspace = {
 	 * generation and the next one takes the turns over. A host bounds the wait.
 	 */
 	park(options: Signal & { readonly automations_ms: number }): Promise<void>;
-	/** Rule 71a: interrupts every guest invocation and in-flight crossing of this generation; the host then ends its pool. */
+	/** Interrupts every guest invocation and in-flight crossing of this generation; the host then ends its pool. */
 	close(): Promise<void>;
 	/**
 	 * The host's word to an agent conversation (the end of work it carried on for a turn, such as a host tool's job):
@@ -368,20 +368,20 @@ export type WorkspaceBranch = {
 	readonly schema: {
 		/**
 		 * Engine tables, then the release's schema plan (destructive steps only when accepted). Answers what it
-		 * did (v13): each pending step's rows and the whole duration, measured on this branch.
+		 * did: each pending step's rows and the whole duration, measured on this branch.
 		 */
 		migrate(
 			options: Signal & { readonly accept?: true | readonly string[] }
 		): Promise<MigrationImpact>;
 	};
 	readonly packs: {
-		/** Rule 70: the release's seed pack by name (`base`), its assets into `files` when given, ready to load in steps. */
+		/** The release's seed pack by name (`base`), its assets into `files` when given, ready to load in steps. */
 		load(
 			pack: string,
 			options: Signal & { readonly at: string; readonly files?: FilesPort }
 		): Promise<PackLoad>;
 		/**
-		 * Rule 70: rows `bolt seed` sent, held only in memory, decoded here and loaded in steps like a pack; each of
+		 * Rows `bolt seed` sent, held only in memory, decoded here and loaded in steps like a pack; each of
 		 * `assets` is read through `asset` into `files`.
 		 */
 		restore(
@@ -490,7 +490,7 @@ export type CarriedMigration = typeof CarriedMigration.Type;
  * so hosts and releases on different module graphs interoperate.
  */
 export type HostApi = HostApiCore & {
-	/** Rule 71: whether a request may run a guest body, so the host admits only these under its compute envelope. */
+	/** Whether a request may run a guest body, so the host admits only these under its compute envelope. */
 	needs_guest(request: Request): Promise<boolean>;
 	readonly schema: {
 		/** The schema state the release plans from (what a successor's plan is diffed against). */

@@ -48,7 +48,6 @@ export const kioskAuthority = Effect.fn('shell.kioskAuthority')(function* (
 			policies,
 			admin: false,
 			...(member?.teamTree === undefined ? {} : { teamTree: member.teamTree }),
-			...(member?.scopes === undefined ? {} : { scopes: member.scopes })
 		},
 		`kiosk:${name}:${member?.key ?? `visitor:${visitor.id}:${visitor.anonymous}`}`
 	);

@@ -1,4 +1,4 @@
-// HOST_API (D10a), `@norbital-ai/bolt/host-api`: this release's implementation of `@norbital-ai/host-api`'s `HostApi`,
+// HOST_API, `@norbital-ai/bolt/host-api`: this release's implementation of `@norbital-ai/host-api`'s `HostApi`,
 // the one surface between a host on another module graph and this release.
 // A host loads each workspace's pinned Bolt from that release's own install graph, whose `effect` is another copy: an Effect,
 // Layer or service key of one copy is not one of the other. So the contract is plain: Promise + AbortSignal +
@@ -154,7 +154,7 @@ import { BoltHost, BoltHostLive } from './host.ts';
 import { PublicPages, public_pages } from './pages.ts';
 import { IntegrationManager, integration_routes } from './integrations.ts';
 
-// ── failures (D10a) ──
+// ── failures ──
 const isPhase = Schema.is(Schema.Literals(PHASES));
 
 // ── the implementation: the only cross-module-graph edge ──
@@ -311,7 +311,7 @@ const activeRuns = new WeakMap<
 	<A, E>(effect: Effect.Effect<A, E, EngineServices | EngineHost | SessionAuthority>) => Promise<A>
 >();
 /**
- * This module graph's serving generations' live lanes by release and environment epoch (Rule 61: what a generation
+ * This module graph's serving generations' live lanes by release and environment epoch (what a generation
  * stores at its first trip). A branch change publishes on the epoch its own statement read, so the open pages of that
  * environment hear it as an ordinary commit; another environment the cell serves never does.
  */

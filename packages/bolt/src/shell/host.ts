@@ -231,7 +231,7 @@ const SyncReplay = Schema.Struct({
 });
 const SyncRetire = Schema.Struct({ instance: Schema.NonEmptyString, id: Schema.NonEmptyString });
 const RunId = Schema.Struct({ id: Schema.String });
-/** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL). */
+/** The workspace's logo (`null`, an `https:` URL or a `data:image/…` URL). */
 const Branding = Schema.Struct({
 	logo: Schema.optionalKey(Schema.NullOr(Schema.String))
 });
@@ -639,7 +639,7 @@ const makeShell = Effect.gen(function* () {
 			}
 			return yield* value;
 		});
-	/** Rule 38d (a, b): per-IP limits, then the Turnstile token, both before decode; only `read`/`get` and generated `create`. */
+	/** Per-IP limits, then the Turnstile token, both before decode; only `read`/`get` and generated `create`. */
 	const visitorGate = Effect.fn('shell.visitorGate')(function* (
 		request: HttpServerRequest.HttpServerRequest,
 		auth: Authority,
@@ -1239,7 +1239,7 @@ const makeShell = Effect.gen(function* () {
 				return json({ value: yield* runLog(logs, id, url.searchParams.get('after') ?? undefined) });
 			}
 			case 'POST /runs/stop': {
-				// hook:runtime — whoever reads the run in full may stop it
+				// whoever reads the run in full may stop it
 				const { id } = yield* requestBody(request, RunId);
 				const run = yield* runs.stop(auth, id).pipe(Effect.map(Option.getOrNull));
 				return run === null
@@ -1317,7 +1317,7 @@ const makeShell = Effect.gen(function* () {
 					).pipe(Effect.provideService(Audit, audit))
 				});
 			case 'POST /organization': {
-				// L-COL-199: the workspace's logo, an administrator's (never a previewed member's)
+				// the workspace's logo, an administrator's (never a previewed member's)
 				if (c.organization === undefined)
 					return refused(
 						'unavailable',

@@ -685,7 +685,7 @@ const run = Effect.fn('FileSyncs.run')(function* (
 });
 
 /**
- * The platform runs of every file sync, by name (`<model>.sync.<sync>`), for `RunHandlers.register`: B6's `SyncsLive`
+ * The platform runs of every file sync, by name (`<model>.sync.<sync>`), for `RunHandlers.register`: `SyncsLive`
  * registers them beside the remote syncs'.
  */
 export const fileSyncHandlers: Effect.Effect<

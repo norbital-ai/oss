@@ -31,7 +31,7 @@ Every `+<page>.page.svelte` renders inside one.
 		 * own matching inset) and full-bleed surfaces.
 		 */
 		variant?: AppShellVariant;
-		/** Header actions the shell places beside the hero title (today's `AppHeaderActions`). */
+		/** Header actions the shell places beside the hero title. */
 		actions?: Snippet;
 		/** The page body; it fills the space below the hero. */
 		children: Snippet;

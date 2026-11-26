@@ -1,5 +1,5 @@
 // A host's reading of the artifact, without the build toolchain: `@norbital-ai/bolt/artifact`. `bolt build`
-// writes what this reads (bolt-cli's compiler/artifact/index.ts); `artifact.json` and `manifest.json` are decoded here, once (A.4).
+// writes what this reads (bolt-cli's compiler/artifact/index.ts); `artifact.json` and `manifest.json` are decoded here, once.
 // Every read goes through Effect's `FileSystem` and `Path`: in a cell they are the host's artifact port, which resolves
 // symlinks and refuses a path outside the release, so containment here is a check of the path's shape.
 import { sha256_hex } from '@norbital-ai/store';
@@ -94,7 +94,7 @@ export function public_page_keys(m: EngineManifest): readonly string[] {
 		.sort();
 }
 
-// ponytail: the digest is of the package release, not yet of the C1 JSON Schema + C2 ABI descriptor;
+// ponytail: the digest is of the package release, not yet of the manifest JSON Schema + guest ABI descriptor;
 // switch when those descriptors exist as files.
 /**
  * This engine's contract digest, recorded in each `artifact.json` it builds. The engine refuses any other contract.
@@ -385,7 +385,7 @@ const seedFiles = (m: EngineManifest, meta: Pack['meta']) => {
 			mime: asset.content_type,
 			bytes: asset.bytes,
 			sha256: asset.sha256
-		}); // hook:runtime — a seeded FileRef carries its size
+		}); // a seeded FileRef carries its size
 	};
 	/** One row of `c` as it is restored; `files` fills as the rows go by. */
 	const rowOf = (c: string, r: RowData) =>

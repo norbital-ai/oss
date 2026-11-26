@@ -63,7 +63,7 @@ export type Usage = {
 	-readonly [K in keyof typeof UsageSchema.Type]: (typeof UsageSchema.Type)[K];
 };
 export type ToolCall = Types.Mutable<typeof AiToolCallSchema.Type>;
-/** Rule 59: one per write outcome of a turn. */
+/** One per write outcome of a turn. */
 export type Receipt = typeof ReceiptSchema.Type;
 const AsSchema = Schema.Union([
 	Schema.Struct({
@@ -591,7 +591,7 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 				}),
 		...(staff && meta?.tag === 'failed' && meta.detail !== undefined
 			? { detail: meta.detail }
-			: {}), // hook:agent-ui — the reason reaches staff, never a sender
+			: {}), // the reason reaches staff, never a sender
 		...(r.copied_from == null && meta?.tag === 'confirm'
 			? {
 					call: { name: meta.call.name, input: meta.call.input }
@@ -657,18 +657,18 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 			: {}),
 		...(r.role === 'assistant' && said?.reasoning !== undefined && said.reasoning !== ''
 			? { reasoning: said.reasoning }
-			: {}), // L-BOLT-548
+			: {}),
 		...(meta?.tag === 'compact'
 			? {
 					compact: { cutoff: meta.cutoff, keep: [...meta.keep], origin: meta.origin ?? 'automatic' }
 				}
-			: {}), // L-BOLT-546
+			: {}),
 		...(r.copied_from == null &&
 		(meta?.tag === 'reply' || meta?.tag === 'failed') &&
 		meta.usage !== undefined
 			? { usage: meta.usage }
 			: {})
-	}; // hook:agent — cost and context display
+	}; // cost and context display
 }
 
 export class AgentRefusal extends Schema.TaggedError<AgentRefusal>()('AgentRefusal', {

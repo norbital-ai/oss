@@ -492,7 +492,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			Effect.provideService(Links, config.links)
 		);
 
-	/** Rule 33: a start or schedule needs the automation in `capabilities.automations`; its input decodes. */
+	/** A start or schedule needs the automation in `capabilities.automations`; its input decodes. */
 	function startable(name: string, auth: Authority): Refused | null {
 		if (auth.actor.kind === 'visitor') return refused('forbidden', 'Visitors may not start runs.');
 		const spec = m.automations[name];
@@ -731,8 +731,8 @@ export function admit_visitor(auth: Authority, s: Surface): Refused | null {
 	return ok ? null : refused('forbidden', 'Visitors may not do this.');
 }
 /**
- * Rule 32: only `ctx.refuse` and mapped constraint messages reach members; public and API-key actors receive codes
- * only. Rule 38d (d): a visitor gets codes and messages, and a proposed create no request id.
+ * Only `ctx.refuse` and mapped constraint messages reach members; public and API-key actors receive codes
+ * only. A visitor gets codes and messages, and a proposed create no request id.
  */
 export function for_actor(
 	o: Outcome,

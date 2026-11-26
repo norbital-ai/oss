@@ -2,7 +2,7 @@ import { Effect, Stream } from 'effect';
 import { input_schema } from '@norbital-ai/store/kind';
 
 import { Schema } from 'effect';
-// Seed mode (X-13): a restore. Stored values go in as given (kept ids of any uuid version, non-initial states,
+// Seed mode: a restore. Stored values go in as given (kept ids of any uuid version, non-initial states,
 // `seq` values, sealed rows) in relationship order, one statement per model per ≤ 1 MiB chunk, each chunk a step
 // of its own (`restorer`) in one statement; the database's constraints apply; roll-ups are derived and compared with any given value (`seed_drift`); each `seq`
 // counter is raised to the highest seeded value. No transform, trigger, run, outbox row, approval route or rate limit.
@@ -29,7 +29,7 @@ const modelDecl = (m: EngineManifest, c: string) =>
 export type SeedPack = {
 	readonly [model: string]: readonly RowData[];
 };
-/** Seed decode: throws `seed_decode` on the first bad row. hook:callables — `bolt check` runs it at build. */
+/** Seed decode: throws `seed_decode` on the first bad row. `bolt check` runs it at build. */
 export function decode_seed(m: EngineManifest, pack: SeedPack): void {
 	const cat = catalog_of(m);
 	for (const [c, rows] of Object.entries(pack))
@@ -134,7 +134,7 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 		{ model: string; field: string; scope: string; value: number }
 	>();
 	const insert = (c: string, chunk: readonly Record<string, Json>[]): readonly Sql[] => {
-		// hook:packaging-ui — a key a row omits takes its column's default, never null: one recordset per key
+		// a key a row omits takes its column's default, never null: one recordset per key
 		// shape, the shapes one statement
 		const shapes = new Map<string, [Record<string, Json>, ...Record<string, Json>[]]>();
 		for (const r of chunk) {

@@ -1,4 +1,4 @@
-// The guest edge (D8, B.3): the one runtime per body invocation (A.3), bundled into guest.mjs only beside a generator
+// The guest edge: the one runtime per body invocation, bundled into guest.mjs only beside a generator
 // body (`install` wires it into attach, `../body.ts`). A generator body runs through `runBody` over the lifted ctx:
 // each member an uninterruptible Effect that crosses through the prelude's `call` with the author's call site, captured
 // when the member is called. Avoid module-scope workflow construction in the guest prelude.

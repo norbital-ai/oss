@@ -65,7 +65,7 @@ export const SIGNUP_KEY = 'signup';
 /**
  * What identity needs from its host (the host's transactional messaging): `mail` sends emailed codes and
  * invitations, `sms` texted invitations, `phone` sends and checks a mobile number's code — without it, numbers
- * cannot sign in. `dev_sink` is a local host's (its facilities' `fixed_codes`) and the test kit's: the fixed code `123456` (38a(f)).
+ * cannot sign in. `dev_sink` is a local host's (its facilities' `fixed_codes`) and the test kit's: the fixed code `123456`.
  */
 export type IdentityHost = {
 	readonly audit?: import('../audit.ts').AuditShape;
@@ -136,7 +136,7 @@ export const requireAdmin = (auth: Authority): Effect.Effect<void, IdentityRefus
 const portRefusal = (error: PortFailure, message: string) =>
 	refuse(error._tag === 'Unavailable' ? 'unavailable' : error.kind === 'timeout' ? 'timeout' : 'upstream', message);
 /**
- * Rule 38a(e): the session secret and `ip_mac` are 32 host-random bytes, written with `ON CONFLICT DO NOTHING` and
+ * The session secret and `ip_mac` are 32 host-random bytes, written with `ON CONFLICT DO NOTHING` and
  * re-read, so two cells racing agree. Existing persisted keys need no initialization write.
  */
 const StoredKey = Schema.Struct({
@@ -222,7 +222,7 @@ function admitMemory(
 const retryAfter = (now: Date) => Math.ceil((HOUR - (now.getTime() % HOUR)) / 1000);
 const codeMac = (keys: Keys, a: Address, code: string) =>
 	to_hex(hmacSha256(keys.session, `${addressKey(a)}\u0000${code}`));
-/** Six digits from the host's CSPRNG (38a(d)), unbiased by rejection. */
+/** Six digits from the host's CSPRNG, unbiased by rejection. */
 /** A newcomer may join by proving `a`: the workspace declares sign-up by that means and no administrator has closed it. */
 const signupOpen = (
 	h: IdentityHost,
@@ -244,7 +244,7 @@ const invitationsTo = (a: Address, now: Date) => ({
 	params: [member_value(a), now.toISOString()]
 });
 /**
- * Rule 38a(a–c): checks membership, an open invitation or self sign-up before persisting the challenge and sending
+ * Checks membership, an open invitation or self sign-up before persisting the challenge and sending
  * an email or asking the phone verifier to send by `via` (SMS unless WhatsApp is chosen). Ineligible addresses are
  * refused before the code step. The challenge carries our attempts and expiry for the verifier's code too.
  * A port refusal is returned; a fresh `send_code` is allowed at once. `human` is asked only for a stranger: where the
@@ -519,7 +519,7 @@ export const partyRow = (signup: Signup | undefined, a: Address) => {
 	};
 };
 /**
- * Rule 38a(b): 3 attempts per code, compared in constant time, single use. Success mints a session for the member; for
+ * 3 attempts per code, compared in constant time, single use. Success mints a session for the member; for
  * an address with no member yet, it creates one in the same statement: accepting the open invitation to it, or, where
  * the workspace lets newcomers sign up by that means, as an external member holding `signup.policies` and bound to the
  * record that is them (a guest becomes a registered member). A member who signed up before their record existed is

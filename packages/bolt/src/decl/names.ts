@@ -153,7 +153,7 @@ export type TargetsOf<R> = R extends { to: infer T }
 		? A
 		: T
 	: never;
-// The relationship views are built once per workspace and read by indexed access (G1 scale fixture: they were ~10M of
+// The relationship views are built once per workspace and read by indexed access (G1 scale fixture: built per reference they are ~10M of
 // 16M instantiations). Two global scans group the relationship keys by source and by target; each model's view is a
 // property of `RelIndex`, instantiated once and kept (an alias re-instantiates its defaults on every reference). A view
 // is a mapped type over a key union, so `keyof` it is that union: `keyof` a mapped type with an `as` clause re-scans its
@@ -322,7 +322,7 @@ type WritableFieldOf<M, F = FieldsOf<M>, Keys extends keyof F & string = keyof F
 ) &
 	string;
 
-// ── exposure (R1): what a model's `read` admits ──
+// ── exposure: what a model's `read` admits ──
 // a system model is typed by its declaration too (sys_integration's create and update allowlists)
 type SpecOf<C> = C extends keyof Exposed
 	? Exposed[C]

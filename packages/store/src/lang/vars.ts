@@ -1,5 +1,5 @@
 // vars: a filter value's `{ var: '<CEL>' }`, a typed expression over the actor (`actor.id`,
-// `actor.teams`, `actor.scopes.<policy>` …) and the clock (`today`, a date; `now`, an instant), evaluated once
+// `actor.teams` …) and the clock (`today`, a date; `now`, an instant), evaluated once
 // per read and never per row: `today - days(7)`, `start_of_month(today)`, `now - hours(1)`. Helpers: minutes, hours,
 // days, weeks, months and years spans (`±` on a date or an instant), and start_of_week/start_of_month/start_of_quarter/start_of_year of a date.
 import { Environment, type ASTNode, type ParseResult } from '@marcbachmann/cel-js';
@@ -52,7 +52,6 @@ export type ActorVars = {
 	readonly instance: string | null;
 	readonly teams: readonly string[];
 	readonly team_tree: readonly string[];
-	readonly scopes: { readonly [policy: string]: readonly string[] };
 };
 /** The values an expression reads: the clock, and the actor where it is known. */
 type VarValues = {
@@ -70,9 +69,8 @@ type VarField = {
 	readonly phone?: boolean | undefined;
 	readonly team?: boolean | undefined;
 };
-/** Whether `f` may compare with actor member `m` (`scopes.<policy>` in a list position). */
+/** Whether `f` may compare with actor member `m`. */
 export function member_admits(f: VarField, m: string): boolean {
-	if (m.startsWith('scopes.')) return f.kind === 'id';
 	switch (m) {
 		case 'teams':
 		case 'team_tree':
@@ -119,8 +117,7 @@ const env = new Environment({ homogeneousAggregateLiterals: false })
 			visitor: 'string',
 			instance: 'string',
 			teams: 'list<string>',
-			team_tree: 'list<string>',
-			scopes: 'map<string, list<string>>'
+			team_tree: 'list<string>'
 		}
 	})
 	.registerVariable('today', 'Date')
@@ -163,7 +160,7 @@ type CompiledVar = {
 	readonly program: ParseResult;
 	/** It reads `today` or `now`: the edge evaluates it before a read. */
 	readonly time: boolean;
-	/** The actor members it reads (`scopes.<policy>` names its policy). */
+	/** The actor members it reads. */
 	readonly actor: readonly string[];
 	/** The one member it is (`actor.email`), read directly so a missing value is null. */
 	readonly member: string | undefined;
@@ -176,15 +173,6 @@ function reads(node: ASTNode, out: { ids: Set<string>; actor: Set<string> }): vo
 		if (obj.op === 'id' && obj.args === 'actor') {
 			out.ids.add('actor');
 			return void out.actor.add(prop);
-		}
-		if (
-			obj.op === '.' &&
-			obj.args[0].op === 'id' &&
-			obj.args[0].args === 'actor' &&
-			obj.args[1] === 'scopes'
-		) {
-			out.ids.add('actor');
-			return void out.actor.add(`scopes.${prop}`);
 		}
 	}
 	for (const x of children(node)) reads(x, out);
@@ -237,10 +225,8 @@ export function evaluate_var(compiled: CompiledVar, values: VarValues): Json {
 		throw new RangeError(`'${compiled.text}' reads the actor`);
 	const r = values.actor;
 	if (compiled.member !== undefined && r !== undefined) {
-		const [head = '', policy = ''] = compiled.member.split('.');
+		const head = compiled.member;
 		switch (head) {
-			case 'scopes':
-				return [...(r.scopes[policy] ?? [])];
 			case 'teams':
 			case 'team_tree':
 				return [...r[head]];
@@ -262,13 +248,7 @@ export function evaluate_var(compiled: CompiledVar, values: VarValues): Json {
 					actor: {
 						...r,
 						teams: [...r.teams],
-						team_tree: [...r.team_tree],
-						scopes: new Map(
-							compiled.actor
-								.filter((m) => m.startsWith('scopes.'))
-								.map((m) => m.slice('scopes.'.length))
-								.map((k) => [k, [...(r.scopes[k] ?? [])]])
-						)
+						team_tree: [...r.team_tree]
 					}
 				})
 	});

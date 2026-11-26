@@ -196,7 +196,7 @@ export const NUDGE = {
 		'Your last reply was cut off while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.'
 } as const;
 
-/** Rule 59: fixed replies; internal error text never reaches a sender. */
+/** Fixed replies; internal error text never reaches a sender. */
 export const FIXED = {
 	failed:
 		'I could not finish this request because a service it needs did not answer. Please try again later.',

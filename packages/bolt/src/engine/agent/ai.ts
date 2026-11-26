@@ -60,7 +60,7 @@ import { Validator } from '@cfworker/json-schema';
 import { compile, context, evaluate } from '@norbital-ai/store/formula';
 
 const MiB = 1024 * 1024;
-/** Rule 72: a platform budget checked before the provider's own limit: files and bytes a call, bytes one file. */
+/** A platform budget checked before the provider's own limit: files and bytes a call, bytes one file. */
 export const MODEL_FILES = { count: 24, bytes: 20 * MiB, fileBytes: 8 * MiB } as const;
 /** What a message may carry (envoy and panel alike): images, text, recordings and any document, parsed or read by a tool, within `MODEL_FILES`. */
 export const ATTACHMENT_MIME = /^(image|text|audio|application)\/[\w.+-]+$/;
@@ -543,7 +543,7 @@ function ruleChecker(
 }
 
 /**
- * `ctx.ai.sys_2.infer` for automations (L-BOLT-371/372): a prompt, optional files and an `output`, continued
+ * `ctx.ai.sys_2.infer` for automations: a prompt, optional files and an `output`, continued
  * across cut steps while it progresses (STALL_MS of silence ends it). Files are FileRefs the host loads. A
  * structured `output` — a declared kind, or `{ json_schema, rules }` — is built, not written in one piece: the model edits a
  * draft with `edit` (keyed pointers: a keyed list's items by key) as it finds each part, inspects it with `read`, `find`

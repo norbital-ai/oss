@@ -930,7 +930,7 @@ declare module '../../src/index.ts' {
 					sites: {
 						outputs: {
 							summary: {
-								where: { customer: { in: { var: 'actor.scopes.sales_rep' } } };
+								where: { customer: { eq: { var: 'actor.party' } } };
 							};
 						};
 					};

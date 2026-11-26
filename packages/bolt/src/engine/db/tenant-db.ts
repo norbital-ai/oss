@@ -1,4 +1,4 @@
-// The tenant database (C11, per activation; W2.E1): complete, bounded SQL work, failing with the
+// The tenant database (per activation): complete, bounded SQL work, failing with the
 // driver's `DbError` (the SQLSTATE the write compiler maps to a refusal) and, for a typed read, `BoltError`
 // naming the table of a row that does not decode. Batches release their connection before answering.
 import { Clock, Context, Effect, Semaphore, type Option, type Schema } from 'effect';

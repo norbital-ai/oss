@@ -73,7 +73,7 @@ export type {
 	PlainTime,
 	Point
 } from './decl/values.ts';
-export type { LayerWhere, Where } from './decl/where.ts'; // hook:query (OrderBy)
+export type { LayerWhere, Where } from './decl/where.ts';
 export type { AutomationCtx, EffectCtx } from './decl/runtime/automation.ts';
 export type {
 	ApprovalRecipient,
@@ -94,7 +94,7 @@ export type {
 } from './decl/runtime/integration.ts';
 export type { Finding, Health, SyncCtx, SyncRow } from './decl/runtime/sync.ts';
 export type { DatabaseRequest, DatabaseResult } from '@norbital-ai/host-api';
-export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // hook:packaging-ui — X-20 and role 5's view props
+export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // a representation's and a custom field's view props
 
 export { input_schema, type Kind, type Value } from '@norbital-ai/store/kind'; // field kinds: the authoring language
 export { compile, context, evaluate, formula } from '@norbital-ai/store/formula'; // user-edited CEL rules

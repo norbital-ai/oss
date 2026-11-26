@@ -197,7 +197,7 @@ ${[...lines]
 	}
 }
 
-// Every cross-file declaration error of the workspace fails here (X-12).
+// Every cross-file declaration error of the workspace fails here.
 export const __verify: Check<Verify> = true;
 `;
 }

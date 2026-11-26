@@ -126,7 +126,6 @@ const member = (
 	automations: [],
 	limits: [],
 	teamTree: [],
-	scopes: {},
 	actor: {
 		kind: 'member',
 		id: 'u1',

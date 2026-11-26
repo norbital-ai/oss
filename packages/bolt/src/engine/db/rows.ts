@@ -1,6 +1,6 @@
-// Typed reads (H2): a statement's rows decode once, at the database boundary, by the Schema its select list names (a
+// Typed reads: a statement's rows decode once, at the database boundary, by the Schema its select list names (a
 // system table's from `system/rows.ts`). A row that does not decode is an engine fault, `BoltError('internal')` naming
-// the Schema's table; tenant rows a caller only relays stay `Rows` (D5).
+// the Schema's table; tenant rows a caller only relays stay `Rows`.
 import { Effect, Option, Result, Schema, SchemaAST } from 'effect';
 import type { Rows } from '@norbital-ai/host-api';
 import type { RowData } from '../contracts.ts';

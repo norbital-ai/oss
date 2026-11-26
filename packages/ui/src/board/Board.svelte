@@ -31,7 +31,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 		of: C;
 		/** The lane field: a `state`, an `enum` or a relation. */
 		by: F;
-		/** At most four fields (a heavy one is then read), or a snippet (final-ui I7). */
+		/** At most four fields (a heavy one is then read), or a snippet. */
 		card:
 			| readonly []
 			| readonly [K]

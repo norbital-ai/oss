@@ -9,8 +9,7 @@ const requestor = {
 	visitor: null,
 	instance: null,
 	teams: ['ops'],
-	team_tree: ['ops', 'ops.north'],
-	scopes: { sales_rep: ['c1'] }
+	team_tree: ['ops', 'ops.north']
 };
 const at = { today: '2026-10-28', now: '2026-10-28T10:00:00.000Z', actor: requestor };
 const run = (text: string, result: 'text' | 'date' | 'instant' | 'list') => {
@@ -21,10 +20,10 @@ const run = (text: string, result: 'text' | 'date' | 'instant' | 'list') => {
 
 describe('filter variables', () => {
 	it('names the requestor members an expression reads at any depth', () => {
-		const c = compile_var('actor.id in actor.scopes.sales_rep || size(actor.teams) > 0');
+		const c = compile_var('actor.id in actor.team_tree || size(actor.teams) > 0');
 		expect('error' in c ? c.error : [...c.actor].sort()).toEqual([
 			'id',
-			'scopes.sales_rep',
+			'team_tree',
 			'teams'
 		]);
 	});
@@ -32,8 +31,6 @@ describe('filter variables', () => {
 		expect(run('actor.id', 'text')).toBe('u1');
 		expect(run('actor.email', 'text')).toBeNull();
 		expect(run('actor.team_tree', 'list')).toEqual(['ops', 'ops.north']);
-		expect(run('actor.scopes.sales_rep', 'list')).toEqual(['c1']);
-		expect(run('actor.scopes.other', 'list')).toEqual([]);
 	});
 	it('shifts and truncates the clock', () => {
 		expect(run('today', 'date')).toBe('2026-10-28');

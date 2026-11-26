@@ -309,7 +309,7 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 			const conv = { ...stored, model: allowedModel(settings, stored.model) };
 			current.model = conv.model;
 			if (conv.status === 'stopped') return true;
-			// hook:triage — `delivered_turn` marks each row new input at most once
+			// `delivered_turn` marks each row new input at most once
 			// one sender's inputs per step, oldest first; a later sender's steer is claimed at the next step under its own authority
 			const claimChain = new Chain();
 			const claimed = [
@@ -329,7 +329,7 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 				return yield* settle(id);
 			}
 			current.force = false;
-			// plan 12: each job that finished since the last step says so once, at the end of the context (the cached
+			// each job that finished since the last step says so once, at the end of the context (the cached
 			// prefix is unchanged)
 			for (const line of work.take()) yield* io.appendNote(line);
 			// workspace events since the conversation last heard one (or began): each once, never a turn of their own
@@ -584,7 +584,7 @@ export const makeTurnRunner = (deps: TurnRunnerDeps) => {
 			// a model step is progress: compaction may run again as often as a long turn needs
 			current.compactions = 0;
 			current.lastInput = r.usage.input;
-			// a reply while background work runs is interim: the turn collects the work and goes on (today's child report-back)
+			// a reply while background work runs is interim: the turn collects the work and goes on (a child's report-back)
 			const collecting =
 				r.finish !== 'cut' && calls.length === 0 && (work.running() > 0 || work.ready() > 0);
 			const done = r.finish !== 'cut' && calls.length === 0 && !collecting;

@@ -268,8 +268,7 @@ const who = (
 	automations: [],
 	capabilities: { apps: [], syncs: [], tools: [], mcp: [] },
 	limits: [],
-	teamTree: [],
-	scopes: {}
+	teamTree: []
 });
 const owner = who();
 

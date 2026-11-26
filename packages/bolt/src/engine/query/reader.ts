@@ -1,4 +1,4 @@
-// Who reads, as the store's read compiler takes it (A4): a caller's Authority as the store's `Scope` — its read arms per
+// Who reads, as the store's read compiler takes it: a caller's Authority as the store's `Scope` — its read arms per
 // output and path conjoined at every level, and the open approval request a root row of a holdable model
 // carries, for every reader — and the invocation's bindings as the operand resolver. A workspace read (the transform) has no scope. Statements a batch may fold into one are marked here.
 import { DateTime, Effect } from 'effect';
@@ -29,7 +29,7 @@ export function bindingsAt(at: number | string, tz: string): Bindings {
 /** A caller's scope: none for an admin's rows. */
 export function scopeOf(authority: Authority, outputs: 'named' | 'any' = 'named'): Scope {
 	return {
-		// a layer path is scoped by its root's arms for that output and path (decision 3), never its own model's grants
+		// a layer path is scoped by its root's arms for that output and path, never its own model's grants
 		rows: (path, output) => readPredicates(authority, path, outputs === 'any' ? undefined : output)
 	};
 }

@@ -15,7 +15,7 @@ import { Chain, GATED, gate, answer, storedOutcome, rate } from '../write/sql.ts
 import { actor_ref } from '../access/actor.ts';
 import { stableId } from '../conversations/store.ts';
 import { WriteOutcome } from '../../protocol/schema.ts';
-import { ATTACHMENT_MIME } from '../agent/ai.ts'; // hook:attachments
+import { ATTACHMENT_MIME } from '../agent/ai.ts';
 import { acceptOf, parserFor, parsersOf } from '../files/parse.ts';
 
 /** The `Bolt-Stored` header: an upload's blob as the host stored it. */
@@ -95,7 +95,7 @@ export const upload = Effect.fn('Callables.upload')(function* (u: Upload) {
 	const manifest = yield* Manifest;
 	const db = yield* TenantDb;
 	const files = yield* Files;
-	// hook:attachments — the agent panel's own field: any member stores a conversation input of at most ATTACHMENT_BYTES
+	// the agent panel's own field: any member stores a conversation input of at most ATTACHMENT_BYTES
 	const panel = u.model === 'sys_conversation' && u.field === 'inputs';
 	// a file sync's upload (`<m>.$import.<sync>`, read back by its `<m>.sync.<sync>` run): a member who may create or update
 	// in `m`, sending a file one of the sync's parsers reads (by extension or media type); any other is refused unread

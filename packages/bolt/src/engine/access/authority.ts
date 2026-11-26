@@ -29,7 +29,6 @@ export type Holder = {
 	/** A platform run: the workspace's own work, unscoped like an admin but never an administrator. */
 	platform?: boolean;
 	teamTree?: readonly string[];
-	scopes?: { readonly [policy: string]: readonly string[] };
 };
 
 const WRITES = ['create', 'update'] as const;
@@ -336,8 +335,7 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 			mcp: list(caps.mcp)
 		},
 		limits,
-		teamTree: holder.teamTree ?? [],
-		scopes: holder.scopes ?? {}
+		teamTree: holder.teamTree ?? []
 	};
 });
 
@@ -448,8 +446,7 @@ export function actorVarsOf(authority: Authority): ActorVars {
 					? actor.by.instance
 					: null,
 		teams: member === null ? [] : member.teams,
-		team_tree: authority.teamTree,
-		scopes: authority.scopes
+		team_tree: authority.teamTree
 	};
 }
 /** Actor variables have one interpretation across SQL, live evaluation and write admission. */

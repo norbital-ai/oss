@@ -1,7 +1,7 @@
 // A remote sync's read: the run `'<model>.sync.<sync>'` reads each active instance (× partition) from its
 // cursor. One page per guest call — what `read` returns from the cursor, the driver's pushed `items` (calendar) and the
 // deliveries the inbox holds for it (webhooks, a conversation's messages and the reports of messages the sync sent) — is
-// committed as ONE act statement on the sync's model (H4 `Sync` mode, judged by no grant, writing only the fields the
+// committed as ONE act statement on the sync's model (`Sync` mode, judged by no grant, writing only the fields the
 // page returned): its upserts by record id, its deletes, the `sys_sync` cursor by compare-and-set, the `sys_sync_row` id
 // map with each row's remote version and snapshot cycle, and the consumed deliveries. A remote row is its `$id` (else its
 // model key's values); the id map names its record, else a stored row with the same key is adopted, else a record id is

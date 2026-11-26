@@ -1,4 +1,4 @@
-// What a bundle needs from its host (plan 01): derived from the declarations at build and recorded in the manifest.
+// What a bundle needs from its host: derived from the declarations at build and recorded in the manifest.
 // Never config, never secrets. The check is the only gate: an unmet need refuses activation, naming it.
 import type { EngineManifest } from '../engine/manifest.ts';
 import { type Facilities, is_off } from '@norbital-ai/host-api';

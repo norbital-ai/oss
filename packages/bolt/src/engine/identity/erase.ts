@@ -1,7 +1,7 @@
 // Erasure. What identity owns: the build's erasable-field set and the admission of a model erase
 // (admin-only, never routed to approval, `locked` rules).
 // The remove/anonymise statement of a tenant model is the write compiler's generated delete/update without a
-// transform (38e(d)); it consults `judgeErase` first.
+// transform; it consults `judgeErase` first.
 import { Array as EffectArray, Effect, Predicate } from 'effect';
 import type { BoltError } from '../../protocol/errors.ts';
 import type { Json } from '../../decl/values.ts';
@@ -9,7 +9,7 @@ import type { Authority, Bindings, RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { evaluate } from '../query/eval.ts';
 import { catalog_of, toPred } from '../access/pred.ts';
-import { check_of } from '@norbital-ai/store'; // hook:write
+import { check_of } from '@norbital-ai/store';
 
 const LOGIC = new Set(['and', 'or', 'not']);
 /** Field names a `Where`-shaped literal reads (own fields only; relation arms are not own fields). */
@@ -27,7 +27,7 @@ function whereFields(w: unknown, out: Set<string>): void {
 		}
 }
 export function exprFields(e: unknown, out: Set<string>): void {
-	// hook:write — erase purges computed readers (38e(b))
+	// erase purges computed readers
 	if (EffectArray.isArray(e)) for (const x of e) exprFields(x, out);
 	else if (Predicate.isObject(e)) {
 		if (typeof e.field === 'string' && Object.keys(e).length === 1) out.add(e.field);
@@ -36,7 +36,7 @@ export function exprFields(e: unknown, out: Set<string>): void {
 }
 
 /**
- * 38e(d)3: a model's stored authored fields that are not a relationship key, a `state`, a `key`, a `unique` or
+ * A model's stored authored fields that are not a relationship key, a `state`, a `key`, a `unique` or
  * `no_overlap` field, and are read by no `check`, no roll-up (its summed field or its `where`), and no `computed` field
  * that one of those reads. `bolt check` prints this set.
  */
@@ -51,7 +51,7 @@ export function erasableFields(m: EngineManifest, model: string): string[] {
 	}
 	const read = new Set<string>();
 	for (const rule of Object.values(spec.locks ?? {})) whereFields(rule.where, read);
-	for (const c of Object.values(spec.check ?? {})) whereFields(check_of(c).where, read); // hook:write
+	for (const c of Object.values(spec.check ?? {})) whereFields(check_of(c).where, read);
 	// roll-ups elsewhere that read this model's rows: `sum.of = '<rel>.<field>'` and `count.of = '<rel>'` on a parent
 	for (const [parent, p] of Object.entries(m.models))
 		for (const k of Object.values(p.fields)) {

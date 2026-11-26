@@ -84,7 +84,7 @@ export const StudioFile = Schema.Union([
 export type StudioFile = typeof StudioFile.Type;
 /** One build log line: when, its level and its text. */
 export type StudioLogLine = { at: string; level: 'info' | 'warn' | 'error'; message: string };
-/** One diagnostic of the last build (`bolt build --json`'s `errors`); `severity` defaults to `error` (530). */
+/** One diagnostic of the last build (`bolt build --json`'s `errors`); `severity` defaults to `error`. */
 export type StudioDiagnostic = CheckDiagnostic & { severity?: 'error' | 'warn' };
 /**
  * A Version: every merge or rollback live ran, newest first, restorable. `rollback` deploys one again as a new

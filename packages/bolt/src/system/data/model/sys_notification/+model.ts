@@ -1,4 +1,4 @@
-// A notice (L-BOLT-354/356): one row per inbox member it reaches, or one per notice on another channel. `once`
+// A notice: one row per inbox member it reaches, or one per notice on another channel. `once`
 // dedupes (an `on conflict` arbiter). Its native writer queues delivery and push jobs in the same captured statement.
 // A member's inbox; effects and automations write notices through `ctx.notify`.
 // The built-in retention pass (`engine/runs/retention.ts`) deletes inbox rows read past their retention; unread ones stay.

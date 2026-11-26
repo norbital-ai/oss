@@ -1,4 +1,4 @@
-// The wire's Schemas (A.4): every body and live frame of `/__bolt/*`, the callables that are not a model's,
+// The wire's Schemas: every body and live frame of `/__bolt/*`, the callables that are not a model's,
 // the integration offers, the session and host-operation bodies, and `norbital.template.json`. A body is
 // decoded once where it enters (the host's request, the client's answer); every wire type is its Schema's own.
 import { Effect, Option, Schema, SchemaTransformation } from 'effect';

@@ -26,7 +26,7 @@ export type SeedRows = {
 	readonly [model: string]: readonly { readonly [field: string]: Json }[];
 };
 
-// hook:cli-kit — Bolt's root module, src or the published build (`bolt.ts`)
+// Bolt's root module, src or the published build (`bolt.ts`)
 const BOLT_INDEX = join(BOLT, `index${EXT}`);
 class SeedSourceError extends Schema.TaggedError<SeedSourceError>()('SeedSourceError', {
 	message: Schema.String,

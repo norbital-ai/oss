@@ -1,4 +1,4 @@
-// `bolt dev --host`'s in-process host (plan 01): one release served over a host file's facilities through this
+// `bolt dev --host`'s in-process host: one release served over a host file's facilities through this
 // release's own HOST_API: integration links, activation, deadline wakes and the cron clock. bolt-server makes the same
 // calls on a release's cell.
 import { Effect, FiberSet, Option, Result, Schema } from 'effect';

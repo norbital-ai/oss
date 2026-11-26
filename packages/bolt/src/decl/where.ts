@@ -1,4 +1,4 @@
-// The one predicate language (K3): reads, grants, `check`, ref `where`, triggers and live routing. A read compares
+// The one predicate language: reads, grants, `check`, ref `where`, triggers and live routing. A read compares
 // against values it is given: the time variables (`{ var: 'today' | 'now' }`) are edge spellings materialized before a
 // read (a page passes `bolt.clock(unit)`'s values, server code `ctx.today`).
 import type { Literal } from './fields.ts';
@@ -12,7 +12,6 @@ import type {
 	OneRels,
 	OneTarget,
 	PathModel,
-	PolicyName,
 	ReadField,
 	ReadRelation,
 	RelTarget,
@@ -33,10 +32,9 @@ export type Operand =
 				| 'actor.team_tree'
 				| 'actor.party'
 				| 'actor.visitor'
-				| 'actor.instance'
-				| `actor.scopes.${PolicyName}`;
+				| 'actor.instance';
 	  };
-/** Rule 11a caps: `and`/`or`/`not` and relation nesting together, and each list's items. */
+/** Caps: `and`/`or`/`not` and relation nesting together, and each list's items. */
 export const WHERE_MAX_DEPTH = 16,
 	WHERE_MAX_LIST = 1_000,
 	ORDER_MAX_KEYS = 4;
@@ -98,10 +96,9 @@ type DynOk<K> =
 	| (K extends { kind: 'ref' } ? { var: 'actor.party' } : never);
 type DynList<K, S> = S extends true
 	? never
-	: | (K extends { kind: 'ref' } ? { var: `actor.scopes.${PolicyName}` } : never)
-		| (K extends { kind: 'text'; format: 'team' }
-				? { var: 'actor.teams' | 'actor.team_tree' }
-				: never);
+	: K extends { kind: 'text'; format: 'team' }
+		? { var: 'actor.teams' | 'actor.team_tree' }
+		: never;
 interface ValOf<M, K, S> {
 	readonly value:
 		Literal<K> | Dyn<K, S> | ([M] extends [never] ? never : { field: SameFamily<M, K> });
@@ -214,7 +211,7 @@ type WhereOver<M, X, O = 'default'> = {
 // Conditional on the name: while a call is inferred, its literal is typed against the generic `Where<C>`, and expanding
 // that predicate for every nested literal of every call cost ~0.5 ms a read (G1 scale fixture). The `[C] extends
 // [infer D]` wrapper keeps the generic form's constraint from being `Where<constraint of C>`: under a template helper's
-// `C extends ReadableName` that is every model's predicate at once, 0.3 s a call (F28); `D` still distributes over
+// `C extends ReadableName` that is every model's predicate at once, 0.3 s a call; `D` still distributes over
 // a union of names. The applicability check that follows types the literal against the instantiated `Where<'orders'>`.
 // (A mapped index of every model's predicate was slower still.)
 /** A predicate over model `C` read as output `O`: only that output's fields and layers exist. */

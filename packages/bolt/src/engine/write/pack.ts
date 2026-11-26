@@ -202,7 +202,7 @@ export const read_pack = Effect.fn('Bolt.read_pack')(function* (dir: string) {
 });
 /** A pack load's step: `more` while steps remain; `loaded`, or `hadRows` when the database had rows and nothing changed. */
 /**
- * Rule 70: loads a pack only into a database with no workspace rows, in bounded steps (one unit of
+ * Loads a pack only into a database with no workspace rows, in bounded steps (one unit of
  * work each): identity first, then the restore of every model in relationship order (`restorer`'s steps).
  */
 export const packLoader = Effect.fn('Bolt.packLoader')(function* (

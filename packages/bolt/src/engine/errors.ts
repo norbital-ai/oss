@@ -1,4 +1,4 @@
-// Engine failures (D3). `BoltError` carries a literal `code`; a separate tag exists only where code branches
+// Engine failures. `BoltError` carries a literal `code`; a separate tag exists only where code branches
 // on it. `CODE` is the one table of each code's wire status and retry class; `is_transient` reads it.
 import { Match, Option, Schema } from 'effect';
 import { DbError, FACILITY_KINDS, Fenced } from '@norbital-ai/host-api';
@@ -67,7 +67,7 @@ const TRANSIENT_SQLSTATES: ReadonlySet<string> = new Set([
 const guestFacility = Schema.decodeUnknownOption(
 	Schema.Struct({ kind: Schema.Literals(FACILITY_KINDS) })
 );
-/** Rule 54: guest facility failures retain their kind across the isolate boundary. */
+/** Guest facility failures retain their kind across the isolate boundary. */
 export const is_transient = (e: EngineError): boolean =>
 	Match.valueTags(e, {
 		BoltError: (b) => {

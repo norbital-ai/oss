@@ -314,7 +314,7 @@ const ingestJob = (
 	});
 
 /**
- * `ConvertPort.ingest` over Norbital Convert's job routes (plan 12): a host constructs it from Convert's URL and key. A 415
+ * `ConvertPort.ingest` over Norbital Convert's job routes: a host constructs it from Convert's URL and key. A 415
  * answers `{ unsupported }`, and a converter with no transcription model rejects audio as `unavailable`. A password travels as
  * the `x-ingest-password` header, never the URL. The answer's `meta.stats` is the conversion's compute and audio's
  * `meta.usage` its model calls, which the host meters once per call id. The host must resolve a stored key to bytes first.

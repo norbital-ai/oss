@@ -168,7 +168,7 @@ export function navigation_model(boot: ShellBoot, path: string, t: Translate): N
 					}
 				]
 			: [])
-	]; // hook:agent-ui
+	];
 	const group = (key: string, label: string, children: NavItem[]): NavItem[] => {
 		const first = children[0];
 		return first === undefined ? [] : [{

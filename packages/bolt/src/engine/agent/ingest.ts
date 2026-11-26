@@ -1,4 +1,4 @@
-// Plan 12: every file the agent reads is one canonical form, sanitised HTML (one block element per line) and its images,
+// Every file the agent reads is one canonical form, sanitised HTML (one block element per line) and its images,
 // made by the host's ingest port (Norbital Convert, and the host's transcript of a scanned page): no reader here; audio is Convert's diarised
 // transcript, and a spreadsheet, CSV or JSON is `data` (typed cells, no HTML). An image is its own `<img>` and plain text
 // its own lines. This module routes a file, renders those two, derives a document's index and an audio transcript from

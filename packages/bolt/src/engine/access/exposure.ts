@@ -381,7 +381,7 @@ export const exposure = Effect.fn('bolt.exposure')(function* (
 			([key, r]): Effect.Effect<readonly (readonly [string, Relation])[], BoltError> => {
 				const [from, fk] = key.split('.');
 				if (from !== c || fk === undefined || !(readable(fk) || written.has(fk)))
-					return Effect.succeed([]); // hook:query (inverse)
+					return Effect.succeed([]);
 				return Effect.map(pickerWhere(r.where), (where) => [
 						[
 							fk,
@@ -403,7 +403,7 @@ export const exposure = Effect.fn('bolt.exposure')(function* (
 					const rel = path.startsWith(`${c}.`) ? path.slice(c.length + 1) : '';
 					return rel === '' || rel.includes('.') ? [] : [rel];
 				});
-		const many = layers.filter((rel) => manifestRelations(m).inverse.has(`${c}.${rel}`)); // hook:query
+		const many = layers.filter((rel) => manifestRelations(m).inverse.has(`${c}.${rel}`));
 		const children = Object.fromEntries(
 			Object.entries(m.relationships).flatMap(([key, relation]) =>
 				relation.inverse !== undefined &&
@@ -484,7 +484,7 @@ export const exposure = Effect.fn('bolt.exposure')(function* (
 			...(indexes.length > 0 ? { indexes: Object.fromEntries(indexes) } : {}),
 			...(relations.length === 0 ? {} : { relations: Object.fromEntries(relations) }),
 			...(layers.length === 0 ? {} : { layers }),
-			...(many.length === 0 ? {} : { many, children }), // hook:query (many)
+			...(many.length === 0 ? {} : { many, children }),
 			...Object.fromEntries(
 				writes.map((v) => {
 					const filled = v === 'create' ? spec.create?.filled : undefined;

@@ -123,7 +123,7 @@ export const everyCron = (every: string): string => {
 	const days = Math.min(31, Math.floor(hours / 24));
 	return days === 1 ? '0 0 * * *' : `0 0 */${days} * *`;
 };
-/** H6: each remote read's periodic run, fired by the host's clock in the workspace's zone as an automation's cron is. */
+/** Each remote read's periodic run, fired by the host's clock in the workspace's zone as an automation's cron is. */
 export const syncTriggers = (m: EngineManifest): readonly CronEntry[] =>
 	[...syncs_of(m).values()]
 		.filter((s) => s.read)

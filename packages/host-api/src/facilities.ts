@@ -1,4 +1,4 @@
-// The host's facilities (plan 01): a bundle records what it NEEDS; a host supplies five groups of facilities and the
+// The host's facilities: a bundle records what it NEEDS; a host supplies five groups of facilities and the
 // ports served around them. Every port is Promise + AbortSignal; a throw is a facility failure (`FacilityFailure`,
 // `Unavailable`), never a release's own class. Every key of `Facilities` is required: `satisfies Facilities` turns a
 // missing one into a type error, `off` is the only way to leave a member out, and `mail` has no `off`.
@@ -113,7 +113,7 @@ export type IngestOptions = {
 /**
  * The document converter behind `ctx.convert.document` (optional; absent → `unavailable`). `targets` is what this host
  * serves, checked at start against `workspace.convert.to`. `reference` is the bytes of a styling document (docx, pptx, odt).
- * `ingest` (plan 12) reads one file to `Ingested` for the agent's `read_file` and `ctx.convert.ingest`, or answers
+ * `ingest` reads one file to `Ingested` for the agent's `read_file` and `ctx.convert.ingest`, or answers
  * `unsupported` (the format has no parser: CAD); absent, neither ingests. A video container is heard from its audio
  * track; a converter without a transcription model rejects audio as `unavailable`.
  */
@@ -213,7 +213,7 @@ export function six_digits(): string {
 }
 /**
  * A local host's phone verifier: its own code, printed by `log` as `(sign-in code 123456)` (bolt dev, a local host,
- * tests). `fixed` is 38a(f)'s `123456`.
+ * tests). `fixed` is `123456`.
  */
 export function logged_phone(log: (line: string) => void, fixed = false): PhoneVerifier {
 	const codes = new Map<string, { code: string; until: number }>();
@@ -399,7 +399,7 @@ export type Facilities = {
 		readonly push: Optional<(database: HostTenantDb) => TransportPort>;
 		/** Bot protection for public sign-up; with none, the host refuses strangers (except a local host). */
 		readonly challenge: Optional<Challenge>;
-		/** `true` on a local host: every sign-in code is `123456` (38a(f)); a deployed host's are random. */
+		/** `true` on a local host: every sign-in code is `123456`; a deployed host's are random. */
 		readonly fixed_codes: boolean;
 	};
 	readonly intelligence: {

@@ -29,7 +29,7 @@ import { CommitAnswer, LOST_OUTCOME } from './result.ts';
 import { k, treeSelect, writeTree, type ReadVisibility } from './shared.ts';
 import { decideError, fingerprinting, type Fingerprint } from './sql.ts';
 
-/** Rule 13: the caller's read scope admits the row, as the act's own native read found it (an administrator reads all). */
+/** The caller's read scope admits the row, as the act's own native read found it (an administrator reads all). */
 export function readableBy(
 	auth: Authority,
 	c: string,

@@ -84,7 +84,7 @@ export const salesRep = policy({
 		},
 		notices: { outputs: { default: {} } },
 		sites: {
-			outputs: { summary: { where: { customer: { in: { var: 'actor.scopes.sales_rep' } } } } }
+			outputs: { summary: { where: { customer: { eq: { var: 'actor.party' } } } } }
 		},
 		sys_user: { outputs: { directory: { where: { team: { in: { var: 'actor.team_tree' } } } } } }
 	},

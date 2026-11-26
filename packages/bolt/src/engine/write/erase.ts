@@ -30,7 +30,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 	if (model === undefined || m.exposures[c] === undefined)
 		return yield* Effect.fail(BoltError.make('unknown_model', 'decode', `unknown model '${c}'`));
 	if (!auth.admin) return none(refused('forbidden', 'Only an administrator can erase.'));
-	// decode: `{ target }` removes, `{ target, set }` anonymises stored authored fields (X-24 shapes)
+	// decode: `{ target }` removes, `{ target, set }` anonymises stored authored fields
 	const input = r.input;
 	if (!Predicate.isObject(input) || Object.keys(input).some((x) => x !== 'target' && x !== 'set'))
 		return none(refused('invalid_input', 'erase takes { target } or { target, set }.'));
@@ -83,7 +83,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 		stored_.push(row);
 	}
 	const verdict = yield* judgeErase(m, auth, c, stored_, req, b);
-	if (!verdict.ok) return none({ kind: 'refused', code: verdict.code, message: verdict.message }); // hook:identity
+	if (!verdict.ok) return none({ kind: 'refused', code: verdict.code, message: verdict.message });
 	let writes: Write[], spec: NonNullable<Commit['erase']>;
 	if (req.mode === 'remove') {
 		writes = stored_.map((row) => ({
@@ -94,7 +94,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 		}));
 		spec = { mode: 'remove' };
 	} else {
-		// 38e(b): an authored vector the set names is nulled; a platform embedding whose sources it names goes
+		// an authored vector the set names is nulled; a platform embedding whose sources it names goes
 		const nulled = Object.fromEntries(
 			Object.keys(values)
 				.filter((x) => model.fields[x]?.kind === 'vector')
@@ -137,7 +137,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 		records: stored_.map((row) => ({ model: c, id: String(row['id']), revision: Number(row['revision']) + 1 }))
 	} satisfies Outcome;
 });
-/** The anonymised fields plus every computed field that reads one of them, transitively (38e(b)). */
+/** The anonymised fields plus every computed field that reads one of them, transitively. */
 function readers(
 	computed: {
 		readonly [name: string]: {
