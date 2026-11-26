@@ -8,7 +8,7 @@ import { ReleaseFacts } from './answers.ts';
 import type { HostTenantDb, RawDb } from './db.ts';
 import type { FilesPort, KeysPort } from './facilities.ts';
 import { HostApiFailure } from './failure.ts';
-import type { HostApi, WorkspaceBranch } from './host.ts';
+import type { HostApi, PackCapture, PackCursor, WorkspaceBranch } from './host.ts';
 import { InstanceAdmin } from './integrations.ts';
 import type { Release } from './ports.ts';
 import { branch_storage } from './storage.ts';
@@ -130,6 +130,28 @@ export const conformance = (input: {
 					(await api.frame_policy(release, '/', signal())).startsWith('frame-ancestors '),
 					'the frame policy is not a frame-ancestors directive'
 				)
+		},
+		{
+			name: 'captures what it restored, page by page, with the counts a reload must hold',
+			run: async () => {
+				const { branch } = await branched();
+				const captured: { [model: string]: number } = {};
+				let cursor: PackCursor | null = null;
+				do {
+					const page: PackCapture = await branch.packs.capture(cursor, signal());
+					captured[page.model] = (captured[page.model] ?? 0) + page.rows.length;
+					expect(
+						page.model !== 'sys_integration' || page.rows.some((row) => row['id'] === INSTANCE),
+						'the capture lacks the seeded instance'
+					);
+					cursor = page.next;
+				} while (cursor !== null);
+				const counts = await branch.packs.counts(signal());
+				expect(
+					Object.entries(counts).every(([model, count]) => captured[model] === count),
+					'the captured rows differ from the counts'
+				);
+			}
 		},
 		{
 			name: 'answers an unknown integration instance not_found',

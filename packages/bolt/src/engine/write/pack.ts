@@ -10,13 +10,14 @@ import { enqueue } from '../runs/queue.ts';
 import { CapturedResult, nativeCommit } from '../db/captured.ts';
 import { Chain } from './sql.ts';
 import type { Json } from '../../decl/values.ts';
-import { DbError, type PackStep, type Sql } from '@norbital-ai/host-api';
+import { DbError, type PackCapture, type PackCursor, type PackStep, type Sql } from '@norbital-ai/host-api';
 import type { RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { cyclic } from '../identity/graph.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { restorer, SYNC_SEED } from './seed.ts';
+import { storedField, storedRowSql } from '../db/stored.ts';
 import { jsonArray } from './shared.ts';
 export { SYNC_SEED };
 import { decodeConfiguration, definitionOf } from '../integrations/instances.ts';
@@ -364,3 +365,118 @@ export const load_pack = Effect.fn('Bolt.load_pack')(function* (
 ) {
 	return (yield* drain((yield* packLoader(db, m, pack, now)).step)) === 'loaded';
 });
+
+/** The models a capture reads, in load order: identity, then the workspace's own. */
+const captured_models = (m: EngineManifest): readonly string[] => [
+	...IDENTITY,
+	...Object.keys(m.models).filter((c) => !Object.hasOwn(SYSTEM.models, c))
+];
+const CAPTURE_PAGE = 500;
+const CapturedRows = Schema.fromJsonString(Schema.Array(RowSchema));
+const CapturedFiles = Schema.fromJsonString(
+	Schema.Array(
+		Schema.Struct({ id: Schema.String, name: Schema.String, mime: Schema.String, size: Schema.Int, sha256: Schema.String })
+	)
+);
+/**
+ * One page of a branch's rows as a pack holds them (`packLoader`'s inverse): teams, members and integration instances
+ * in their seeded columns, then every workspace model's stored fields. Roll-ups and computed fields are left to the
+ * database, and so is a row's revision; a `file` value names its bytes as the asset `assets/<sha256>/<name>` (a bank tree's own layout). `next` is the cursor of the page after it.
+ */
+export const capture_pack = Effect.fn('Bolt.capture_pack')(function* (
+	db: TenantDb,
+	m: EngineManifest,
+	cursor: PackCursor | null
+) {
+	const cat = catalog_of(m);
+	const models = captured_models(m);
+	const model = cursor?.model ?? models[0];
+	const info = model === undefined ? undefined : cat.models.get(model);
+	if (model === undefined || info === undefined || !models.includes(model))
+		return yield* BoltError.make('seed_decode', 'decode', `capture: unknown model '${String(model)}'`);
+	const identity = IDENTITY.find((i) => i === model);
+	const declared = m.models[model]?.fields ?? {};
+	const fields = [...info.fields.values()].filter((field) =>
+		identity === undefined
+			? field.computed !== true &&
+				!field.name.includes('.') &&
+				// history starts again with the reload, so every row is at its first revision
+				field.name !== 'revision' &&
+				declared[field.name]?.kind !== 'sum' &&
+				declared[field.name]?.kind !== 'count'
+			: IDENTITY_COLUMNS[identity].some((column) => column === field.name)
+	);
+	// ponytail: each page sorts the table by id text; a keyset on the native key if a workspace outgrows it
+	const stored = yield* db.value(CapturedRows, {
+		text: `SELECT COALESCE(jsonb_agg(r.j ORDER BY r.k), '[]'::jsonb)::text FROM (
+			SELECT ${storedRowSql(cat, model, 't')} AS j, t.id::text COLLATE "C" AS k FROM ${q(model)} t
+			WHERE ($1::text IS NULL OR t.id::text COLLATE "C" > $1)${model === 'sys_user' ? ` AND t.kind <> 'anonymous'` : ''}
+			ORDER BY k LIMIT ${CAPTURE_PAGE}) r`,
+		params: [cursor?.after ?? null]
+	});
+	const fileFields = fields.filter((field) => declared[field.name]?.kind === 'file');
+	const fileIds = (value: Json | undefined): readonly string[] =>
+		jsonArray(value)
+			? value.flatMap(fileIds)
+			: typeof value === 'object' && value !== null && typeof value['id'] === 'string'
+				? [value['id']]
+				: [];
+	const ids = [...new Set(stored.flatMap((row) => fileFields.flatMap((field) => fileIds(row[field.column]))))];
+	const files = new Map(
+		ids.length === 0
+			? []
+			: (yield* db.value(CapturedFiles, {
+					text: `SELECT COALESCE(jsonb_agg(jsonb_build_object('id', f.id, 'name', f.name, 'mime', f.mime, 'size', f.size, 'sha256', f.sha256)), '[]'::jsonb)::text
+						FROM sys_file f WHERE f.id IN (SELECT jsonb_array_elements_text($1::jsonb))`,
+					params: [JSON.stringify(ids)]
+				})).map((file) => [file.id, file] as const)
+	);
+	const assets = new Map<string, SeedAsset>();
+	const asset = (value: Json): Effect.Effect<Json, BoltError> => {
+		if (jsonArray(value)) return Effect.forEach(value, asset);
+		const [id] = fileIds(value);
+		if (id === undefined) return Effect.succeed(value);
+		const file = files.get(id);
+		if (file === undefined)
+			return Effect.fail(BoltError.make('seed_decode', 'decode', `capture ${model}: the file '${id}' has no sys_file row`));
+		const path = `assets/${file.sha256}/${file.name.replaceAll('/', '_')}`;
+		assets.set(path, { path, sha256: file.sha256, bytes: file.size, content_type: file.mime });
+		return Effect.succeed({ asset: path });
+	};
+	const rows = yield* Effect.forEach(stored, (row) =>
+		Effect.gen(function* () {
+			const out: Record<string, Json> = { id: row['id'] ?? null };
+			for (const field of fields) {
+				const value = storedField(field, row);
+				if (value === undefined || field.name === 'id') continue;
+				out[field.name] = value !== null && fileFields.includes(field) ? yield* asset(value) : value;
+			}
+			return out;
+		})
+	);
+	const last = rows.length === CAPTURE_PAGE ? stored.at(-1)?.['id'] : undefined;
+	const following = models[models.indexOf(model) + 1];
+	return {
+		model,
+		rows,
+		assets: [...assets.values()],
+		next:
+			typeof last === 'string'
+				? { model, after: last }
+				: following === undefined
+					? null
+					: { model: following, after: null }
+	} satisfies PackCapture;
+});
+const Counts = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Int));
+/** How many rows each captured model holds: what a reload of the capture must hold again. */
+export const count_captured = (db: TenantDb, m: EngineManifest) =>
+	db.value(Counts, {
+		text: `SELECT jsonb_object_agg(c, n)::text FROM (${captured_models(m)
+			.map(
+				(c) =>
+					`SELECT ${literal(c)}::text AS c, count(*)::int AS n FROM ${q(c)}${c === 'sys_user' ? ` WHERE kind <> 'anonymous'` : ''}`
+			)
+			.join(' UNION ALL ')}) t`,
+		params: []
+	});

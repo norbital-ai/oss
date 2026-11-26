@@ -5,7 +5,7 @@
 // are first restored into a scratch database as the host restores them: a seed the host would refuse mid-restore fails
 // before anything is sent, so the environment stays as it was.
 import { createHash } from 'node:crypto';
-import { Clock, Effect, FileSystem, Schema } from 'effect';
+import { Clock, Effect, FileSystem, Schedule, Schema } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { sign_op } from '@norbital-ai/host-api/node';
 import { Files, TenantDb, type EngineManifest } from '@norbital-ai/bolt/engine';
@@ -108,7 +108,8 @@ export const pushSeed = Effect.fn('bolt.pushSeed')(function* (
 				tenant: target.tenant,
 				sha256: asset.sha256,
 				bytes: Buffer.from(seeding.bytes(asset.path)).toString('base64')
-			}),
+				// the host stores an asset under its digest, so a put its object store failed is simply sent again
+			}).pipe(Effect.retry({ times: 3, schedule: Schedule.exponential('1 second') })),
 		{ concurrency: 4, discard: true }
 	);
 	return yield* call(target, 'seed', {

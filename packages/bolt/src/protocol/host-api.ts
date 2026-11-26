@@ -129,6 +129,8 @@ import { destructiveSteps, fingerprint, read_applied, schema_slice, SchemaSliceS
 import { apply_migrations } from '../engine/schema/migrations.ts';
 import { carry_migrations } from '../engine/schema/carry.ts';
 import {
+	capture_pack,
+	count_captured,
 	decode_identity,
 	IDENTITY,
 	memory_source,
@@ -636,7 +638,9 @@ const branch = Effect.fn('bolt.hostApi.branch')(function* (ports: BranchPorts) {
 								: BoltError.make('seed_decode', 'decode', String(cause))
 					}).pipe(Effect.flatMap(loader(at, files))),
 					signal
-				)
+				),
+			capture: (cursor, { signal }) => run(capture_pack(db, m, cursor), signal),
+			counts: ({ signal }) => run(count_captured(db, m), signal)
 		},
 		identity: {
 			capture: ({ signal }) => run(captureIdentity(db), signal),

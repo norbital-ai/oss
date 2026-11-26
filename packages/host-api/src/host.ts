@@ -352,6 +352,16 @@ export type SeedAsset = {
 	readonly bytes: number;
 	readonly content_type: string;
 };
+/** Where a capture's next page starts: a model and the last id read of it (`null`: its first row). */
+export const PackCursor = Schema.Struct({ model: Schema.String, after: Schema.NullOr(Schema.String) });
+export type PackCursor = typeof PackCursor.Type;
+/** One page of a capture: rows of one model as a pack holds them, the assets their files name, and the next page. */
+export type PackCapture = {
+	readonly model: string;
+	readonly rows: readonly { readonly [field: string]: Json }[];
+	readonly assets: readonly SeedAsset[];
+	readonly next: PackCursor | null;
+};
 /** One pack-load step's answer: `more` to enter again, `loaded`, or `hadRows` (the branch had rows; nothing changed). */
 export const PackStep = Schema.Literals(['more', 'loaded', 'hadRows']);
 export type PackStep = typeof PackStep.Type;
@@ -394,6 +404,13 @@ export type WorkspaceBranch = {
 				readonly files: FilesPort;
 			}
 		): Promise<PackLoad>;
+		/**
+		 * The branch's teams, members, integration instances and workspace rows as `restore` takes them, a page at a
+		 * time from `cursor` (`null`: the start) until `next` is `null`. A file is the asset `assets/<sha256>/<name>`; its bytes stay the host's.
+		 */
+		capture(cursor: PackCursor | null, options: Signal): Promise<PackCapture>;
+		/** Rows per captured model: equal after a `restore` of the whole capture. */
+		counts(options: Signal): Promise<{ readonly [model: string]: number }>;
 	};
 	readonly identity: {
 		founder(address: string, options: Signal & { readonly at: string }): Promise<FounderAnswer>;
