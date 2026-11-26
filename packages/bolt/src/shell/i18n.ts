@@ -1070,6 +1070,17 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	Instructions: '工作指示',
 	'Smart message handling': '智能消息处理',
 	'Back to envoys': '返回使者列表',
+	Teams: '团队',
+	'A team holds the policies its members act under. A parent scopes data and lends no policy.':
+		'团队持有其成员行事所依据的策略。上级团队只限定数据范围，不授予策略。',
+	'Parent team': '上级团队',
+	'No parent': '无上级团队',
+	'New team': '新建团队',
+	'Create team': '创建团队',
+	'Delete team': '删除团队',
+	'Back to teams': '返回团队列表',
+	'A team that a member, an invitation, an API key or another team still names cannot be deleted.':
+		'仍被成员、邀请、API 密钥或其他团队引用的团队无法删除。',
 	'Back to connections': '返回连接列表',
 	'Delete connection': '删除连接',
 	'Activity and account details': '活动与账户详情',

@@ -31,6 +31,7 @@
 	import { SYSTEM_UI, type SystemUiIntent } from '../../protocol/system-ui.ts';
 	import DetailSheet from '../DetailSheet.svelte';
 	import Integrations from '../integration/Integrations.svelte';
+	import Teams from './Teams.svelte';
 	import SystemPage from '../SystemPage.svelte';
 	import organizationBanner from '../assets/banners/organization.jpg';
 	import integrationsBanner from '../assets/banners/integrations.jpg';
@@ -438,6 +439,7 @@
 				</dl>
 			</div>
 		{/snippet}
+		{#snippet teamsTab()}<Teams {ctx} {bolt} {t} settings={s} reload={load} />{/snippet}
 		{#snippet billingTab()}
 			{#if workspace.billing !== undefined}
 				{@const embedded = `${workspace.billing}${workspace.billing.includes('?') ? '&' : '?'}embed=1`}
@@ -725,7 +727,8 @@
 				...(assistant !== null
 					? [{ name: 'assistant', title: t('Assistant'), icon: 'concept:agents', body: assistantTab, keep_alive: true as const }]
 					: []),
-				{ name: 'retention', title: t('Data retention'), icon: 'lucide:history', body: retentionTab, keep_alive: true }
+				{ name: 'retention', title: t('Data retention'), icon: 'lucide:history', body: retentionTab, keep_alive: true },
+				{ name: 'teams', title: t('Teams'), icon: 'lucide:users', body: teamsTab }
 			]}
 		/>
 	{:else if tab === 'integrations'}

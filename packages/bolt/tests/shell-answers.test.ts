@@ -168,7 +168,7 @@ const settings = {
 			last_seen: null
 		}
 	],
-	teams: [{ id: 'ops', name: 'Ops' }],
+	teams: [{ id: 'ops', name: 'Ops', parent: null, policies: [] }],
 	invitations: [
 		{
 			id: 'i1',

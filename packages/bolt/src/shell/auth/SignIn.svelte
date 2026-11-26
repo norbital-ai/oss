@@ -31,7 +31,7 @@
 	} = $props();
 
 	const methods = observe_once(() => api.methods());
-	// An old host, or a failed methods read, still signs in by email.
+	// Until the methods are read, and if the read fails, sign-in is by email.
 	const byEmail = $derived(methods.current?.email ?? true);
 	const byPhone = $derived(methods.current?.phone ?? false);
 	// svelte-ignore state_referenced_locally

@@ -283,6 +283,9 @@ it('organization settings are one tab per concern, each saving only its own', as
 			t: (x: string) => x
 		}
 	});
+	const previous = { width: window.innerWidth, height: window.innerHeight };
+	// every organization tab in the strip, none under More
+	await page.viewport(1200, 900);
 	try {
 		await expect.element(page.getByRole('tab', { name: 'Workspace' })).toHaveAttribute('aria-selected', 'true');
 		expect(page.getByRole('button', { name: 'Save', exact: true }).elements()).toHaveLength(0);
@@ -297,6 +300,7 @@ it('organization settings are one tab per concern, each saving only its own', as
 			{ name: 'set_retention', input: { every_days: 1, hour: 3, notifications_days: 30, runs_days: 60 } }
 		]);
 	} finally {
+		await page.viewport(previous.width, previous.height);
 		await unmount(view);
 		await runtime.runPromise(Scope.close(scope, Exit.void));
 		await dispose();

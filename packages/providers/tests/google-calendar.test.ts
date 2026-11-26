@@ -1141,7 +1141,7 @@ describe('the Google Calendar call', () => {
 		() =>
 			Effect.gen(function* () {
 				const refreshes: URLSearchParams[] = [];
-				const legacy = { access: 'old-access', refresh: 'old-refresh', exp: NOW - 1 };
+				const sealed = { access: 'old-access', refresh: 'old-refresh', exp: NOW - 1, scope: READ };
 				const f = yield* fixture(
 					[
 						(call) => {
@@ -1152,7 +1152,7 @@ describe('the Google Calendar call', () => {
 						(call) =>
 							call.url.includes('/events?') ? json({ items: [], nextSyncToken: 's1' }) : undefined
 					],
-					{ token: legacy }
+					{ token: sealed }
 				);
 				expect(f.h.status).toMatchObject({
 					state: 'connected',

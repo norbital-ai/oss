@@ -272,7 +272,7 @@ describe('source edits on the panel', () => {
 		);
 		expect(stepView('task', { action: 'read', task_id: 'c' }).verb).toBe('Checked a subagent');
 		expect(stepView('task', { action: 'stop', task_id: 'c' }).verb).toBe('Stopped a subagent');
-		expect(stepView('read', { $runs: { limit: 5 }, sys_audit_log: {} }).target).toBe(
+		expect(stepView('read', { request: { $runs: { limit: 5 }, sys_audit_log: {} } }).target).toBe(
 			'runs, sys audit log'
 		);
 	});

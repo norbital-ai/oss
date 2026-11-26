@@ -207,13 +207,9 @@ export const callableWords = (callable: string) => {
 		? `Run ${handle_words(act)}`
 		: `${humanise(act || scope)} ${act ? handle_words(scope) : ''}`.trim();
 };
-/** A read's keys with their options: `request`, or a transcript from before it, `reads` or its keys themselves. */
+/** A read's keys with their options. */
 export const readsOf = (a: Args): readonly (readonly [string, unknown])[] =>
-	a['request'] !== undefined
-		? Object.entries(obj(a['request']))
-		: Arr.isArray(a['reads'])
-			? a['reads'].map((one: unknown) => [str(obj(one)['of']), one] as const)
-			: Object.entries(a);
+	Object.entries(obj(a['request']));
 /** A draft JSON pointer path without its leading slash. */
 const draftPath = (path: string) => path.replace(/^\//, '');
 const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {

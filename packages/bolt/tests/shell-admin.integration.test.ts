@@ -8,6 +8,7 @@ import { shell_api } from '../src/shell/runtime.ts';
 import { founder_bootstrap } from '../src/engine/identity/session.ts';
 import { HostIdentity } from '../src/engine/services.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import type { Json } from '../src/decl/values.ts';
 import { teams_sql } from './support/teams.ts';
 
 const TEAMS = { sales: { name: 'Sales', policies: ['rep'] } };
@@ -293,6 +294,44 @@ layer(workspace)('shell administration', (it) => {
 				expect((yield* boot(rep)).nav).toEqual([]);
 				expect((yield* op(admin, 'assign_team', { id, team: teamId })).status).toBe(200);
 				expect((yield* boot(rep)).nav.map((node) => node.name)).toEqual(['sales']);
+			})
+	);
+
+	it.effect(
+		'an administrator lists teams, creates one and changes its policies; a member is refused the write',
+		() =>
+			Effect.gen(function* () {
+				const t = yield* TestWorkspace;
+				const teams = settings(admin).pipe(Effect.map((s) => s.teams));
+				expect(yield* teams).toContainEqual({
+					id: teamId,
+					name: 'Sales',
+					parent: null,
+					policies: ['rep']
+				});
+				const boss = yield* t.as(yield* t.sign_in('boss@acme.example'));
+				// the generic acts, as the Teams form sends them
+				const create: Readonly<Record<string, Json>> = {
+					'sys_team.create': [{ name: 'Field', parent: teamId, policies: [] }]
+				};
+				const [made] = (yield* boss.act(create)).records;
+				if (made === undefined) throw new Error('expected one team');
+				const update: Readonly<Record<string, Json>> = {
+					'sys_team.update': [
+						{ target: { id: made.id, revision: made.revision }, set: { policies: ['rep'] } }
+					]
+				};
+				yield* boss.act(update);
+				expect(yield* teams).toContainEqual({
+					id: made.id,
+					name: 'Field',
+					parent: teamId,
+					policies: ['rep']
+				});
+				const member = yield* t.as(yield* t.sign_in('rep@acme.example'));
+				const refused = yield* Effect.exit(member.act({ 'sys_team.create': [{ name: 'Mine' }] }));
+				expect(refused._tag).toBe('Failure');
+				expect((yield* teams).map((team) => team.name)).not.toContain('Mine');
 			})
 	);
 });

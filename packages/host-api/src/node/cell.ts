@@ -37,7 +37,7 @@ const CellApi = Schema.Struct({
 });
 const decodeApi = Schema.decodeUnknownSync(CellApi);
 const decodeVersion = Schema.decodeUnknownOption(Schema.Struct({ version: Schema.Number }));
-/** Reads a cell's declared `HOST_API` version before decoding the full contract struct, enabling versioned adapters. */
+/** A cell's declared `HOST_API` version, read before its api is decoded, so a host refuses another version by number. */
 export const cell_version = (decoded: unknown): number | undefined => {
 	const result = decodeVersion(decoded);
 	return result._tag === 'Some' ? result.value.version : undefined;

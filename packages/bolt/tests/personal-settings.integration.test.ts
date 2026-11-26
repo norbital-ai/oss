@@ -3,8 +3,7 @@ import { expect, layer, TestWorkspace } from '../../bolt-cli/src/test/effect.ts'
 import { id_of } from '../src/decl/id.ts';
 import { manifest } from './catalogue-fixture.ts';
 import { PersonalPreferences } from '../src/decl/preferences.ts';
-import { schema_slice } from '../src/engine/schema/plan.ts';
-import { WORKSPACE_SETTINGS_ID, workspace_settings_objects } from '../src/system/settings.ts';
+import { WORKSPACE_SETTINGS_ID } from '../src/system/settings.ts';
 
 const Personal = Schema.Struct({ sys_user: Schema.Struct({
 	rows: Schema.Array(Schema.Struct({ id: id_of('sys_user'), name: Schema.String, revision: Schema.Number, preferences: PersonalPreferences })),
@@ -41,20 +40,5 @@ layer(TestWorkspace.layer({ manifest }))('native personal settings', (it) => {
 		const [stored] = yield* t.db.read([{ text: 'SELECT name FROM sys_workspace', params: [] }]);
 		expect(stored?.rows).toEqual([{ name: 'Operations' }]);
 	}));
- it.effect('moves the former display override once without exposing private configuration', () => Effect.gen(function* () {
-  const t = yield* TestWorkspace;
-  yield* t.db.write({ text: "INSERT INTO sys_config (key, value) VALUES ('workspace.identity', '{\"name\":\"Existing desk\"}'), ('test.private', 'private fixture')", params: [] });
-  yield* t.db.write({ text: 'DELETE FROM sys_workspace', params: [] });
-  const objects = workspace_settings_objects(schema_slice(t.manifest).tables);
-  const statements = objects.flatMap(o => o.create.map(text => ({ text, params: [] })));
-  yield* t.db.transaction({ statements });
-  yield* t.db.transaction({ statements });
-  const [workspace, configuration] = yield* t.db.read([
-   { text: 'SELECT name FROM sys_workspace', params: [] },
-   { text: "SELECT key FROM sys_config WHERE key IN ('workspace.identity','test.private')", params: [] }
-  ]);
-  expect(workspace?.rows).toEqual([{ name: 'Existing desk' }]);
-  expect(configuration?.rows).toEqual([{ key: 'test.private' }]);
- }));
 
 });

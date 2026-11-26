@@ -303,7 +303,16 @@ export const ShellBootAnswer: Schema.Decoder<ShellBoot> = Schema.Struct({
 });
 export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 	members: Schema.Array(Member),
-	teams: Schema.mutable(Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String }))),
+	teams: Schema.mutable(
+		Schema.Array(
+			Schema.Struct({
+				id: Schema.String,
+				name: Schema.String,
+				parent: Schema.NullOr(Schema.String),
+				policies: Strings
+			})
+		)
+	),
 	invitations: Schema.Array(InvitationRow),
 	keys: Schema.Array(KeyRow),
 	policies: Schema.mutable(Strings),

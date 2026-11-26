@@ -125,12 +125,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 				: Effect.succeed(configured);
 		});
 	const stored = yield* hostCall('read calendar credentials', () => ctx.credentials.load());
-	const decodedToken = Option.getOrNull(Schema.decodeUnknownOption(Tokens)(stored.get('token')));
-	// a sign-in sealed before its scopes were recorded asked only to read
-	let tokens =
-		decodedToken === null || decodedToken.scope !== undefined
-			? decodedToken
-			: { ...decodedToken, scope: READ };
+	let tokens = Option.getOrNull(Schema.decodeUnknownOption(Tokens)(stored.get('token')));
 	const writable = () => tokens?.scope?.split(' ').includes(WRITE) === true;
 	const connected = (): LinkStatus => ({
 		state: 'connected',

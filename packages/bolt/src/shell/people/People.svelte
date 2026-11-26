@@ -1,4 +1,4 @@
-<!-- The command center's People: administrators manage members and invitations; teams, policies and approval routes belong to source. -->
+<!-- The command center's People: administrators manage members and invitations; teams are edited in Settings, policies and approval routes belong to source. -->
 <script lang="ts">
 	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import { Effect, Option, Schema } from 'effect';

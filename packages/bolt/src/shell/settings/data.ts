@@ -59,7 +59,8 @@ const decode = <A>(schema: Schema.Decoder<A>, rows: unknown) =>
 	);
 export type Settings = {
 	members: readonly Member[];
-	teams: { id: string; name: string }[];
+	/** Every team as an administrator keeps it: its parent scopes data, its policies are what its members hold. */
+	teams: { id: string; name: string; parent: string | null; policies: readonly string[] }[];
 	invitations: readonly InvitationRow[];
 	keys: readonly KeyRow[];
 	policies: string[];
@@ -203,7 +204,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 	return {
 		members: yield* decode(Member, users?.rows ?? []),
 		teams: Object.entries(graph.teams)
-			.map(([id, team]) => ({ id, name: team.name }))
+			.map(([id, team]) => ({ id, ...team }))
 			.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
 		invitations: yield* decode(InvitationRow, invitations?.rows ?? []),
 		keys: yield* decode(KeyRow, keys?.rows ?? []),
