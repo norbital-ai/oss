@@ -25,7 +25,8 @@ export {
 	EngineManifest,
 	decode_manifest,
 	decode_projected_manifest,
-	project_manifest
+	project_manifest,
+	stateField
 } from './manifest.ts';
 export type { GrantData } from './manifest.ts';
 export type { Json } from '../decl/values.ts';

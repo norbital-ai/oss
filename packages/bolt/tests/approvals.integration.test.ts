@@ -4,7 +4,8 @@ import { Effect, Layer, Option, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, EngineActor } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { compile_authority } from '../src/engine/access/authority.ts';
+import { APPROVAL, compile_authority } from '../src/engine/access/authority.ts';
+import { Authorities } from '../src/engine/identity/actor.ts';
 import { prune_history } from '../src/engine/query/history.ts';
 import { Approvals, Callables } from '../src/engine/services.ts';
 import { Files } from '../src/engine/ports.ts';
@@ -99,6 +100,7 @@ const manifest: EngineManifest = {
 				}
 			}
 		},
+		bystander: { description: 'Reads no expense', grants: { approval_request: { outputs: { default: {} } } } },
 		reviewer: {
 			description: 'Reviews',
 			grants: {
@@ -107,7 +109,12 @@ const manifest: EngineManifest = {
 			}
 		}
 	},
-	teams: { requesters: { policies: ['requester'] }, managers: { policies: ['reviewer'] }, finance: { policies: ['reviewer'] } }
+	teams: {
+		requesters: { policies: ['requester'] },
+		managers: { policies: ['reviewer'] },
+		finance: { policies: ['reviewer'] },
+		auditors: { policies: ['bystander'] }
+	}
 };
 const source = `const managerStep = (ids) => ({
 	name: 'Manager',
@@ -337,6 +344,44 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				kind: 'decided',
 				status: 'Approved'
 			});
+		})
+	);
+	it.effect('an open request grants its approvers the read of the record it holds, and no more', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const auditId = '0199a000-0000-7000-8000-000000000009';
+			yield* f.t.db.write({
+				text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Auditor','staff','auditors') ON CONFLICT (id) DO NOTHING",
+				params: [auditId]
+			});
+			const other = (yield* f.act('create', [{ name: 'Not theirs', amount: 5, manager: managerId }])).outcome;
+			const submitted = (yield* f.act('create', [
+				{ name: 'Named approver', amount: 50, manager: auditId }
+			])).outcome;
+			if (submitted.kind !== 'pending_approval' || other.kind !== 'pending_approval')
+				throw new Error('Missing approval');
+			const authorities = new Authorities(manifest, 'test');
+			const auditor = () =>
+				authorities.member(f.t.db, 'bootstrap', auditId).pipe(
+					Effect.flatMap((a) => (a === null ? Effect.die(new Error('no member')) : Effect.succeed(a)))
+				);
+			const held = (request: string) =>
+				f.t.db.value(Schema.String, {
+					text: 'SELECT record FROM bolt_approvals WHERE id=$1::uuid',
+					params: [request]
+				});
+			// the auditors' policy reads no expense: the held one is theirs to read through the request alone
+			const arms = (yield* auditor()).models['expenses']?.read['default']?.['expenses'] ?? [];
+			expect(arms.map((arm) => arm.policy)).toEqual([APPROVAL]);
+			const scope = JSON.stringify(arms.map((arm) => arm.where));
+			expect(scope).toContain(yield* held(submitted.request_id));
+			expect(scope).not.toContain(yield* held(other.request_id));
+			expect(yield* f.decide(submitted.request_id, 'approve', yield* auditor())).toMatchObject({
+				kind: 'decided',
+				status: 'Approved'
+			});
+			// once the request closes, so does the read
+			expect((yield* auditor()).models['expenses']).toBeUndefined();
 		})
 	);
 	it.effect('rejecting requested changes immediately restores the checkpoint', () =>

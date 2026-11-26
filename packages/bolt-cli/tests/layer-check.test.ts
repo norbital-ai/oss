@@ -234,4 +234,68 @@ describe('layer maps at compile time (bolt check)', () => {
 			'access/layer rep: orders: an update grant, but orders declares no update'
 		]);
 	});
+	it('refuses a grant that cannot work: an undeclared move, a blind write, a create missing a required field', () => {
+		const tickets: EngineManifest['exposures'][string] = {
+			outputs: { default: { tickets: { fields: 'all' } } },
+			create: { columns: { tickets: ['title', 'note'] } },
+			update: { columns: { tickets: ['note'] } },
+			delete: {}
+		};
+		const models: EngineManifest['models'] = {
+			...base.models,
+			tickets: {
+				description: 'A ticket',
+				record_label: 'record.title',
+				fields: {
+					title: { kind: 'text' },
+					note: { kind: 'text', optional: true },
+					status: { kind: 'state', initial: 'open', states: { open: { to: ['done'] }, done: {} } }
+				}
+			}
+		};
+		expect(
+			checkRules(
+				{
+					...base,
+					models,
+					exposures: { tickets },
+					teams: { alone: { policies: ['blind'] }, both: { policies: ['blind', 'sound'] } },
+				policies: {
+					blind: {
+						description: 'Blind',
+						grants: {
+							tickets: {
+								create: { columns: { tickets: ['note'] } },
+								update: { moves: { status: ['open->done', 'done->open'], stage: ['a->b'] } },
+								delete: {}
+							}
+						}
+					},
+					sound: {
+						description: 'Sound',
+						grants: {
+							tickets: {
+								outputs: { default: {} },
+								create: { columns: { tickets: ['title'] } },
+								update: { moves: { status: ['open->done'] } }
+							}
+						}
+					}
+					}
+				},
+				{ automations: [] },
+				(_role, name) => name
+			)
+				.filter((f) => /^access\/(move|blind-write|create-required)$/.test(f.code))
+				.map((f) => `${f.code} ${f.message}`)
+		).toEqual([
+			"access/move blind: tickets: moves.status lists 'done->open', which tickets does not declare",
+			"access/move blind: tickets: moves names 'stage', which is not tickets's state field",
+			"access/create-required blind: tickets: create leaves out 'title', which tickets requires; every create would be refused",
+			'access/blind-write alone: update of tickets is granted, but no policy that grants it reads tickets; the write reaches no row',
+			'access/blind-write alone: delete of tickets is granted, but no policy that grants it reads tickets; the write reaches no row',
+			// the second policy reads and updates, so the pair reaches rows to update; neither that deletes reads
+			'access/blind-write both: delete of tickets is granted, but no policy that grants it reads tickets; the write reaches no row'
+		]);
+	});
 });

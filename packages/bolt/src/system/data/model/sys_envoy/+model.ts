@@ -17,7 +17,7 @@ export default bind_system_model('sys_envoy')({
 		/** The supplementary prompt added to the workspace agent's brief for this envoy's turns. */
 		task: { kind: 'text', format: 'markdown', default: '' },
 		/** Policy handles declared in source; the envoy's whole authority. */
-		policies: { kind: 'text', many: true, default: [] },
+		policies: { kind: 'text', format: 'policy', many: true, default: [] },
 		group_messages: {
 			kind: 'enum',
 			values: ['disabled', 'mention_or_reply', 'all'],

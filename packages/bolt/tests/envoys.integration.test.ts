@@ -518,6 +518,17 @@ layer(
 			});
 		})
 	);
+	it.effect('an envoy cannot be saved holding a policy the workspace does not declare', () =>
+		Effect.gen(function* () {
+			const { t } = yield* setup;
+			const refused = yield* Effect.flip(
+				(yield* t.as(t.admin)).act({
+					'sys_envoy.create': [{ name: 'Typo desk', policies: ['desk', 'dsek'] }]
+				})
+			);
+			expect(String(refused.message)).toContain("'dsek' is not a policy declared in source");
+		})
+	);
 	it.effect('a tenant-created envoy queues its answer until its new channel is paired', () =>
 		Effect.gen(function* () {
 			const { t, rows, paused, steps } = yield* setup;

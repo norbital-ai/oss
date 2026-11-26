@@ -4,7 +4,8 @@ import { bindingsAt } from '../query/reader.ts';
 import { memberTeams } from './teams.ts';
 import { sql } from '../db/sql.ts';
 import type { SourceTeam } from '../../decl/access/team.ts';
-import { compile_authority, type Holder } from '../access/authority.ts';
+import { compile_authority, withHeld, type Holder } from '../access/authority.ts';
+import { open_sql } from '../approvals/sql.ts';
 import type { Authority, EngineActor } from '../contracts.ts';
 import { teams, type EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
@@ -49,6 +50,10 @@ type TeamGraph = {
 };
 export class Authorities {
 	private readonly cache = new Map<string, Authority>();
+	private readonly holds = new Map<
+		string,
+		{ records: readonly { readonly collection: string; readonly id: string }[]; stamp: number; at: number }
+	>();
 	/** With `remember`: each active member's row, and the identity writes when it was read. */
 	private readonly rows = new Map<
 		string,
@@ -218,7 +223,42 @@ export class Authorities {
 					},
 					`${preview ? 'preview' : 'member'}:${u.id}:${u.revision}${u.granted_teams === undefined ? '' : ':' + JSON.stringify(direct)}`
 				);
-				return u.granted_on === undefined ? compiled : { ...compiled, membershipDay: u.granted_on };
+				const member = u.granted_on === undefined ? compiled : { ...compiled, membershipDay: u.granted_on };
+				return member.admin ? member : yield* withHeld(this.m, member, yield* this.held(db, u.id, direct));
+			}.bind(this)
+		);
+	}
+	/**
+	 * The records of the open approval requests this member may decide: in a team or among the users of any step, or
+	 * in a superseding team, and not the requester. Remembered while nothing this generation wrote could have changed it.
+	 */
+	private held(db: TenantDb, id: string, direct: readonly string[]) {
+		return Effect.gen(
+			function* (this: Authorities) {
+				const now = yield* Clock.currentTimeMillis,
+					stamp = db.writes(),
+					key = `${id}:${direct.join(',')}`,
+					hit = this.holds.get(key);
+				if (hit !== undefined && hit.stamp === stamp && now - hit.at < SESSION_MEMO_MS) return hit.records;
+				const records = yield* db.rows(
+					Schema.Struct({ collection: Schema.String, id: Schema.String }),
+					sql(
+						`SELECT DISTINCT r ->> 'collection' AS collection, r ->> 'id' AS id
+						 FROM bolt_approvals a CROSS JOIN LATERAL jsonb_array_elements(a.records) r
+						 WHERE ${open_sql('a.state')} AND a.requestor <> $1 AND a.requestor_user IS DISTINCT FROM $2
+						 AND (a.route -> 'superseded_by' ?| ARRAY(SELECT jsonb_array_elements_text($3::jsonb)) OR EXISTS (
+							SELECT 1 FROM jsonb_array_elements(a.route -> 'steps') s
+							WHERE s -> 'teams' ?| ARRAY(SELECT jsonb_array_elements_text($3::jsonb)) OR s -> 'users' ? $2))
+						 ORDER BY 1, 2 LIMIT 2000`,
+						`member:${id}`, id, JSON.stringify(direct)
+					)
+				);
+				this.holds.set(key, { records, stamp, at: now });
+				if (this.holds.size > this.max) {
+					const oldest = this.holds.keys().next();
+					if (!oldest.done) this.holds.delete(oldest.value);
+				}
+				return records;
 			}.bind(this)
 		);
 	}

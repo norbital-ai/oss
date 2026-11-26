@@ -41,7 +41,7 @@ type FileSize = `${bigint}KiB` | `${bigint}MiB` | `${bigint}GiB` | `${bigint}KB`
  * How a text field is shown and edited: `cel` is a CEL expression, a wrapped code editor; `team` holds a team handle
  * declared in source (`+team.ts`), refused on write when undeclared.
  */
-type TextFormat = 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel' | 'team';
+type TextFormat = 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel' | 'team' | 'policy';
 /** The unit a time field is picked in and snapped to (its start; weeks from Monday); the ui's pickers render it. */
 export type {
 	DatePrecision,

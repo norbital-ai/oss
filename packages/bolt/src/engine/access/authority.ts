@@ -90,6 +90,33 @@ const readArms = Effect.fnUntraced(function* (
 	}
 	return out;
 });
+/** The policy name of the read an open approval request grants its approvers. */
+export const APPROVAL = '$approval';
+/**
+ * `base` plus what an open approval request grants whoever may decide it: the `default` output of each record it
+ * holds, read only. One more arm in the union a read is; the member's own grants stand beside it. Its key names the
+ * held set, so nothing remembered for another set answers for this one.
+ */
+export const withHeld = Effect.fnUntraced(function* (
+	m: EngineManifest,
+	base: Authority,
+	held: readonly { readonly collection: string; readonly id: string }[]
+): Effect.fn.Return<Authority, BoltError> {
+	if (base.admin || held.length === 0) return base;
+	const ids = new Map<string, string[]>();
+	for (const { collection, id } of held) ids.set(collection, [...(ids.get(collection) ?? []), id]);
+	const models: { [model: string]: Authority['models'][string] } = { ...base.models };
+	for (const [c, of] of ids) {
+		if (!outputsOf(m, c).includes(DEFAULT_OUTPUT)) continue;
+		const arms = yield* readArms(m, c, DEFAULT_OUTPUT, APPROVAL, { scopes: { [c]: { id: { in: of } } } });
+		const was = models[c] ?? emptyModel();
+		const paths: { [path: string]: readonly Arm[] } = { ...was.read[DEFAULT_OUTPUT] };
+		for (const [path, arm] of Object.entries(arms)) paths[path] = [...(paths[path] ?? []), arm];
+		models[c] = { ...was, read: { ...was.read, [DEFAULT_OUTPUT]: paths } };
+	}
+	const set = held.map(({ collection, id }) => `${collection}:${id}`).sort().join(',');
+	return { ...base, key: `${base.key}+held:${set}`, models };
+});
 /** A create or update arm: the columns it admits per write path (default: every column `c` declares) and its `check`. */
 function writeArm(
 	m: EngineManifest,

@@ -488,8 +488,10 @@ describe('engine/identity: remembered member rows', () => {
 		Effect.gen(function* () {
 			let reads = 0;
 			const db = TenantDb.typed({
-				read: () =>
+				read: ([statement]) =>
 					Effect.sync(() => {
+						// the open approval requests naming the member: none
+						if (statement?.text.includes('bolt_approvals')) return [{ rows: [], affected: 0 }];
 						reads++;
 						const user = { id: 'u1', email: null, phone: null, kind: 'staff', active: true, admin: false,
 							team: null, party: null, signup: false, revision: 1 };

@@ -5,7 +5,7 @@
 // origins, and an automation holding a policy scoped by `actor.*`. The source checks are `source.ts`'s. Each finding
 // names the declaring file.
 import { Array, Predicate, Result } from 'effect';
-import { LIMITS, size_bytes } from '@norbital-ai/bolt/engine';
+import { LIMITS, size_bytes, stateField } from '@norbital-ai/bolt/engine';
 import type { EngineManifest, GrantData } from '@norbital-ai/bolt/engine';
 import {
 	FieldsSchema,
@@ -557,6 +557,66 @@ function layerRules({ m, at }: RuleContext): void {
 		}
 }
 
+/**
+ * The models a holder of `policies` may update or delete but never reach: a write targets only the rows read by a
+ * policy that itself grants the verb, so a holder whose granting policies read no output of the model reaches none.
+ */
+const blindWrites = (m: EngineManifest, policies: readonly string[]): readonly string[] => {
+	const out: string[] = [];
+	const grants = policies.flatMap((p) => Object.entries(m.policies[p]?.grants ?? {}));
+	for (const model of new Set(grants.map(([c]) => c)))
+		for (const verb of ['update', 'delete'] as const) {
+			const granting = grants.filter(([c, g]) => c === model && g[verb] !== undefined);
+			if (granting.length > 0 && granting.every(([, g]) => grantedOutputs(g).length === 0))
+				out.push(`${verb} of ${model} is granted, but no policy that grants it reads ${model}; the write reaches no row`);
+		}
+	return out;
+};
+
+/**
+ * A grant that cannot work: a state move the model does not declare, and a create whose admitted fields leave out one
+ * the model requires.
+ */
+function grantRules({ m, at }: RuleContext): void {
+	for (const [p, spec] of Object.entries(m.policies))
+		for (const [c, g] of Object.entries(spec.grants)) {
+			const declared = m.exposures[c] ?? SYSTEM.exposures[c];
+			if (declared === undefined) continue;
+			const moves = g.update?.moves;
+			const state = stateField(m, c);
+			if (moves !== undefined && moves !== 'all')
+				for (const [field, edges] of Object.entries(moves)) {
+					if (state?.name !== field) {
+						at('access/move', 'policy', p, `${c}: moves names '${field}', which is not ${c}'s state field`);
+						continue;
+					}
+					for (const edge of edges) {
+						const [from = '', to = ''] = edge.split('->');
+						if (!(state.spec.states[from]?.to ?? []).includes(to))
+							at('access/move', 'policy', p, `${c}: moves.${field} lists '${edge}', which ${c} does not declare`);
+					}
+				}
+			const admitted = grantColumns(g.create, c);
+			if (admitted === undefined) continue;
+			const filled = declared.create?.filled?.[c] ?? [];
+			for (const col of declared.create?.columns[c] ?? []) {
+				if (admitted.includes(col) || filled.includes(col)) continue;
+				const field = (m.models[c] ?? SYSTEM.models[c])?.fields[col];
+				const rel = m.relationships[`${c}.${col}`];
+				const required =
+					rel !== undefined
+						? rel.optional !== true && rel.default === undefined
+						: field !== undefined && field.kind !== 'state' && field.optional !== true && field.default === undefined;
+				if (required)
+					at('access/create-required', 'policy', p, `${c}: create leaves out '${col}', which ${c} requires; every create would be refused`);
+			}
+		}
+	for (const [team, spec] of Object.entries(m.teams))
+		for (const message of blindWrites(m, spec.policies)) at('access/blind-write', 'team', team, message);
+	for (const [name, a] of Object.entries(m.automations))
+		for (const message of blindWrites(m, a.policies)) at('access/blind-write', 'automation', name, message);
+}
+
 /** Rule 38: a rate admits at least one request per window. */
 const validRate = (rate: string): boolean => {
 	const parsed = Result.try(() => {
@@ -886,6 +946,7 @@ const RULES = [
 	workspaceRules,
 	modelRules,
 	layerRules,
+	grantRules,
 	automationRules,
 	policyRules,
 	visitorRules,
