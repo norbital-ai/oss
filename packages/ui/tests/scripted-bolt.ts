@@ -206,6 +206,7 @@ export async function scriptedBolt(script: Script) {
 			Client,
 			create_bolt({
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'https://fixture.test',
 				fetch,

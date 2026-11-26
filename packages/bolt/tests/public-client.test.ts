@@ -15,6 +15,7 @@ import { renderPublicPage } from '../src/shell/public/server.ts';
 const boot: PublicBoot = {
 	workspace: { name: 'Public fixture', locale: 'en-SG', tz: 'Asia/Singapore' },
 	actor: null,
+	policies: [],
 	location: { pathname: '/app/portal/book', search: '?slot=morning' },
 	base: '/fixture',
 	visitor: { app: 'portal' },
@@ -114,6 +115,7 @@ it.effect(
 					organization: true
 				},
 				actor: null,
+				policies: [],
 				name: null,
 				admin: false,
 				preview: null,
@@ -163,6 +165,7 @@ it.effect('seeds the hydrated query with its native decimal before the stream an
 		const client = yield* create_bolt({
 			operation_outputs: boot.operation_outputs,
 			actor: boot.actor,
+			policies: boot.policies,
 			locale: boot.workspace.locale,
 			initial_read: (read) => props.reads[public_read_key(read)]
 		});

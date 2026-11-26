@@ -109,6 +109,7 @@ describe('codec: $bolt reads hand pages real values', () => {
 				operation_outputs: { automations: {} },
 				base: 'https://workspace.test',
 				actor: null,
+				policies: [],
 				locale: 'en',
 				fetch,
 				open_stream: () => ({ onmessage: null, onerror: null, close() {} })

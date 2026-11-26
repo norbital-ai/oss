@@ -19,6 +19,7 @@ it.effect('a stalled describe fails visibly and aborts; a retry succeeds', () =>
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			fetch,
@@ -47,6 +48,7 @@ it.effect('describe bounds a stalled response body as well as fetch', () =>
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			fetch,
@@ -68,6 +70,7 @@ it.effect('the describe deadline never aborts a mutating act', () =>
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			fetch,

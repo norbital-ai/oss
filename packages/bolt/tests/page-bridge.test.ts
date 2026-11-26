@@ -218,6 +218,7 @@ effect_it.effect('a fleet snapshot exposes an awaited refresh bridge and removes
 			const bolt = yield* create_bolt({
 				operation_outputs: { automations: {} },
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'https://workspace.test',
 				fetch: async () => Response.json({ answers: [{ jobs: { count } }] }),

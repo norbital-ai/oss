@@ -630,6 +630,7 @@ export function shell_bolt(
 			},
 			base: base(),
 			actor: boot.actor,
+			policies: boot.policies,
 			locale: options.locale ?? boot.workspace.locale,
 			tz: boot.workspace.tz,
 			catalog: boot.catalog,

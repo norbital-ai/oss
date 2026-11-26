@@ -61,6 +61,7 @@ const client = (answer: (url: string, body: unknown) => Response) =>
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			fetch,
@@ -68,6 +69,19 @@ const client = (answer: (url: string, body: unknown) => Response) =>
 		});
 		return { sent, bolt };
 	});
+it.effect('a page reads the policies its actor holds', () =>
+	Effect.gen(function* () {
+		const bolt = yield* create_bolt({
+			operation_outputs: { automations: {} },
+			actor: null,
+			policies: ['sales'],
+			locale: 'en',
+			base: 'https://workspace.test',
+			fetch: () => Promise.reject(new Error('unused'))
+		});
+		expect(bolt.policies).toEqual(['sales']);
+	})
+);
 const outcome = (answer: unknown) => () => Response.json({ outcome: answer, v: 0 });
 
 describe('reads', () => {
@@ -108,6 +122,7 @@ describe('reads', () => {
 			const offline = yield* create_bolt({
 				operation_outputs: { automations: {} },
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'https://workspace.test',
 				fetch: async () => {
@@ -131,6 +146,7 @@ describe('reads', () => {
 			const bolt = yield* create_bolt({
 				operation_outputs: { automations: {} },
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'https://workspace.test',
 				fetch: async () => {
@@ -190,6 +206,7 @@ describe('reads', () => {
 			const bolt = yield* create_bolt({
 				operation_outputs: { automations: {} },
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'https://workspace.test',
 				fetch: async () => {
@@ -245,6 +262,7 @@ describe('reads', () => {
 			const bolt = yield* create_bolt({
 				operation_outputs: { automations: {} },
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'https://workspace.test',
 				fetch: async (url) => {
@@ -311,6 +329,7 @@ describe('reads', () => {
 			const bolt = yield* create_bolt({
 				operation_outputs: { automations: {} },
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'https://workspace.test',
 				fetch,
@@ -445,6 +464,7 @@ describe('acts, starts, uploads and the session', () => {
 			const offline = yield* create_bolt({
 				operation_outputs: { automations: {} },
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'https://workspace.test',
 				uuid: () => 'k9',
@@ -457,6 +477,7 @@ describe('acts, starts, uploads and the session', () => {
 			);
 			const done = yield* create_bolt({
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'https://workspace.test',
 				operation_outputs: {
@@ -746,6 +767,7 @@ it.effect(
 			const bolt = yield* create_bolt({
 				operation_outputs: { automations: {} },
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'https://workspace.test',
 				fetch: async (_url, init) => {

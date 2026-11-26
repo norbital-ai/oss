@@ -249,6 +249,7 @@ export type ShellMeta = typeof ShellMetaAnswer.Type;
 export const ShellBootAnswer: Schema.Decoder<ShellBoot> = Schema.Struct({
 	workspace: ShellWorkspace,
 	actor: Schema.NullOr(EngineActorSchema),
+	policies: Schema.Array(Schema.String),
 	name: NullableString,
 	admin: Schema.Boolean,
 	preview: Schema.NullOr(

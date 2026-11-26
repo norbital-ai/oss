@@ -83,6 +83,7 @@ const publicServerContext = (boot: PublicBoot, now: string, lookup: Lookup) => {
 		restore: { preview: unavailable, run: unavailable },
 		session: { send_code: unavailable, verify: unavailable },
 		actor: boot.actor,
+		policies: boot.policies,
 		locale: boot.workspace.locale,
 		t: (key, vars) => message_text(boot.messages, key, vars)
 	};

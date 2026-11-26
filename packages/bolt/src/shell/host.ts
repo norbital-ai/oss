@@ -339,6 +339,7 @@ const bootFor = (
 		return {
 			workspace,
 			actor: authority.actor,
+			policies: authority.policies,
 			name: null,
 			admin: authority.admin,
 			preview: null,

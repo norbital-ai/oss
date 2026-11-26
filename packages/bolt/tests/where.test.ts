@@ -438,6 +438,7 @@ describe('bolt.decode in the browser', () => {
 			Effect.gen(function* () {
 				const bolt = yield* create_bolt({
 					actor: null,
+					policies: [],
 					locale: 'en',
 					operation_outputs: { automations: {} },
 					catalog: yield* exposure(manifest, rep),

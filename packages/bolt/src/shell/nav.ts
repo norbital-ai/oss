@@ -182,6 +182,8 @@ export type ShellBoot = {
 		usage?: true;
 	};
 	actor: EngineActor | null;
+	/** The policies the actor holds. */
+	policies: readonly string[];
 	name: string | null;
 	admin: boolean;
 	/** The member or team being previewed and the administrator previewing. */

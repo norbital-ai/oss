@@ -44,6 +44,7 @@ async function show(
 			{
 				workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
 				actor: null,
+				policies: [],
 				name: null,
 				admin: true,
 				preview: null,

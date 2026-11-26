@@ -76,6 +76,7 @@ it.live('compiles a public component and renders its caller query in the isolate
 		const boot: PublicBoot = {
 			workspace: { name: 'Site', locale: 'en', tz: 'UTC' },
 			actor: null,
+			policies: [],
 			location: { pathname: '/app/site/home', search: '' },
 			base: '',
 			visitor: null,

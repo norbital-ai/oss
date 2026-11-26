@@ -1121,6 +1121,7 @@ const client = Effect.fn('Test.client')(function* (config: Partial<BoltConfig> =
 	};
 	const bolt = yield* create_bolt({
 		actor: null,
+		policies: [],
 		locale: 'en',
 		base: 'http://localhost',
 		fetch,

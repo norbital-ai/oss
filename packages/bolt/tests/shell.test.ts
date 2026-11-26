@@ -902,6 +902,7 @@ describe('preview environments drop the meta tools', () => {
 			{
 				workspace: { name: 'Acme', locale: 'en', tz: 'UTC', live: 'https://acme.example' },
 				actor: auth.actor,
+				policies: auth.policies,
 				name: 'Ada',
 				admin: true,
 				preview: null,
@@ -1195,6 +1196,7 @@ describe('sidebar model', () => {
 	const bootOf = (auth: Authority, studio = false) => ({
 		workspace: { name: 'Acme', locale: 'en', tz: 'UTC' },
 		actor: auth.actor,
+		policies: auth.policies,
 		name: 'Ada',
 		admin: auth.admin,
 		preview: null,

@@ -95,6 +95,7 @@ export const hydrate_public_page = (
 					};
 		const pageClient = yield* create_bolt({
 			actor: props.boot.actor,
+			policies: props.boot.policies,
 			locale: props.boot.workspace.locale,
 			tz: props.boot.workspace.tz,
 			messages: props.boot.messages,

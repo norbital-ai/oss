@@ -1017,6 +1017,7 @@ it.effect(
 						value: {
 							workspace: { name: 'Acme', locale: 'en', tz: 'UTC' },
 							actor: null,
+							policies: [],
 							name: null,
 							admin: false,
 							preview: null,

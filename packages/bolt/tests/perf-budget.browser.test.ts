@@ -58,6 +58,7 @@ const boot: ShellBoot = {
 		admin: true,
 		party: null
 	},
+	policies: [],
 	name: 'Ada',
 	admin: true,
 	preview: null,

@@ -37,6 +37,7 @@ it.effect('a read request supplies the row revision an update sends as its targe
 			operation_outputs: { automations: {} },
 			base: 'https://workspace.test',
 			actor: null,
+			policies: [],
 			locale: 'en',
 			fetch
 		});
@@ -81,6 +82,7 @@ it.effect(
 				operation_outputs: { automations: {} },
 				base: 'https://workspace.test',
 				actor: null,
+				policies: [],
 				locale: 'en',
 				fetch
 			});

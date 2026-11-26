@@ -121,6 +121,7 @@ const withPanel = async (
 					const fetch = fake(host);
 					const bolt = yield* create_bolt({
 						actor: null,
+						policies: [],
 						operation_outputs: { automations: {} },
 						locale: 'en',
 						base: location.origin,

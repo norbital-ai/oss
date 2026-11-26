@@ -9,6 +9,7 @@ describe('page contexts', () => {
 			const boot = {
 				workspace: { name: 'Fixture', locale: 'ms', tz: 'UTC' },
 				actor: null,
+				policies: [],
 				name: null,
 				admin: false,
 				preview: null,

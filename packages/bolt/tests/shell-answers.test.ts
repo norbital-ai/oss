@@ -34,6 +34,7 @@ const boot = {
 		admin: true,
 		party: { model: 'customer', id: 'c1' }
 	},
+	policies: [],
 	name: 'Ann',
 	admin: true,
 	preview: { team: 'ops', name: 'Operations', by: 'u2' },

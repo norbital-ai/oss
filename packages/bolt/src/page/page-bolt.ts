@@ -6,7 +6,7 @@
 import type { Effect } from 'effect';
 import type { FileUrlOptions } from '@norbital-ai/store/kind';
 import type { Actor } from '../decl/access/actor.ts';
-import type { AutomationName } from '../decl/names.ts';
+import type { AutomationName, PolicyName } from '../decl/names.ts';
 import type { AutomationSpecOf } from '../decl/runtime/names.ts';
 import type { StartOutput } from '../decl/runtime/facilities.ts';
 import type { SyncControlInput } from '../decl/runtime/sync.ts';
@@ -228,4 +228,6 @@ export interface PageBolt {
 	};
 	/** Who the page runs as; `null` before a visitor page has one. */
 	actor: Actor | null;
+	/** The policies the actor holds: what a page checks to show or hide what a policy grants. */
+	policies: readonly PolicyName[];
 }

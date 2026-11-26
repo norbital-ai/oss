@@ -137,6 +137,7 @@ const cellOf = (m: EngineManifest, source: string) =>
 			const created = yield* create_bolt({
 				operation_outputs: { automations: {} },
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'http://cell',
 				fetch,

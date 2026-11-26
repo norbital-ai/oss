@@ -62,6 +62,7 @@ it.live(
 			const boot: ShellBoot = {
 				workspace: { name: 'HQ', locale: 'en', tz: 'UTC' },
 				actor: null,
+				policies: [],
 				name: null,
 				admin: false,
 				preview: null,

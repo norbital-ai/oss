@@ -108,6 +108,8 @@ declare global {
 export type BoltConfig = {
 	/** Native shape; source identity admission establishes the actor's declared names in this release. */
 	actor: EngineActor | null;
+	/** The policies the actor holds. */
+	policies: readonly string[];
 	/** The declared results of the automations this caller may start; every committed answer decodes against them. */
 	operation_outputs: OperationOutputs;
 	locale: string;
@@ -1548,6 +1550,7 @@ export const create_bolt = (config: BoltConfig) =>
 					)
 			},
 			actor,
+			policies: config.policies,
 			locale: config.locale,
 			t: (key: string, vars?: Readonly<Record<string, string | number>>) =>
 				message_text(config.messages, key, vars),

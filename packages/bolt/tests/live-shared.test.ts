@@ -237,6 +237,7 @@ const browser = Effect.fn('Test.browser')(function* (
 		yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 		const bolt = yield* create_bolt({
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base,
 			fetch,

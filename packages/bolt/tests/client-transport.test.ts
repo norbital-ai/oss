@@ -53,6 +53,7 @@ it.effect('a fake HttpClient sees the act contract/key headers and reads revive 
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			http_client,
@@ -92,6 +93,7 @@ it.effect(
 			const bolt = yield* create_bolt({
 				operation_outputs: { automations: {} },
 				actor: null,
+				policies: [],
 				locale: 'en',
 				base: 'https://workspace.test',
 				http_client,
@@ -127,6 +129,7 @@ it.effect('snapshot refresh waits until a mounted reader consumes its new answer
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			live: 'snapshot',
@@ -156,6 +159,7 @@ it.effect('snapshot refresh surfaces a refused read instead of retaining stale s
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			live: 'snapshot',
@@ -247,7 +251,8 @@ it.effect('a running reply is the act answer, carrying its run id', () =>
 	Effect.gen(function* () {
 		const fetch: typeof globalThis.fetch = async () =>
 			Response.json({ outcome: { kind: 'running', run: 'r1' }, v: 0 }, { status: 202 });
-		const bolt = yield* create_bolt({ operation_outputs: { automations: {} }, base: 'https://workspace.test', actor: null, locale: 'en', fetch });
+		const bolt = yield* create_bolt({ operation_outputs: { automations: {} }, base: 'https://workspace.test', actor: null,
+		policies: [], locale: 'en', fetch });
 		expect(yield* bolt.act({ 'jobs.create': [{ title: 'slow' }] })).toEqual({ kind: 'running', run: 'r1' });
 		expect(status_of({ kind: 'running', run: 'r1' })).toBe(202);
 	})

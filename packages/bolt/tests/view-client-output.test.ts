@@ -25,6 +25,7 @@ it.effect('a model view reads the output the catalog gives the caller', () =>
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			http_client

@@ -26,12 +26,14 @@ it.effect('describe exists only with AI, streams progress steps over SSE, and re
 			return sse(events);
 		};
 		expect(
-			(yield* create_bolt({ operation_outputs: { automations: {} }, actor: null, locale: 'en', base: 'https://workspace.test', fetch }))
+			(yield* create_bolt({ operation_outputs: { automations: {} }, actor: null,
+		policies: [], locale: 'en', base: 'https://workspace.test', fetch }))
 				.describe
 		).toBeUndefined();
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			fetch,
@@ -98,6 +100,7 @@ it.effect('options returns the catalogue the builder renders', () =>
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			fetch

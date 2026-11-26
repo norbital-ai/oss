@@ -125,6 +125,7 @@ it.each(['secret', 'key', 'mcp', 'integration'] as const)(
 				{
 					workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
 					actor: null,
+					policies: [],
 					name: null,
 					admin: true,
 					preview: null,
@@ -228,6 +229,7 @@ it('organization settings are one tab per concern, each saving only its own', as
 			{
 				workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
 				actor: null,
+				policies: [],
 				name: null,
 				admin: true,
 				preview: null,
@@ -311,6 +313,7 @@ it('the Assistant tab sets what system agents may read and spend, and saves it w
 			{
 				workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
 				actor: null,
+				policies: [],
 				name: null,
 				admin: true,
 				preview: null,
@@ -429,6 +432,7 @@ it('an invitation request opens the native invitation dialog without sending an 
 		shell_bolt({
 			workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
 			actor: null,
+			policies: [],
 			name: null,
 			admin: true,
 			preview: null,
@@ -522,6 +526,7 @@ it("the members table names each member's team by its label, never its handle", 
 			{
 				workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
 				actor: null,
+				policies: [],
 				name: null,
 				admin: true,
 				preview: null,
@@ -619,6 +624,7 @@ it('deleting a connection is guarded by the revision the settings read', async (
 			{
 				workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
 				actor: null,
+				policies: [],
 				name: null,
 				admin: true,
 				preview: null,
@@ -706,6 +712,7 @@ it("a definition's configuration tab receives the page context", async () => {
 			{
 				workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
 				actor: null,
+				policies: [],
 				name: null,
 				admin: true,
 				preview: null,

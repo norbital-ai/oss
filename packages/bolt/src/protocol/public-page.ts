@@ -123,6 +123,7 @@ export const PublicBoot = Schema.Struct({
 		currency: optionalString
 	}),
 	actor: Schema.NullOr(EngineActorSchema),
+	policies: Schema.Array(Schema.String),
 	location: Schema.Struct({ pathname: Schema.String, search: Schema.String }),
 	base: Schema.String,
 	visitor: Schema.NullOr(Schema.Struct({ app: Schema.String, site_key: optionalString })),
@@ -177,6 +178,7 @@ export const toPublicBoot = (
 			...(options.currency === undefined ? {} : { currency: options.currency })
 		},
 		actor: boot.actor,
+		policies: boot.policies,
 		location: options.location,
 		base: options.base,
 		visitor: boot.visitor,

@@ -232,6 +232,7 @@ const withComposer = async (
 					const fetch = fixture(preview);
 					const client = yield* create_bolt({
 						actor: null,
+						policies: [],
 						operation_outputs: { automations: {} },
 						locale: 'en',
 						base: location.origin,

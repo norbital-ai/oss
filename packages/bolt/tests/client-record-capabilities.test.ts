@@ -29,6 +29,7 @@ it.effect('loads and validates the native current-row capability projection', ()
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			fetch
@@ -60,6 +61,7 @@ it.effect('an unreadable record is null; malformed and refused capabilities fail
 		const bolt = yield* create_bolt({
 			operation_outputs: { automations: {} },
 			actor: null,
+			policies: [],
 			locale: 'en',
 			base: 'https://workspace.test',
 			fetch
