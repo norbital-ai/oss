@@ -13,6 +13,7 @@ import {
 	parse_cron,
 	parse_rate,
 	DRIVERS,
+	allows_personal,
 	driver_of,
 	SYSTEM
 } from '@norbital-ai/bolt/tooling';
@@ -693,6 +694,16 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 			if (dot < 1 || entry === undefined || entry.with === 'file' || entry.read !== true)
 				at('access/sync', 'policy', p, `'${key}' is not a remote read sync (model.sync_name)`);
 		}
+		for (const integration of spec.capabilities?.personal_connections ?? []) {
+			const def = definition(m, integration);
+			if (def === undefined || !allows_personal(def))
+				at(
+					'access/personal-connection',
+					'policy',
+					p,
+					`'${integration}' is not a personal-capable integration`
+				);
+		}
 		for (const [key, v] of Object.entries(m.workspace.limits?.[p] ?? {})) {
 			// a rate admits at least one request per window
 			for (const x of list(v)) {
@@ -825,6 +836,8 @@ function integrationRules({ m, at }: RuleContext): void {
 			declared.set(d.driver.name, (declared.get(d.driver.name) ?? new Set()).add(canonical(driver_of(d))));
 	for (const [name, d] of Object.entries(m.integrations)) {
 		const bad = (code: string, message: string) => at(`integration/${code}`, 'integration_definition', name, message);
+		if ((d.scope === 'personal' || d.scope === 'both') && driver_of(d).personal !== true)
+			bad('scope', `scope: '${d.scope}' requires a driver that supports personal accounts`);
 		if (typeof d.driver !== 'string') {
 			const { name: driver, ...contract } = d.driver;
 			if (Object.hasOwn(DRIVERS, driver))

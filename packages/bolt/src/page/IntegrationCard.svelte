@@ -1,105 +1,172 @@
 <!--
-	One connection as one card: the provider's mark and name, ONE status line (Not connected → Pairing → Connected as … /
-	Needs attention), and one set of actions, each drawn once. The card owns the lifecycle: Connect (makes the instance when
-	there is none and, for a provider that pairs at once — a QR, a code, a sign-in — starts pairing in the same click),
-	Try again after an error, Cancel while pairing, Disconnect once connected (asked in-app: it logs the provider out and
-	deletes the credentials while retaining the durable account). While pairing the setup opens beneath the card (the QR or code
-	with its expiry and a fresh one on request, the sign-in, a form's own Connect); once connected Manage opens the details
-	(Test, Import start, Reconnect). Settings presents configuration and messages alongside the same card, without another overlay.
+	@component One connection as a plugin-style card driven by the shared connection FSM:
+	icon + title + status badge (Not yet installed → Not connected → Connecting/Pairing → Connected / Disconnected / Error)
+	+ concise description + a single primary CTA whose label and action follow the current state, plus a Manage/Settings
+	action for installed records. Pairing and management open cleanly in a Sheet (or inline inside Settings detail tabs)
+	so raw provider forms never spill onto the main card grid.
 -->
 <script lang="ts">
 	import { Effect } from 'effect';
-	import type { ComponentProps } from 'svelte';
+	import type { ComponentProps, Snippet } from 'svelte';
 	import { fork } from '@norbital-ai/ui/effect';
-	import { Button, confirm_action, Icon } from '@norbital-ai/ui';
-	import { Stack } from '@norbital-ai/ui/layout';
+	import { watch } from '@norbital-ai/ui/behaviors';
+	import { Button, confirm_action, Icon, Sheet } from '@norbital-ai/ui';
+	import { Cluster, Inline, Stack, Surface } from '@norbital-ai/ui/layout';
 	import type { Json } from '../decl/values.ts';
-	import type { ImportStartInput, InstanceState, InstanceStatus, ProviderChoice } from '@norbital-ai/host-api';
+	import type { InstanceState, InstanceStatus, ProviderChoice } from '@norbital-ai/host-api';
 	import IntegrationSetup from './IntegrationSetup.svelte';
 	import Setup from '../shell/integration/Setup.svelte';
-	import ImportStart from '../shell/integration/ImportStart.svelte';
-	import { importStartDraft, importStartLabel, validImportStart } from '../shell/integration/import-start.ts';
+	import { importStartLabel } from '../shell/integration/import-start.ts';
 	import type { IntegrationClient } from './integrations.ts';
 	import {
+		decodeStoredStatus,
+		resolveConnectionState,
+		type ConnectionAction,
+		type ConnectionTone
+	} from './connection-fsm.ts';
+	import { SHELL_ZH } from '../shell/i18n.ts';
+	import {
+		driverIcon,
 		driverLabel,
-		pairsAtOnce,
 		releaseSignIn,
 		reserveSignIn,
 		sayOf,
-		statusLabel,
-		type IntegrationSetupProps,
-		type IntegrationSetupEntry
+		type IntegrationSetupEntry,
+		type IntegrationSetupProps
 	} from '../shell/integration/setup.ts';
 
 	let {
 		driver,
-		description,
-		providers,
+		name,
+		icon,
+		description = '',
+		providers = [],
+		providers_ready = true,
 		instance,
 		client,
 		create,
-		t,
-		locale,
+		on_delete,
+		on_resume,
+		on_manage,
+		manage,
+		meta,
+		presentation = 'sheet',
+		t: customT,
+		locale = 'en',
 		setup,
-		on_state_change
+		on_state_change,
+		readonly = false
 	}: {
+		/** The integration definition's driver: its brand name and icon are the card's defaults. */
 		driver: string;
-		/** The definition's own description, shown when the provider has none. */
-		description: string;
-		/** What this host offers for it, in its order of preference. */
-		providers: readonly ProviderChoice[];
-		/** The instance this connector stands for, with its row's durable `status`; `null` before the first Connect. */
+		/** Card title; defaults to the primary provider or driver brand name. */
+		name?: string | undefined;
+		/** Iconify icon name; defaults to the primary provider's or driver's icon. */
+		icon?: string | undefined;
+		/** Short description shown on the card when no provider description overrides it. */
+		description?: string;
+		/** What this host offers for this definition, in its order of preference. */
+		providers?: readonly ProviderChoice[];
+		/** Set `false` while `integration_offers()` is loading so cards never flash unavailable. */
+		providers_ready?: boolean;
+		/** Durable `sys_integration` row; `null` when not yet installed. */
 		instance: {
 			readonly id: string;
 			readonly status: Json | null;
 			readonly active?: boolean;
 		} | null;
+		/** The installed instance's client, by its id: setup, pairing and health go through it. */
 		client: (instance: string) => IntegrationClient;
-		/** Makes the instance and answers its id. */
-		create: () => Effect.Effect<string, { readonly message: string }>;
-		t: (key: string) => string;
-		locale: string;
+		/** Creates the `sys_integration` record and returns its id (`null` when delegated to an external sheet). */
+		create?: (() => Effect.Effect<string | null, { readonly message: string }>) | undefined;
+		/** Deletes the `sys_integration` record (`Uninstall`), returning the card to `Not yet installed`. */
+		on_delete?: (() => Effect.Effect<void, { readonly message: string }>) | undefined;
+		/** Resumes a paused instance (`active: true`). */
+		on_resume?: (() => Effect.Effect<void, { readonly message: string }>) | undefined;
+		/** Custom Manage handler (e.g. opening Settings' multi-tab management view). */
+		on_manage?: (() => void) | undefined;
+		/** Optional extra configuration UI rendered inside the Manage Sheet (`close` closes the card's Sheet cleanly). */
+		manage?: Snippet<[{ close: () => void }]> | undefined;
+		/** Optional metadata strip rendered inside the card body (e.g. envoy audience & policies). */
+		meta?: Snippet | undefined;
+		/** Where setup and management open: `'sheet'` (default) or `'inline'`. */
+		presentation?: 'sheet' | 'inline';
+		/** Translator for the card's own strings; defaults to Bolt's built-in strings in `locale`. */
+		t?: ((key: string) => string) | undefined;
+		/** The viewer's locale (`en` by default), read when no `t` is given. */
+		locale?: string;
+		/** The definition's own setup component and its props, shown in place of the built-in setup. */
 		setup?: IntegrationSetupEntry | undefined;
+		/** Called as the connection's state moves (see `IntegrationSetup`). */
 		on_state_change?: ComponentProps<typeof IntegrationSetup>['on_state_change'];
+		/** Disables mutating CTA actions for read-only viewers. */
+		readonly?: boolean;
 	} = $props();
 
+	const t = $derived(
+		customT ?? ((key: string) => (locale.toLowerCase().startsWith('zh') ? (SHELL_ZH[key] ?? key) : key))
+	);
+
+	const BADGE_CLASS: { readonly [tone in ConnectionTone]: string } = {
+		neutral: 'border-tone-neutral-border bg-tone-neutral-bg text-tone-neutral-text',
+		info: 'border-tone-info-border bg-tone-info-bg text-tone-info-text',
+		success: 'border-tone-success-border bg-tone-success-bg text-tone-success-text',
+		warning: 'border-tone-warning-border bg-tone-warning-bg text-tone-warning-text',
+		destructive: 'border-tone-destructive-border bg-tone-destructive-bg text-tone-destructive-text'
+	};
+	const DOT_CLASS: { readonly [tone in ConnectionTone]: string } = {
+		neutral: 'bg-muted-foreground/60',
+		info: 'bg-info animate-pulse',
+		success: 'bg-success',
+		warning: 'bg-warning',
+		destructive: 'bg-destructive'
+	};
+
 	const say = $derived(sayOf(t, locale));
-	const offered = $derived(providers.filter((p) => p.available !== false));
-	/** The one-click way in, in the definition's order (Google before Microsoft); unavailable here, the card says so. */
-	const shown = $derived(providers.find(pairsAtOnce) ?? providers[0]);
-	const primary = $derived(shown?.available === false ? undefined : shown);
-	const nameOf = (provider: ProviderChoice | undefined) =>
-		provider?.name === undefined ? driverLabel(driver) : say(provider.name);
-	/** Several providers and none that starts at once: no one of them speaks for the card until a person picks. */
-	const undecided = $derived(offered.length > 1 && !providers.some(pairsAtOnce));
-	const pickedIn = (status: InstanceStatus | null) =>
-		status?.providers?.find((provider) => provider.id === status.provider);
-	const headingOf = (status: InstanceStatus | null) =>
-		pickedIn(status) ?? (undecided ? undefined : shown);
 	let made = $state<string | null>(null);
+	// Clear optimistic local `made` id once the parent prop catches up or removes the row.
+	watch(
+		() => instance?.id ?? null,
+		(currentId, previousId) => {
+			if (currentId !== null && currentId === made) made = null;
+			else if (currentId === null && previousId !== null && previousId === made) made = null;
+		}
+	);
 	const id = $derived(instance?.id ?? made);
 	const setupClient = $derived(id === null ? null : client(id));
-	let open = $state(false);
+	const storedStatus = $derived(decodeStoredStatus(instance?.status));
+
+	let panel = $state<'pair' | 'manage' | null>(null);
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let pairedNow = $state(false);
-	let boundary = $state<ImportStartInput | undefined>(undefined);
-	let savedBoundary: string | undefined;
+	let disconnectedLocally = $state(false);
+
+	watch(
+		() => id,
+		() => {
+			error = null;
+			pairedNow = false;
+			disconnectedLocally = false;
+			if (id === null) panel = null;
+		}
+	);
+
 	const stateChanged = (
 		state: InstanceState | undefined,
 		previous: InstanceState | undefined,
 		status: InstanceStatus | null
 	) => {
-		const latest = JSON.stringify(status?.import_start ?? null);
-		if (savedBoundary !== undefined && latest !== savedBoundary) boundary = undefined;
-		savedBoundary = latest;
-		if (state !== 'connected') pairedNow = false;
-		else if (previous !== undefined && previous !== 'connected' && previous !== 'reconnecting') {
-			pairedNow = true;
-			boundary = undefined;
-			open = false;
+		if (state === 'connected') {
+			disconnectedLocally = false;
+			if (previous !== undefined && previous !== 'connected' && previous !== 'reconnecting') {
+				pairedNow = true;
+				if (panel === 'pair') panel = null;
+			}
+		} else {
+			pairedNow = false;
+			if (state === 'pairing' || state === 'connecting') disconnectedLocally = false;
 		}
-		if (state === 'pairing' || state === 'connecting') open = true;
 		on_state_change?.(state, previous, status);
 	};
 
@@ -121,35 +188,61 @@
 				)
 			);
 		});
-	/** The instance (made now when absent); with `pairing`, the primary provider's pairing starts too. */
-	function connect(pairing: boolean, import_start?: ImportStartInput): void {
-		if (busy) return;
-		pairedNow = false;
-		const p = primary;
-		const starts = pairing && pairsAtOnce(p);
-		if (starts && p?.setup.kind === 'oauth') reserveSignIn();
+
+	function install(): void {
+		if (busy || create === undefined || readonly) return;
 		fork(
 			settle(
-				Effect.gen(function* () {
-					const target = id ?? (yield* create());
-					made = target;
-					open = true;
-					if (starts && p !== undefined)
-						yield* client(target).pair({
-							...(providers.length > 1 ? { provider: p.id } : {}),
-							...(p.import_start !== undefined && import_start !== undefined ? { import_start } : {})
-						});
-				})
+				create().pipe(
+					Effect.tap((createdId) =>
+						Effect.sync(() => {
+							if (createdId !== null) {
+								made = createdId;
+								disconnectedLocally = false;
+								panel = 'pair';
+							}
+						})
+					)
+				)
 			)
 		);
 	}
-	/** Unpairs the provider; deleting the durable account is a separate explicit action. */
-	function disconnect(connected: boolean, source: IntegrationSetupProps | null): void {
+
+	function startConnect(
+		effectiveProviders: readonly ProviderChoice[],
+		source: IntegrationSetupProps | null
+	): void {
 		const target = id;
-		if (target === null || busy) return;
+		if (target === null || busy || readonly) return;
+		error = null;
+		pairedNow = false;
+		disconnectedLocally = false;
+		panel = 'pair';
+		// Only auto-start one-click OAuth when there is a single OAuth provider with no import boundary to choose.
+		const offered = effectiveProviders.filter((p) => p.available !== false);
+		const sole = effectiveProviders.length === 1 ? offered[0] : undefined;
+		if (sole !== undefined && sole.setup.kind === 'oauth' && sole.import_start === undefined) {
+			reserveSignIn();
+			fork(
+				settle(
+					source !== null
+						? source.pair({})
+						: client(target).pair({}).pipe(Effect.asVoid)
+				)
+			);
+		}
+	}
+
+	function unpairConnection(
+		connected: boolean,
+		displayName: string,
+		source: IntegrationSetupProps | null
+	): void {
+		const target = id;
+		if (target === null || busy || readonly) return;
 		const ask = connected
 			? confirm_action({
-					title: t('Disconnect {name}?').replace('{name}', nameOf(headingOf(source?.status ?? null))),
+					title: t('Disconnect {name}?').replace('{name}', displayName),
 					body: t('This logs the account out and deletes its stored credentials.'),
 					confirm_label: t('Disconnect'),
 					cancel_label: t('Cancel'),
@@ -162,11 +255,12 @@
 					confirmed
 						? settle(
 								Effect.gen(function* () {
-									// through the card's own holder, so its status shows Not paired from the unpair answer
-									yield* source === null ? client(target).unpair() : source.unpair();
+									yield* source === null
+										? client(target).unpair().pipe(Effect.asVoid)
+										: source.unpair();
 									pairedNow = false;
-									boundary = undefined;
-									open = false;
+									if (connected) disconnectedLocally = true;
+									panel = null;
 								})
 							)
 						: Effect.void
@@ -174,140 +268,332 @@
 			)
 		);
 	}
+
+	function uninstallConnection(displayName: string): void {
+		if (busy || on_delete === undefined || readonly) return;
+		fork(
+			confirm_action({
+				title: t('Uninstall {name}?').replace('{name}', displayName),
+				body: t('Its credentials, sync progress, conversations and messages are deleted with it.'),
+				confirm_label: t('Uninstall'),
+				cancel_label: t('Cancel'),
+				destructive: true
+			}).pipe(
+				Effect.flatMap((confirmed) =>
+					confirmed
+						? settle(
+								on_delete().pipe(
+									Effect.tap(() =>
+										Effect.sync(() => {
+											made = null;
+											panel = null;
+											pairedNow = false;
+											disconnectedLocally = false;
+										})
+									)
+								)
+							)
+						: Effect.void
+				)
+			)
+		);
+	}
+
+	function resumeConnection(): void {
+		if (busy || on_resume === undefined || readonly) return;
+		fork(settle(on_resume()));
+	}
+
+	function openManage(): void {
+		if (on_manage !== undefined) {
+			on_manage();
+			return;
+		}
+		panel = panel === 'manage' ? null : 'manage';
+	}
+
+	function closePanel(): void {
+		panel = null;
+	}
+
+	function runAction(
+		action: ConnectionAction,
+		displayName: string,
+		effectiveProviders: readonly ProviderChoice[],
+		source: IntegrationSetupProps | null
+	): void {
+		switch (action) {
+			case 'install':
+				install();
+				break;
+			case 'connect':
+			case 'reconnect':
+			case 'retry':
+				startConnect(effectiveProviders, source);
+				break;
+			case 'continue':
+				panel = 'pair';
+				break;
+			case 'cancel':
+				unpairConnection(false, displayName, source);
+				break;
+			case 'disconnect':
+				unpairConnection(true, displayName, source);
+				break;
+			case 'resume':
+				resumeConnection();
+				break;
+			case 'manage':
+				openManage();
+				break;
+		}
+	}
 </script>
 
-{#snippet card(source: IntegrationSetupProps | null)}
-	{@const status = source?.status ?? null}
-	{@const connected = status?.state === 'connected'}
-	{@const waiting =
-		status?.state === 'pairing' ||
-		status?.state === 'connecting' ||
-		status?.state === 'reconnecting'}
-	{@const working = busy || source?.busy === true}
-	{@const failure =
-		error ?? source?.error ?? (status?.state === 'error' ? (status.error ?? null) : null)}
-	{@const active = pickedIn(status) ?? primary}
-	{@const heading = headingOf(status)}
-	{@const draft =
-		primary === undefined
-			? undefined
-			: (boundary ?? importStartDraft(status?.import_start, primary, id === null))}
-	{@const paused = instance !== null && instance.id === id && instance.active === false}
-	<section
-		class="flex min-w-0 flex-col gap-3 rounded-lg border bg-card px-4 py-3"
-		data-connector={driver}
+{#snippet statusBadge(label: string, tone: ConnectionTone, phase: string)}
+	<span
+		class="inline-flex shrink-0 items-center gap-1.5 rounded-badge border px-2 py-0.5 text-xs font-medium {BADGE_CLASS[tone]}"
+		data-connector-state={phase}
+		role="status"
 	>
-		<div class="flex items-center justify-between gap-3">
-			<div class="flex min-w-0 items-center gap-3">
-				<span class="grid size-9 shrink-0 place-items-center rounded-md border bg-background">
-					<Icon name={heading?.icon ?? 'lucide:plug'} class="size-5" />
-				</span>
-				<Stack gap="none" class="min-w-0">
-					<p class="truncate text-sm font-medium">
-						{nameOf(heading)}
-					</p>
-					<p class="truncate text-meta">
-						{heading?.description === undefined ? description : say(heading.description)}
-					</p>
-					<p
-						class="text-meta"
-						data-connector-state={paused
-							? 'paused'
-							: id === null
-								? 'none'
-								: (status?.state ?? 'loading')}
-						data-connection-success={pairedNow && connected ? '' : undefined}
-						role="status"
-					>
-						{#if pairedNow && connected}<Icon
-								name="lucide:circle-check"
-								class="mr-1 inline size-3.5"
-							/>{/if}
-						{paused
-							? t('Paused')
-							: primary === undefined
-								? t('Not available on this host')
-								: id === null
-									? t('Not connected')
-									: statusLabel(status, t)}
-					</p>
-					{#if connected && status !== null && active?.import_start !== undefined}
-						<p class="text-meta wrap-anywhere" data-import-start-active>
-							{t('Import start')}: {importStartLabel(status.import_start, t, locale)}
-						</p>
-						{#if status.import_start?.kind === 'since' && status.import_start.origin === 'now' && active.import_start.kind === 'timestamp' && active.import_start.precision === 'second'}
-							<p class="text-meta" data-import-start-precision>
-								{t(
-									'This source timestamps messages to the second; the whole starting second is included.'
-								)}
+		<span class="size-1.5 rounded-full {DOT_CLASS[tone]}" aria-hidden="true"></span>
+		<span>{t(label)}</span>
+	</span>
+{/snippet}
+
+{#snippet card(source: IntegrationSetupProps | null)}
+	{@const rawStatus = source?.status ?? null}
+	{@const status =
+		rawStatus !== null && disconnectedLocally && rawStatus.state === 'unpaired' && rawStatus.code === undefined
+			? { ...rawStatus, code: 'disconnected' }
+			: rawStatus}
+	{@const effectiveProviders =
+		status?.providers !== undefined && status.providers.length > 0 ? status.providers : providers}
+	{@const offered = effectiveProviders.filter((p) => p.available !== false)}
+	{@const available =
+		!providers_ready
+			? true
+			: effectiveProviders.length > 0
+				? offered.length > 0
+				: status !== null && status.providers !== undefined
+					? status.providers.length > 0
+					: true}
+	{@const picked = status?.providers?.find((p) => p.id === status.provider)}
+	{@const heading = picked ?? (effectiveProviders.length === 1 ? effectiveProviders[0] : undefined)}
+	{@const displayName =
+		name ?? (heading?.name !== undefined ? say(heading.name) : driverLabel(driver))}
+	{@const displayIcon = icon ?? heading?.icon ?? driverIcon(driver)}
+	{@const displayDescription =
+		description !== ''
+			? description
+			: heading?.description !== undefined
+				? say(heading.description)
+				: ''}
+	{@const working = busy || source?.busy === true}
+	{@const effectiveStored =
+		disconnectedLocally && (storedStatus === null || storedStatus.state === 'unpaired')
+			? { ...(storedStatus ?? {}), state: 'unpaired' as const, code: 'disconnected' }
+			: storedStatus}
+	{@const snapshot = resolveConnectionState({
+		installed: id !== null,
+		active: instance !== null && instance.id === id ? (instance.active ?? true) : true,
+		status,
+		storedStatus: effectiveStored,
+		busy: working,
+		error: error ?? source?.error ?? null,
+		available,
+		setupOpen: panel !== null,
+		canResume: on_resume !== undefined,
+		readonly
+	})}
+	{@const activeProvider = picked ?? offered[0]}
+
+	<Surface
+		as="section"
+		tone="card"
+		padding="md"
+		radius="overlay"
+		class="flex min-w-0 flex-col justify-between gap-4 transition-colors hover:border-border-control"
+		data-connector={driver}
+		data-connector-phase={snapshot.phase}
+	>
+		<Stack gap="sm" class="min-w-0">
+			<div class="flex items-start justify-between gap-3">
+				<div class="flex min-w-0 items-center gap-3">
+					<span class="grid size-9 shrink-0 place-items-center rounded-control border border-border bg-background">
+						<Icon name={displayIcon} class="size-5" />
+					</span>
+					<div class="min-w-0">
+						<p class="truncate text-sm font-medium text-foreground">{displayName}</p>
+						{#if snapshot.phase === 'connected' && snapshot.account !== null && snapshot.account !== ''}
+							<p class="truncate text-meta" data-connection-success={pairedNow ? '' : undefined}>
+								{snapshot.account}
 							</p>
+						{:else if !available}
+							<p class="truncate text-meta">{t('Not available on this host')}</p>
 						{/if}
-					{/if}
-				</Stack>
+					</div>
+				</div>
+				{@render statusBadge(snapshot.label, snapshot.tone, snapshot.phase)}
 			</div>
-			<div class="flex shrink-0 items-center gap-1">
-				{#if connected && source !== null}
+
+			{#if displayDescription !== ''}
+				<p class="line-clamp-2 text-meta">{displayDescription}</p>
+			{/if}
+
+			{#if meta !== undefined}
+				{@render meta()}
+			{/if}
+
+			{#if snapshot.phase === 'error' && snapshot.detail !== null && panel === null}
+				<p role="alert" class="line-clamp-2 text-xs text-destructive" data-connector-error>
+					{snapshot.detail}
+				</p>
+			{/if}
+
+			{#if snapshot.phase === 'connected' && status !== null && activeProvider?.import_start !== undefined}
+				<p class="text-meta wrap-anywhere" data-import-start-active>
+					{t('Import start')}: {importStartLabel(status.import_start, t, locale)}
+				</p>
+			{/if}
+		</Stack>
+
+		<div class="flex items-center justify-between gap-2 border-t border-border/60 pt-3">
+			<div class="flex min-w-0 items-center gap-1">
+				{#if id !== null && (!readonly || on_manage !== undefined || manage !== undefined)}
 					<Button
 						variant="ghost"
-						aria-expanded={open}
-						onclick={() => (open = !open)}
-						data-manage>{open ? t('Hide') : t('Manage')}</Button
+						size="icon"
+						hint={t('Manage')}
+						aria-label={t('Manage')}
+						aria-expanded={panel === 'manage'}
+						data-manage
+						onclick={openManage}
 					>
+						<Icon name="lucide:settings-2" class="size-4" />
+					</Button>
 				{/if}
-				{#if !connected && !waiting && !open && (id === null || status !== null)}
+			</div>
+			<div class="flex shrink-0 items-center gap-2">
+				{#if !readonly || snapshot.cta.action === 'manage' || snapshot.cta.action === 'continue'}
 					<Button
-						disabled={working ||
-							primary === undefined ||
-							(draft !== undefined && primary !== undefined && !validImportStart(draft, primary))}
-						onclick={() => connect(true, boundary ?? (id === null ? draft : undefined))}
-						data-connect
-						>{working
-							? t('Connecting…')
-							: status?.state === 'error' || failure !== null
-								? t('Try again')
-								: t('Connect')}</Button
+						variant={snapshot.cta.variant}
+						disabled={snapshot.cta.disabled || (snapshot.cta.action === 'install' && create === undefined)}
+						data-connector-action={snapshot.cta.action}
+						data-connect={snapshot.cta.action === 'connect' || snapshot.cta.action === 'reconnect' || snapshot.cta.action === 'retry' || snapshot.cta.action === 'install' ? '' : undefined}
+						data-disconnect={snapshot.cta.action === 'disconnect' ? '' : undefined}
+						data-cancel-setup={snapshot.cta.action === 'cancel' ? '' : undefined}
+						onclick={() => runAction(snapshot.cta.action, displayName, effectiveProviders, source)}
 					>
-				{/if}
-				{#if id !== null && status !== null}
-					<Button
-						variant="ghost"
-						class="text-destructive"
-						disabled={working}
-						onclick={() => disconnect(connected, source)}
-						data-disconnect={connected ? '' : undefined}
-						data-cancel-setup={!connected ? '' : undefined}
-						>{t(connected ? 'Disconnect' : waiting ? 'Cancel pairing' : 'Cancel setup')}</Button
-					>
+						{t(snapshot.cta.label)}
+					</Button>
 				{/if}
 			</div>
 		</div>
-		{#if failure !== null && !open}<p role="alert" class="text-sm text-destructive">
-				{failure}
-			</p>{/if}
-		{#if !connected && !waiting && !open && (id === null || status !== null) && pairsAtOnce(primary) && primary?.import_start !== undefined && draft !== undefined}
-			<ImportStart
-				provider={primary}
-				value={draft}
-				on_change={(value) => (boundary = value)}
-				busy={working}
-				{t}
-				{locale}
-			/>
-		{/if}
-		{#if !connected && !waiting && !open && !undecided && offered.some((p) => p !== primary)}
-			<button
-				type="button"
-				class="self-start text-meta underline-offset-2 hover:underline"
-				disabled={working}
-				onclick={() => connect(false)}>{t('Other ways to connect')}</button
-			>
-		{/if}
-		{#if open && source !== null}
-			<div class="border-t pt-3">
-				<Setup {...source} {setup} error={error ?? source.error} controls={false} />
+
+		{#if presentation === 'inline' && panel !== null && source !== null}
+			<div class="border-t border-border pt-4" data-connector-panel={panel}>
+				<Stack gap="md">
+					<Setup {...source} {setup} error={error ?? source.error} controls={false} />
+					{#if manage !== undefined}
+						<div class="border-t border-border pt-4">
+							{@render manage({ close: closePanel })}
+						</div>
+					{/if}
+					{#if on_delete !== undefined && !readonly}
+						<div class="flex justify-end border-t border-border pt-3">
+							<Button
+								variant="ghost"
+								class="text-destructive"
+								disabled={working}
+								data-uninstall
+								onclick={() => uninstallConnection(displayName)}
+							>
+								{t('Uninstall')}
+							</Button>
+						</div>
+					{/if}
+				</Stack>
 			</div>
 		{/if}
-	</section>
+	</Surface>
+
+	{#if presentation === 'sheet' && source !== null}
+		<Sheet
+			open={panel !== null}
+			on_open_change={(open) => {
+				if (!open) panel = null;
+			}}
+			title={displayName}
+			memory={`integration-${driver}`}
+		>
+			{#snippet header()}
+				<Inline gap="sm" align="center" class="min-w-0">
+					<span class="grid size-7 shrink-0 place-items-center rounded-control border border-border bg-background">
+						<Icon name={displayIcon} class="size-4" />
+					</span>
+					<h2 class="truncate text-heading">{displayName}</h2>
+					{@render statusBadge(snapshot.label, snapshot.tone, snapshot.phase)}
+				</Inline>
+			{/snippet}
+
+			{#if panel !== null}
+				<Stack gap="lg" class="min-w-0" data-connector-panel={panel}>
+					{#if snapshot.phase === 'connected' && snapshot.account !== null && snapshot.account !== ''}
+						<p class="text-sm text-muted-foreground">
+							{t('Connected as {as}').replace('{as}', snapshot.account)}
+						</p>
+					{/if}
+
+					<Setup {...source} {setup} error={error ?? source.error} controls={false} />
+
+					{#if manage !== undefined}
+						<div class="border-t border-border pt-4">
+							{@render manage({ close: closePanel })}
+						</div>
+					{/if}
+
+					{#if !readonly && (snapshot.phase === 'connecting' || snapshot.phase === 'connected' || on_delete !== undefined)}
+						<Cluster gap="sm" justify="between" align="center" class="border-t border-border pt-4">
+							<div>
+								{#if snapshot.phase === 'connecting'}
+									<Button
+										variant="outline"
+										disabled={working}
+										data-cancel-setup
+										onclick={() => unpairConnection(false, displayName, source)}
+									>
+										{t('Cancel pairing')}
+									</Button>
+								{:else if snapshot.phase === 'connected'}
+									<Button
+										variant="ghost"
+										class="text-destructive"
+										disabled={working}
+										data-disconnect
+										onclick={() => unpairConnection(true, displayName, source)}
+									>
+										{t('Disconnect')}
+									</Button>
+								{/if}
+							</div>
+							{#if on_delete !== undefined}
+								<Button
+									variant="ghost"
+									class="text-destructive"
+									disabled={working}
+									data-uninstall
+									onclick={() => uninstallConnection(displayName)}
+								>
+									{t('Uninstall')}
+								</Button>
+							{/if}
+						</Cluster>
+					{/if}
+				</Stack>
+			{/if}
+		</Sheet>
+	{/if}
 {/snippet}
 
 {#if setupClient === null}

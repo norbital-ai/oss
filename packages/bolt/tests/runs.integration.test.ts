@@ -1167,7 +1167,8 @@ describe('re-queues, attempts and notices', () => {
 		Effect.gen(function* () {
 			const w = yield* world(base, {
 				classify: (_input, ctx) =>
-					ctx.notify(Array.from({ length: 2_500 }, (_, i) => ({ to: [{ user: 'bulk_holder' }], title: `bulk ${i}` })))
+					// one notice past two full statements (1,000 rows each)
+					ctx.notify(Array.from({ length: 2_001 }, (_, i) => ({ to: [{ user: 'bulk_holder' }], title: `bulk ${i}` })))
 			});
 			yield* w.db.write({
 				text: `INSERT INTO sys_user(id,name,active,kind) VALUES ('bulk_holder','Holder',true,'staff')`,
@@ -1185,7 +1186,7 @@ describe('re-queues, attempts and notices', () => {
 				yield* w.sql(
 					`SELECT count(*)::int AS notices, count(DISTINCT xmin::text)::int AS transactions FROM sys_notification WHERE member = 'bulk_holder'`
 				)
-			).toEqual([{ notices: 2_500, transactions: 1 }]);
+			).toEqual([{ notices: 2_001, transactions: 1 }]);
 		})
 	);
 });

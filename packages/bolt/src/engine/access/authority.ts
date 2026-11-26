@@ -36,6 +36,8 @@ const WRITES = ['create', 'update'] as const;
 const IDENTITY = ['sys_user', 'sys_invitation', 'sys_api_key'] as const;
 const isIdentity = (c: string) => IDENTITY.some((i) => i === c);
 const KERNEL = '$directory';
+/** The synthetic policy tag for `capabilities.personal_connections`: own-row access on allowed personal integrations. */
+export const PERSONAL_CONNECTIONS = '$personal_connections';
 /** The `sys_user` output the kernel directory grants: id and name. */
 export const DIRECTORY_OUTPUT = 'directory';
 
@@ -310,16 +312,50 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 		apps: new Set<string>(),
 		syncs: new Set<string>(),
 		tools: new Set<string>(),
-		mcp: new Set<string>()
+		mcp: new Set<string>(),
+		personal_connections: new Set<string>()
 	};
 	const automations = new Set<string>();
 	const declared: LimitRule[] = [];
 	for (const { name: policyName, spec } of policySpecs) {
-		for (const k of ['apps', 'syncs', 'tools', 'mcp'] as const)
+		for (const k of ['apps', 'syncs', 'tools', 'mcp', 'personal_connections'] as const)
 			for (const x of spec.capabilities?.[k] ?? []) caps[k].add(x);
 		for (const x of spec.capabilities?.automations ?? []) automations.add(x);
 		for (const [k, v] of Object.entries(m.workspace.limits?.[policyName] ?? {}))
 			declared.push(...limitRules(k, v));
+	}
+	// Personal connections capability compiles into native own-row sys_integration grants (member-only, never envoy/external).
+	if (
+		!bypass &&
+		holder.actor.kind === 'member' &&
+		!holder.actor.external &&
+		caps.personal_connections.size > 0
+	) {
+		const allowed = [...caps.personal_connections];
+		addRead('sys_integration', DEFAULT_OUTPUT, {
+			sys_integration: {
+				policy: PERSONAL_CONNECTIONS,
+				where: {
+					t: 'and',
+					of: [
+						{ t: 'cmp', field: 'owner', op: 'eq', arg: { _tag: 'Var', text: 'actor.id' } },
+						{ t: 'in', field: 'integration', negated: false, args: allowed }
+					]
+				}
+			}
+		});
+		const sysInt = col('sys_integration');
+		sysInt.create.push({
+			policy: PERSONAL_CONNECTIONS,
+			columns: { sys_integration: ['integration', 'name', 'owner', 'configuration'] },
+			check: false
+		});
+		sysInt.update.push({
+			policy: PERSONAL_CONNECTIONS,
+			columns: { sys_integration: ['name', 'active', 'configuration', 'import_start'] },
+			check: false
+		});
+		sysInt.delete.push({ policy: PERSONAL_CONNECTIONS, check: false });
 	}
 	const defaults = holder.actor.kind === 'visitor' ? VISITOR_DEFAULTS : DEFAULTS;
 	const limits = [...declared, ...defaults.filter((d) => !declared.some((x) => x.key === d.key))];
@@ -335,7 +371,11 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 			apps: list(caps.apps),
 			syncs: list(caps.syncs),
 			tools: list(caps.tools),
-			mcp: list(caps.mcp)
+			mcp: list(caps.mcp),
+			personal_connections:
+				holder.actor.kind === 'member' && !holder.actor.external
+					? list(caps.personal_connections)
+					: []
 		},
 		limits,
 		teamTree: holder.teamTree ?? []

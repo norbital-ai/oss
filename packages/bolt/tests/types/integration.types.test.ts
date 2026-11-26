@@ -2,7 +2,11 @@
 import { Effect } from 'effect';
 import { expectTypeOf } from '@effect/vitest';
 import { instance_id, integration, is_instance, model, policy, sync, workspace } from '../../src/index.ts';
-import type { IntegrationName } from '../../src/decl/names.ts';
+import type {
+	IntegrationName,
+	PersonalIntegrationName,
+	WorkspaceIntegrationName
+} from '../../src/decl/names.ts';
 import type { AutomationCtx, Id, InputOf, InstanceId, StartInput, SyncRow, Where } from '../../src/index.ts';
 import type { Attachment, CalendarEvent } from '../../src/decl/runtime/integration.ts';
 import type { SyncKey } from '../../src/decl/names.ts';
@@ -232,3 +236,36 @@ policy({
 });
 // @ts-expect-error only declared sync reads are startable
 policy({ description: 'x', grants: {}, capabilities: { syncs: ['products.stock'] } });
+
+// integration.scope and policy.capabilities.personal_connections
+expectTypeOf<PersonalIntegrationName>().toEqualTypeOf<'calendar' | 'whatsapp' | 'email'>();
+expectTypeOf<WorkspaceIntegrationName>().toEqualTypeOf<
+	| 'erp'
+	| 'kingdee'
+	| 'support_mail'
+	| 'chat'
+	| 'whatsapp'
+	| 'email'
+	| 'telegram'
+	| 'slack'
+	| 'discord'
+	| 'github'
+	| 'wechat'
+>();
+integration('calendar', { description: 'x', driver: 'calendar', scope: 'personal' });
+integration('support_mail', { description: 'x', driver: 'email', scope: 'both' });
+// @ts-expect-error HTTP driver does not support personal accounts
+integration('erp', { description: 'x', driver: 'http', scope: 'personal' });
+// @ts-expect-error database driver does not support personal accounts
+integration('kingdee', { description: 'x', driver: 'sqlserver', scope: 'both' });
+policy({
+	description: 'x',
+	grants: {},
+	capabilities: { personal_connections: ['whatsapp', 'email', 'calendar'] }
+});
+// @ts-expect-error workspace-only integrations cannot be granted as personal connections
+policy({ description: 'x', grants: {}, capabilities: { personal_connections: ['kingdee'] } });
+// @ts-expect-error custom email without scope: 'personal' | 'both' defaults to workspace
+policy({ description: 'x', grants: {}, capabilities: { personal_connections: ['support_mail'] } });
+// @ts-expect-error telegram is workspace-only
+policy({ description: 'x', grants: {}, capabilities: { personal_connections: ['telegram'] } });

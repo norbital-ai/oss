@@ -265,7 +265,7 @@ const who = (
 	},
 	models: Object.fromEntries(Object.keys(models).map((c) => [c, all(c)])),
 	automations: [],
-	capabilities: { apps: [], syncs: [], tools: [], mcp: [] },
+	capabilities: { apps: [], syncs: [], tools: [], mcp: [], personal_connections: [] },
 	limits: [],
 	teamTree: []
 });

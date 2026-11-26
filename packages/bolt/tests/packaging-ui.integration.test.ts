@@ -98,7 +98,7 @@ describe('/runs', () => {
 						admin: false,
 						party: null
 					},
-					capabilities: { apps: [], syncs: [], tools: [], mcp: [] }
+					capabilities: { apps: [], syncs: [], tools: [], mcp: [], personal_connections: [] }
 				});
 				const holder = yield* runList(t.db, who('u1', ['export'], true), 10, 'export');
 				expect(holder.map((r) => [r.automation, r.error])).toEqual([

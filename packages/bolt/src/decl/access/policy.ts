@@ -18,6 +18,7 @@ import type {
 	McpName,
 	OutputName,
 	PathModel,
+	PersonalIntegrationName,
 	ReadPath,
 	ReadableName,
 	SyncKey,
@@ -220,6 +221,8 @@ interface PolicyFor<C extends Grantable> {
 		apps?: readonly (AppName | GroupName)[];
 		tools?: readonly HostToolName[];
 		mcp?: readonly McpName[];
+		/** Personal integration definitions holders may connect and manage as their own accounts. */
+		personal_connections?: readonly PersonalIntegrationName[];
 	};
 }
 type PolicyBase = {

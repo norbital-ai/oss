@@ -138,7 +138,7 @@ const member = (
 		party: null,
 		...over
 	},
-	capabilities: { apps, syncs: [], tools: [], mcp: [] }
+	capabilities: { apps, syncs: [], tools: [], mcp: [], personal_connections: [] }
 });
 const names = (ns: ReturnType<typeof nav>): unknown[] =>
 	ns.map((n) => (n.kind === 'group' ? { [n.name]: names(n.children) } : n.name));

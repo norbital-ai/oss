@@ -505,6 +505,62 @@ const setup = (steps: readonly Step[], catalog?: Catalog) =>
 		sharedAi.arm(steps, catalog);
 		return fixture;
 	});
+// A second workspace for the tests of host tools, whose list is fixed when the workspace is built: each test scripts
+// the answers of the tools it calls; an unscripted one answers `{ ok: true }`.
+const hostAi = cassette();
+const hostAnswers = new Map<string, (input: Json) => Json>();
+const scripted = (name: string, behavior: ToolBehavior = {}): HostTool => ({
+	name,
+	description: `Fixture ${name}`,
+	behavior,
+	input: { type: 'object', additionalProperties: true },
+	read_only: true,
+	call: async (input) => hostAnswers.get(name)?.(input) ?? { ok: true }
+});
+const plans: HostTool = {
+	name: 'plans',
+	description: 'Reads a plan.',
+	input: { type: 'object' },
+	behavior: { data: true },
+	read_only: true,
+	call: async () => ({ plan: 'Current plan' })
+};
+const stamped: Json[] = [];
+const stamp: HostTool = {
+	name: 'stamp',
+	description: 'Stamps a message.',
+	input: { type: 'object' },
+	behavior: {},
+	confirm: () => true,
+	view: () => ({ icon: 'lucide:stamp', verb: 'Stamped', target: 'Add notes', doing: 'Stamping…' }),
+	call: async (input) => {
+		stamped.push(input);
+		return { ok: true, stamped: true };
+	}
+};
+const hosted = Effect.runSync(
+	Effect.cached(
+		build(hostAi, {
+			host_tools: [
+				plans,
+				stamp,
+				scripted('fixture_read', { data: true }),
+				scripted('fixture_edit'),
+				scripted('workspace_write'),
+				scripted('workspace_test', { progress_check: true }),
+				scripted('workspace_diagnose', { progress_check: true, diagnostics: true })
+			]
+		}).pipe(Scope.provide(fileScope))
+	)
+);
+const setupHost = (steps: readonly Step[], answers: Readonly<Record<string, (input: Json) => Json>> = {}) =>
+	Effect.map(hosted, (fixture) => {
+		hostAi.arm(steps);
+		hostAnswers.clear();
+		for (const [name, answer] of Object.entries(answers)) hostAnswers.set(name, answer);
+		stamped.length = 0;
+		return fixture;
+	});
 const quotes = (t: Kit, title: string) =>
 	t.db.rows(Schema.Struct({ title: Schema.String, created_by: Schema.NullOr(Schema.String) }), {
 		text: 'SELECT title, created_by FROM quotes WHERE title = $1',
@@ -834,41 +890,25 @@ describe('in-app turns', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const ai = cassette();
-					ai.arm([
-						use('fixture_edit', { path: 'a.ts' }),
-						use('fixture_read', { path: 'a.ts' }),
-						use('fixture_edit', { path: 'a.ts' }),
-						use('fixture_read', { path: 'a.ts' }),
-						use('fixture_edit', { path: 'a.ts' }),
-						use('fixture_read', { path: 'a.ts' }),
-						use('fixture_edit', { path: 'a.ts' }),
-						say('Stopped retrying the same edit.')
-					]);
 					let editCalls = 0;
-					const { agent, user } = yield* build(ai, {
-						host_tools: [
-							{
-								name: 'fixture_read',
-								description: 'Fixture read',
-								behavior: { pure: true },
-								input: { type: 'object', additionalProperties: true },
-								read_only: true,
-								call: async () => ({ text: 'ok' })
-							},
-							{
-								name: 'fixture_edit',
-								description: 'Fixture edit',
-								behavior: {},
-								input: { type: 'object', additionalProperties: true },
-								read_only: true,
-								call: async () => {
-									editCalls++;
-									return { error: 'old_string not found' };
-								}
+					const { agent, user } = yield* setupHost(
+						[
+							use('fixture_edit', { path: 'a.ts' }),
+							use('fixture_read', { path: 'a.ts' }),
+							use('fixture_edit', { path: 'a.ts' }),
+							use('fixture_read', { path: 'a.ts' }),
+							use('fixture_edit', { path: 'a.ts' }),
+							use('fixture_read', { path: 'a.ts' }),
+							use('fixture_edit', { path: 'a.ts' }),
+							say('Stopped retrying the same edit.')
+						],
+						{
+							fixture_edit: () => {
+								editCalls++;
+								return { error: 'old_string not found' };
 							}
-						]
-					});
+						}
+					);
 					const ann = yield* user('repeat-failure-guard', { admin: true });
 					const c = yield* agent.start({ owner: ann });
 					yield* agent.post({ conversation: c, as: { member: ann }, text: 'Edit a.ts' });
@@ -889,34 +929,17 @@ describe('in-app turns', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const ai = cassette();
-					ai.arm(
+					let testRuns = 0;
+					const { agent, user } = yield* setupHost(
 						Array.from({ length: 7 }, () => [
 							use('workspace_test', {}),
 							use('workspace_diagnose', {})
-						]).flat()
+						]).flat(),
+						{
+							workspace_test: () => ({ failing: 2, tests: { failed: 2 }, round: ++testRuns }),
+							workspace_diagnose: () => ({ failing: 0, ok: true })
+						}
 					);
-					let testRuns = 0;
-					const { agent, user } = yield* build(ai, {
-						host_tools: [
-							{
-								name: 'workspace_test',
-								description: 'Fixture test runner',
-								behavior: { progress_check: true },
-								input: { type: 'object', additionalProperties: true },
-								read_only: true,
-								call: async () => ({ failing: 2, tests: { failed: 2 }, round: ++testRuns })
-							},
-							{
-								name: 'workspace_diagnose',
-								description: 'Fixture diagnose',
-								behavior: { progress_check: true, diagnostics: true },
-								input: { type: 'object', additionalProperties: true },
-								read_only: true,
-								call: async () => ({ failing: 0, ok: true })
-							}
-						]
-					});
 					const ann = yield* user('scoped-red-checks', { admin: true });
 					const c = yield* agent.start({ owner: ann });
 					yield* agent.post({ conversation: c, as: { member: ann }, text: 'Fix failing tests' });
@@ -933,6 +956,8 @@ describe('in-app turns', () => {
 				ai.arm([use('workspace_test', {}), say('Tests are running.'), say('They failed: fixing.')]);
 				const finish = yield* Deferred.make<void>();
 				const { agent, user } = yield* build(ai, {
+					// the call goes to the background after this wait, not the 30 s default
+					host_inline_ms: 10,
 					host_tools: [
 						{
 							name: 'workspace_test',
@@ -970,8 +995,7 @@ describe('in-app turns', () => {
 	it.live('a refused read names everything wrong with it at once', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const ai = cassette();
-				ai.arm([
+				const { agent, user, ai } = yield* setup([
 					use('read', { request: { quotes: { fields: ['title', 'nope', 'nada'] } } }),
 					use('read', {
 						request: {
@@ -981,7 +1005,6 @@ describe('in-app turns', () => {
 					}),
 					say('Done.')
 				]);
-				const { agent, user } = yield* build(ai);
 				const ann = yield* user('refused', { admin: true });
 				const c = yield* agent.start({ owner: ann });
 				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Read them' });
@@ -999,24 +1022,11 @@ describe('in-app turns', () => {
 	it.live('each step has a CPU budget of its own, so a long turn is not one long run', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const ai = cassette();
-				ai.arm([
+				const { agent, user } = yield* setupHost([
 					use('fixture_read', { path: 'a' }),
 					use('fixture_read', { path: 'b' }),
 					say('Done.')
 				]);
-				const { agent, user } = yield* build(ai, {
-					host_tools: [
-						{
-							name: 'fixture_read',
-							description: 'Fixture read',
-		behavior: {},
-							input: { type: 'object' as const, additionalProperties: true },
-							read_only: true,
-							call: async () => ({ text: 'x' })
-						}
-					]
-				});
 				const ann = yield* user('steps', { admin: true });
 				const c = yield* agent.start({ owner: ann });
 				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Read two files' });
@@ -1031,31 +1041,17 @@ describe('in-app turns', () => {
 	it.live('edit and test rounds that stay red are stopped, with no coaching note first', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const ai = cassette();
-				ai.arm(
+				let validations = 0;
+				const { agent, user } = yield* setupHost(
 					Array.from({ length: 8 }, (_, n) => [
 						use('workspace_write', { path: 'tests/a.test.ts', content: `round ${n}` }),
 						use('workspace_diagnose', { only: 'tests' })
-					]).flat()
+					]).flat(),
+					{
+						workspace_write: () => ({ saved: ['tests/a.test.ts'] }),
+						workspace_diagnose: () => ({ error: 'A test failed.', rounds: ++validations })
+					}
 				);
-				let validations = 0;
-				const fixture = (name: string, call: () => Promise<Json>, behavior: ToolBehavior = {}) => ({
-					name,
-					description: `Fixture ${name}`,
-					behavior,
-					input: { type: 'object' as const, additionalProperties: true },
-					read_only: true,
-					call
-				});
-				const { agent, user } = yield* build(ai, {
-					host_tools: [
-						fixture('workspace_write', async () => ({ saved: ['tests/a.test.ts'] })),
-						fixture('workspace_diagnose', async () => ({
-							error: 'A test failed.',
-							rounds: ++validations
-						}), { progress_check: true, diagnostics: true })
-					]
-				});
 				const ann = yield* user('red-rounds', { admin: true });
 				const c = yield* agent.start({ owner: ann });
 				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Add the test' });
@@ -1071,14 +1067,12 @@ describe('in-app turns', () => {
 	it.live('asks the person and ends the turn instead of guessing', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const ai = cassette();
-				ai.arm([
+				const { agent, user } = yield* setup([
 					use('ask', {
 						question: 'Which pages should this workspace have?',
 						options: ['Dashboard + Reports', 'Something else']
 					})
 				]);
-				const { agent, user } = yield* build(ai);
 				const ann = yield* user('asks', { admin: true });
 				const c = yield* agent.start({ owner: ann });
 				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Build the portfolio' });
@@ -1105,32 +1099,21 @@ describe('in-app turns', () => {
 	it.live('red checks whose failures keep falling are never stopped', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const ai = cassette();
-				ai.arm(
+				let validations = 0;
+				const { agent, user } = yield* setupHost(
 					Array.from({ length: 8 }, (_, n) => [
 						use('workspace_write', { path: 'src/a.ts', content: `round ${n}` }),
 						use('workspace_diagnose', {})
-					]).flat()
-				);
-				let validations = 0;
-				const fixture = (name: string, call: () => Promise<Json>, behavior: ToolBehavior = {}) => ({
-					name,
-					description: `Fixture ${name}`,
-					behavior,
-					input: { type: 'object' as const, additionalProperties: true },
-					read_only: true,
-					call
-				});
-				const { agent, user } = yield* build(ai, {
-					host_tools: [
-						fixture('workspace_write', async () => ({ saved: ['src/a.ts'] })),
+					]).flat(),
+					{
+						workspace_write: () => ({ saved: ['src/a.ts'] }),
 						// 65, 60, 55 … still red each round, each a new low
-						fixture('workspace_diagnose', async () => ({
+						workspace_diagnose: () => ({
 							failing: 65 - 5 * validations++,
 							types: { total: 65 - 5 * (validations - 1), diagnostics: [] }
-						}), { progress_check: true, diagnostics: true })
-					]
-				});
+						})
+					}
+				);
 				const ann = yield* user('falling-rounds', { admin: true });
 				const c = yield* agent.start({ owner: ann });
 				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Fix the types' });
@@ -2335,19 +2318,9 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 	);
 });
 describe('the host tool catalogue', () => {
-	const plans: HostTool = {
-		name: 'plans',
-		description: 'Reads a plan.',
-		input: { type: 'object' },
-		behavior: { data: true },
-		read_only: true,
-		call: async () => ({ plan: 'Current plan' })
-	};
 	it.live('lists a host tool in the fixed tool list, called by its own name', () =>
 		Effect.scoped(Effect.gen(function* () {
-			const ai = cassette();
-			ai.arm([use('plans', {}), say('Done.')]);
-			const { agent, user, context } = yield* build(ai, { host_tools: [plans] });
+			const { agent, user, ai, context } = yield* setupHost([use('plans', {}), say('Done.')]);
 			return yield* Effect.gen(function* () {
 				const root = yield* user('root', { admin: true });
 				const c = yield* agent.start({ owner: root });
@@ -2365,22 +2338,10 @@ describe('the host tool catalogue', () => {
 	);
 	it.live('a confirmed host call executes directly on approval without model echo and keeps its view', () =>
 		Effect.scoped(Effect.gen(function* () {
-			const ai = cassette();
-			ai.arm([use('stamp', { message: 'Add notes' }), say('Done.')]);
-			const seenInputs: unknown[] = [];
-			const stamp: HostTool = {
-				name: 'stamp',
-				description: 'Stamps a message.',
-				input: { type: 'object' },
-				behavior: {},
-				confirm: () => true,
-				view: () => ({ icon: 'lucide:stamp', verb: 'Stamped', target: 'Add notes', doing: 'Stamping…' }),
-				call: async (input) => {
-					seenInputs.push(input);
-					return { ok: true, stamped: true };
-				}
-			};
-			const { agent, user, authority, context } = yield* build(ai, { host_tools: [stamp] });
+			const { agent, user, authority, ai, context } = yield* setupHost([
+				use('stamp', { message: 'Add notes' }),
+				say('Done.')
+			]);
 			return yield* Effect.gen(function* () {
 				const root = yield* user('root', { admin: true });
 				const c = yield* agent.start({ owner: root });
@@ -2388,10 +2349,10 @@ describe('the host tool catalogue', () => {
 				yield* agent.drain(c);
 				const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
 				if (held === undefined) throw new Error('Expected the stamp to wait for confirmation');
-				expect(seenInputs).toEqual([]);
+				expect(stamped).toEqual([]);
 				yield* agent.confirm(held.id, true, yield* authority(root));
 				// direct execution: host tool ran once with stored args and model got real result on request #2
-				expect(seenInputs).toEqual([{ message: 'Add notes' }]);
+				expect(stamped).toEqual([{ message: 'Add notes' }]);
 				expect(ai.requests).toHaveLength(2);
 				expect(toolResults(required(ai.requests[1])).at(-1)).toEqual({ ok: true, stamped: true });
 				const settled = (yield* agent.transcript(c)).find((row) => row.id === held.id);
@@ -2406,21 +2367,10 @@ describe('the host tool catalogue', () => {
 	);
 	it.live('declining a held host call does not execute it and resumes with declined result', () =>
 		Effect.scoped(Effect.gen(function* () {
-			const ai = cassette();
-			ai.arm([use('stamp', { message: 'Skip me' }), say('Understood.')]);
-			let called = 0;
-			const stamp: HostTool = {
-				name: 'stamp',
-				description: 'Stamps a message.',
-				input: { type: 'object' },
-				behavior: {},
-				confirm: () => true,
-				call: async () => {
-					called++;
-					return { ok: true };
-				}
-			};
-			const { agent, user, authority, context } = yield* build(ai, { host_tools: [stamp] });
+			const { agent, user, authority, ai, context } = yield* setupHost([
+				use('stamp', { message: 'Skip me' }),
+				say('Understood.')
+			]);
 			return yield* Effect.gen(function* () {
 				const root = yield* user('root-decline', { admin: true });
 				const c = yield* agent.start({ owner: root });
@@ -2429,7 +2379,7 @@ describe('the host tool catalogue', () => {
 				const held = (yield* agent.transcript(c)).find((row) => row.state === 'confirm');
 				if (held === undefined) throw new Error('Expected confirmation');
 				yield* agent.confirm(held.id, false, yield* authority(root));
-				expect(called).toBe(0);
+				expect(stamped).toEqual([]);
 				expect(ai.requests).toHaveLength(2);
 				expect(toolResults(required(ai.requests[1])).at(-1)).toEqual({ declined: true });
 			}).pipe(Effect.provide(context));
@@ -2437,13 +2387,11 @@ describe('the host tool catalogue', () => {
 	);
 	it.live('approving page control executes the stored page action directly and grants subsequent page actions', () =>
 		Effect.scoped(Effect.gen(function* () {
-			const ai = cassette();
-			ai.arm([
+			const { agent, user, authority, ai, context } = yield* setup([
 				use('page', { preview: 'https://preview.example.test/v1' }),
 				use('page', { preview: 'https://preview.example.test/v2' }),
 				say('Opened both.')
 			]);
-			const { agent, user, authority, context } = yield* build(ai);
 			return yield* Effect.gen(function* () {
 				const root = yield* user('root-page', { admin: true });
 				const c = yield* agent.start({ owner: root });
@@ -2470,9 +2418,10 @@ describe('the host tool catalogue', () => {
 	);
 	it.live('a host tool called through run_tool is told to call it by name', () =>
 		Effect.scoped(Effect.gen(function* () {
-			const ai = cassette();
-			ai.arm([use('run_tool', { name: 'plans', input: {} }), say('Done.')]);
-			const { agent, user, context } = yield* build(ai, { host_tools: [plans] });
+			const { agent, user, ai, context } = yield* setupHost([
+				use('run_tool', { name: 'plans', input: {} }),
+				say('Done.')
+			]);
 			return yield* Effect.gen(function* () {
 				const root = yield* user('root', { admin: true });
 				const c = yield* agent.start({ owner: root });
@@ -2813,14 +2762,6 @@ describe('metering', () => {
 });
 
 describe('a conversation keeps its prefix, its steps and its verifier bounded', () => {
-	const fixtureRead: HostTool = {
-		name: 'fixture_read',
-		description: 'Fixture read.',
-		input: { type: 'object', additionalProperties: true },
-		behavior: { data: true },
-		read_only: true,
-		call: async () => ({ ok: true })
-	};
 	it.live(
 		'a merge never wakes an idle conversation; its next turn hears only what changed, under the same tools',
 		() =>
@@ -2874,9 +2815,9 @@ describe('a conversation keeps its prefix, its steps and its verifier bounded', 
 	);
 	it.live('a turn of distinct successful calls stops at the step cap', () =>
 		Effect.scoped(Effect.gen(function* () {
-			const ai = cassette();
-			ai.arm(Array.from({ length: AGENT_LIMITS.steps + 5 }, (_, n) => use('fixture_read', { n })));
-			const { agent, user, context } = yield* build(ai, { host_tools: [fixtureRead] });
+			const { agent, user, ai, context } = yield* setupHost(
+				Array.from({ length: AGENT_LIMITS.steps + 5 }, (_, n) => use('fixture_read', { n }))
+			);
 			return yield* Effect.gen(function* () {
 				const ann = yield* user('steps-cap', { admin: true });
 				const c = yield* agent.start({ owner: ann });
@@ -2894,14 +2835,12 @@ describe('a conversation keeps its prefix, its steps and its verifier bounded', 
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const ai = cassette();
-					ai.arm([
+					const { t, agent, user, ai, context } = yield* setup([
 						say('Done.'),
 						say('{"complete":false,"gaps":["No test was added."]}'),
 						say('Added the test.'),
 						say('{"complete":false,"gaps":["No test output was supplied."]}')
 					]);
-					const { t, agent, user, context } = yield* build(ai);
 					return yield* Effect.gen(function* () {
 						const ann = yield* user('verify-once', { admin: true });
 						const c = yield* agent.start({ owner: ann });
@@ -2928,9 +2867,7 @@ describe('a conversation keeps its prefix, its steps and its verifier bounded', 
 	it.live('the owner deletes a conversation for good, with its messages; no one else may', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const ai = cassette();
-				ai.arm([say('Hi.')]);
-				const { t, agent, user, authority, context } = yield* build(ai);
+				const { t, agent, user, authority, context } = yield* setup([say('Hi.')]);
 				return yield* Effect.gen(function* () {
 					const ann = yield* user('deleter', { admin: true }),
 					bob = yield* user('other', { admin: true });

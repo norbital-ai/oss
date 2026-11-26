@@ -27,7 +27,7 @@ it('edits Markdown as it reads and gives Markdown back', () => {
 	editor.destroy();
 });
 
-it('stores a pasted picture through upload and shows it in place as Markdown', async () => {
+it('renders borderless without a static toolbar, supports autofocus and stores pasted pictures', async () => {
 	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 	const target = document.body.appendChild(document.createElement('div'));
 	let value = 'Before';
@@ -35,13 +35,16 @@ it('stores a pasted picture through upload and shows it in place as Markdown', a
 		target,
 		props: {
 			value,
+			autofocus: true,
 			on_change: (next: string) => (value = next),
 			upload: () => Effect.succeed('/files/picture-1')
 		}
 	});
 	await vi.waitFor(() => expect(target.querySelector('[contenteditable]')).not.toBeNull());
 	flushSync();
+	expect(target.querySelector('[role="toolbar"]')).toBeNull();
 	const content = target.querySelector('[contenteditable]');
+	expect(document.activeElement).toBe(content);
 	const transfer = new DataTransfer();
 	transfer.items.add(
 		new File([new Uint8Array([137, 80, 78, 71])], 'site.png', { type: 'image/png' })
@@ -51,6 +54,71 @@ it('stores a pasted picture through upload and shows it in place as Markdown', a
 	);
 	await vi.waitFor(() => expect(value).toContain('![site.png](/files/picture-1)'));
 	expect(target.querySelector('img')?.getAttribute('src')).toBe('/files/picture-1');
+	unmount(view);
+	await dispose();
+});
+
+it('opens floating slash menu on `/` and floating bubble menu on text selection', async () => {
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
+	const target = document.body.appendChild(document.createElement('div'));
+	let value = '';
+	const view = mount(RichMarkdownEditor, {
+		target,
+		props: {
+			value,
+			autofocus: true,
+			on_change: (next: string) => (value = next)
+		}
+	});
+	await vi.waitFor(() => expect(target.querySelector('[contenteditable]')).not.toBeNull());
+	flushSync();
+	const content = target.querySelector<HTMLElement>('[contenteditable]');
+	if (!content) throw new Error('Expected contenteditable element');
+
+	// Trigger `/` slash command by typing `/h2` via text insertion
+	const p = content.querySelector('p');
+	if (!p) throw new Error('Expected paragraph');
+	p.textContent = '/h2';
+	const sel = window.getSelection();
+	if (sel) {
+		const range = document.createRange();
+		range.setStart(p.firstChild ?? p, 3);
+		range.collapse(true);
+		sel.removeAllRanges();
+		sel.addRange(range);
+	}
+	content.dispatchEvent(new InputEvent('input', { bubbles: true }));
+	await vi.waitFor(() => expect(document.querySelector('[data-rich-slash-menu]')).not.toBeNull());
+	const h2Button = document.querySelector<HTMLButtonElement>('[data-slash-item="h2"] button');
+	expect(h2Button).not.toBeNull();
+	h2Button?.click();
+	flushSync();
+	await vi.waitFor(() => expect(content.querySelector('h2')).not.toBeNull());
+	expect(document.querySelector('[data-rich-slash-menu]')).toBeNull();
+
+	// Insert text inside the heading and select a word to trigger the floating bubble menu
+	const h2 = content.querySelector('h2');
+	if (!h2) throw new Error('Expected h2');
+	h2.textContent = 'Pour checklist';
+	content.dispatchEvent(new InputEvent('input', { bubbles: true }));
+	await vi.waitFor(() => expect(value).toContain('Pour checklist'));
+	if (sel && h2.firstChild) {
+		const range = document.createRange();
+		range.setStart(h2.firstChild, 0);
+		range.setEnd(h2.firstChild, 4);
+		sel.removeAllRanges();
+		sel.addRange(range);
+		document.dispatchEvent(new Event('selectionchange'));
+	}
+	await vi.waitFor(() => expect(document.querySelector('[data-rich-bubble-menu]')).not.toBeNull());
+	const boldButton = document.querySelector<HTMLButtonElement>(
+		'[data-rich-bubble-menu] button[aria-label="Bold"]'
+	);
+	expect(boldButton).not.toBeNull();
+	boldButton?.click();
+	flushSync();
+	await vi.waitFor(() => expect(value).toContain('**Pour**'));
+
 	unmount(view);
 	await dispose();
 });

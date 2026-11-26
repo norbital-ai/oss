@@ -45,7 +45,7 @@ jobs:
       # publishable package graph plus the one oss suite (`pnpm test`). Each phase is its own step so a
       # stalled phase names itself in the run summary instead of disappearing inside one long step.
       - name: Build packages
-        run: pnpm exec turbo run build --concurrency=1
+        run: pnpm exec turbo run build
 
       # The complete lint: every package's own lint, then the test lint and the type-assertion lint (bolt-cli's
       # `test/lint.ts`) over packages and scripts. Turbo's lint alone skips the last two.
@@ -58,8 +58,7 @@ jobs:
       - name: Check packed archives
         run: pnpm publication:check
 
-  # The suite is sharded across four runners: 3,080 tests in one job took minutes on a shared
-  # two-vCPU runner and hid the slow project behind one step. Each shard is a quarter of the suite,
+  # The suite is sharded across four runners, each on every core it has. Each shard is a quarter of the suite,
   # has its own log, and must finish inside the test budget.
   test:
     runs-on: ubuntu-latest
@@ -106,8 +105,8 @@ jobs:
 
       # A fresh test runner has no package build outputs; bolt's source imports sibling packages.
       - name: Build packages
-        run: pnpm exec turbo run build --concurrency=1
+        run: pnpm exec turbo run build
 
       - name: Test shard ${{ matrix.shard }}
         timeout-minutes: 4
-        run: pnpm test --maxWorkers=2 --shard=${{ matrix.shard }}/4
+        run: pnpm test --shard=${{ matrix.shard }}/4

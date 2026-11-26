@@ -359,9 +359,9 @@ describe('durable model sync', () => {
 					return yield* db.transaction(batch);
 				})
 			}));
-			// within a read's row cap, past a statement's bytes
+			// within a read's row cap, past a statement's bytes (1 MiB): 600 rows of 2 KiB
 			const page = (prefix: string) => f.page({
-				rows: Array.from({ length: 900 }, (_, i) => ({ $id: `${prefix}-${i}`, $version: '1', name: `${prefix} ${i}`, note: 'x'.repeat(2_000) })),
+				rows: Array.from({ length: 600 }, (_, i) => ({ $id: `${prefix}-${i}`, $version: '1', name: `${prefix} ${i}`, note: 'x'.repeat(2_000) })),
 				cursor: `${prefix}-cursor`,
 				more: false
 			});
@@ -381,7 +381,7 @@ describe('durable model sync', () => {
 			yield* f.t.syncs.read('contacts.sync.crm', { instance: 'crm' });
 			expect(gates).toContain(2);
 			// the last statement's id map acknowledges the first statement's rows at the revision they hold
-			expect(yield* state('bulk')).toEqual({ rows: 900, acked: 900, transactions: 1, cursor: 'bulk-cursor' });
+			expect(yield* state('bulk')).toEqual({ rows: 600, acked: 600, transactions: 1, cursor: 'bulk-cursor' });
 
 			// the cursor compare-and-set fails in the last statement: the earlier statement's rows go with it
 			stale = true;

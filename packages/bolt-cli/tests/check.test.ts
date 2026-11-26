@@ -1263,6 +1263,54 @@ describe('bolt check', () => {
 				expect(() => workspaceEntry(id)).not.toThrow();
 		});
 	});
+	it('validates integration/scope and access/personal-connection rules', () => {
+		const valid: EngineManifest = {
+			...emptyManifest,
+			integrations: {
+				gcal: { description: 'Personal calendar', driver: 'calendar', scope: 'personal' },
+				desk_mail: { description: 'Shared desk mailbox', driver: 'email' },
+				erp: { description: 'ERP', driver: 'http' }
+			},
+			policies: {
+				sales: {
+					description: 'Sales',
+					grants: {},
+					capabilities: { personal_connections: ['whatsapp', 'email', 'gcal'] }
+				}
+			}
+		};
+		const run = (m: EngineManifest) =>
+			checkRules(m, { automations: [] }, (_role, name) => name).filter(
+				(f) => f.code === 'integration/scope' || f.code === 'access/personal-connection'
+			);
+		expect(run(valid)).toEqual([]);
+		expect(
+			run({
+				...valid,
+				integrations: {
+					...valid.integrations,
+					erp: { description: 'ERP', driver: 'http', scope: 'personal' }
+				}
+			}).map((f) => f.code)
+		).toEqual(['integration/scope']);
+		expect(
+			run({
+				...valid,
+				policies: {
+					bad: {
+						description: 'Bad',
+						grants: {},
+						capabilities: { personal_connections: ['desk_mail', 'telegram', 'ghost'] }
+					}
+				}
+			}).map((f) => f.code)
+		).toEqual([
+			'access/personal-connection',
+			'access/personal-connection',
+			'access/personal-connection'
+		]);
+	});
+
 	it('grades evaluation CPU at reference speed: a thread slowed by load is not over budget', () => {
 		// unloaded: the reference ran at speed, the module's CPU stands
 		expect(evaluationCpuMs(80, 7)).toBe(80);

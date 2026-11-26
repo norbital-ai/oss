@@ -480,6 +480,77 @@ describe('engine/access: Authority', () => {
 			expect((yield* as.visitor('careers', 'v1')).policies).toEqual(['auditor']);
 		})
 	);
+
+	it.effect(
+		'capabilities.personal_connections compiles native own-row sys_integration arms for internal members only',
+		() =>
+			Effect.gen(function* () {
+				const withPersonal: EngineManifest = {
+					...m,
+					integrations: {
+						gcal: { description: 'Calendar', driver: 'calendar', scope: 'personal' }
+					},
+					policies: {
+						...m.policies,
+						connector: {
+							description: 'Personal connections',
+							grants: {},
+							capabilities: { personal_connections: ['whatsapp', 'gcal'] }
+						}
+					}
+				};
+				const staff = yield* compile_authority(
+					withPersonal,
+					{ actor: member(), admin: false, policies: ['connector'] },
+					'staff'
+				);
+				expect(staff.capabilities.personal_connections).toEqual(['whatsapp', 'gcal']);
+				const sys = required(staff.models.sys_integration);
+				expect(sys.read.default?.sys_integration).toEqual([
+					{
+						policy: '$personal_connections',
+						where: {
+							t: 'and',
+							of: [
+								{ t: 'cmp', field: 'owner', op: 'eq', arg: { _tag: 'Var', text: 'actor.id' } },
+								{ t: 'in', field: 'integration', negated: false, args: ['whatsapp', 'gcal'] }
+							]
+						}
+					}
+				]);
+				expect(sys.create).toEqual([
+					{
+						policy: '$personal_connections',
+						columns: { sys_integration: ['integration', 'name', 'owner', 'configuration'] },
+						check: false
+					}
+				]);
+				expect(sys.update).toEqual([
+					{
+						policy: '$personal_connections',
+						columns: { sys_integration: ['name', 'active', 'configuration', 'import_start'] },
+						check: false
+					}
+				]);
+				expect(sys.delete).toEqual([{ policy: '$personal_connections', check: false }]);
+
+				const ext = yield* compile_authority(
+					withPersonal,
+					{ actor: member({ external: true }), admin: false, policies: ['connector'] },
+					'ext'
+				);
+				expect(ext.capabilities.personal_connections).toEqual([]);
+				expect(ext.models.sys_integration).toBeUndefined();
+
+				const visitor = yield* compile_authority(
+					withPersonal,
+					{ actor: { kind: 'visitor', app: 'careers', visitor: 'v' }, admin: false, policies: ['connector'] },
+					'visitor'
+				);
+				expect(visitor.capabilities.personal_connections).toEqual([]);
+				expect(visitor.models.sys_integration).toBeUndefined();
+			})
+	);
 });
 
 describe('engine/identity: remembered member rows', () => {

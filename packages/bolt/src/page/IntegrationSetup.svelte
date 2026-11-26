@@ -59,7 +59,8 @@
 					)
 				)
 			),
-			client.watch()
+			// A dropped SSE socket should not clobber a loaded status with a terminal red error.
+			client.watch().pipe(Stream.catch(() => Stream.empty))
 		)
 	);
 	let mutation = $state.raw<{

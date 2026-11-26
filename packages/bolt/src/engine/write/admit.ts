@@ -5,6 +5,7 @@ import { MessageValues, message_text } from '../../decl/errors/refusal.ts';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { SYSTEM } from '../../system/index.ts';
+import { PERSONAL_CONNECTIONS } from '../access/authority.ts';
 import { catalog_of } from '../access/pred.ts';
 import { holders, type Holder } from '../approvals/lock.ts';
 import { Snapshot } from '../approvals/snapshot.ts';
@@ -136,6 +137,31 @@ export function admit(
 				list.find((need) => !covers(first, need)),
 				'No one policy admits this whole change; split it into smaller acts.'
 			);
+		if (verb === 'create' && root === 'sys_integration') {
+			const actor = auth.actor;
+			const personalOk =
+				actor.kind === 'member' &&
+				!actor.external &&
+				items.every((item) => {
+					const c = item.change;
+					if (item.parent !== undefined || c.model !== 'sys_integration' || actionOf(c, pre) !== 'create')
+						return true;
+					const values = c.op === 'create' || c.op === 'upsert' ? c.values : {};
+					return (
+						values['owner'] === actor.id &&
+						typeof values['integration'] === 'string' &&
+						auth.capabilities.personal_connections.includes(values['integration']) &&
+						(values['envoy'] === undefined || values['envoy'] === null)
+					);
+				});
+			if (!personalOk) {
+				const remaining = admitting.filter((arm) => arm.policy !== PERSONAL_CONNECTIONS);
+				if (remaining.length === 0)
+					return forbidden(list[0], 'You may only connect your own allowed personal integrations.');
+				out[verb] = remaining;
+				continue;
+			}
+		}
 		out[verb] = admitting;
 	}
 	return out;
@@ -552,13 +578,25 @@ export const opened = Effect.fn('Bolt.opened')(function* (
 	if (authority.admin) return 'allow';
 	const arms = authority.models[model]?.[verb] ?? [];
 	if (arms.length === 0) return 'refuse';
-	if (arms.some((arm) => !arm.check)) return 'allow';
-	if (e.guest === undefined) return 'refuse';
 	const cat = catalog_of(e.manifest);
+	const writeScope = { authority, verb } as const;
+	if (arms.some((arm) => !arm.check)) {
+		const allowed = yield* wireRows(
+			e.db,
+			cat,
+			model,
+			ids,
+			bindings,
+			{ fields: ['id'], relations: {} },
+			writeScope
+		);
+		return allowed.every((row) => row !== null) ? 'allow' : 'refuse';
+	}
+	if (e.guest === undefined) return 'refuse';
 	const before =
 		verb === 'update'
-			? yield* storedTrees(e.db, e.manifest, cat, model, ids, bindings)
-			: yield* wireRows(e.db, cat, model, ids, bindings);
+			? yield* storedTrees(e.db, e.manifest, cat, model, ids, bindings, undefined, writeScope)
+			: yield* wireRows(e.db, cat, model, ids, bindings, undefined, writeScope);
 	const rows = before.filter((row) => row !== null);
 	if (rows.length !== ids.length) return 'refuse';
 	const { verdict } = yield* judge(

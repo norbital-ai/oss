@@ -131,7 +131,7 @@ export const authority = (models: Authority['models'], admin = false): Authority
 	policies: ['p'],
 	models,
 	automations: [],
-	capabilities: { apps: [], syncs: [], tools: [], mcp: [] },
+	capabilities: { apps: [], syncs: [], tools: [], mcp: [], personal_connections: [] },
 	limits: [],
 	teamTree: []
 });

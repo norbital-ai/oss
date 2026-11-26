@@ -11,7 +11,9 @@ import {
 	ToolBehavior,
 	ToolView
 } from '@norbital-ai/host-api';
+import { KindSchema } from '@norbital-ai/store/kind';
 import { MessageValues } from '../decl/errors/refusal.ts';
+import { IntegrationScope } from '../decl/runtime/integration.ts';
 
 /** A question keeps its choices through storage, channel delivery and the shell. */
 export const AgentQuestion = Schema.Struct({
@@ -842,6 +844,12 @@ export const IntegrationOffer = Schema.Struct({
 	integration: Schema.String,
 	driver: Driver,
 	description: Schema.String,
+	/** Where instances may be created (`'workspace'`, `'personal'`, or `'both'`). */
+	scope: Schema.optionalKey(IntegrationScope),
+	/** `true` for workspace-declared integrations (`src/integration/`), `false` for Bolt built-ins. */
+	custom: Schema.optionalKey(Schema.Boolean),
+	/** Runtime configuration fields declared on the integration definition. */
+	configuration: Schema.optionalKey(Schema.Record(Schema.String, KindSchema)),
 	/** It carries a conversation, so an envoy can answer on it. */
 	conversation: Schema.Boolean,
 	personal: listOf(ProviderChoice),

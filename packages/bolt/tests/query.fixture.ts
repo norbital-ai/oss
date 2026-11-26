@@ -186,7 +186,7 @@ export const rep: Authority = {
 		notes: arm({ notes: TRUE })
 	},
 	automations: [],
-	capabilities: { apps: [], syncs: [], tools: [], mcp: [] },
+	capabilities: { apps: [], syncs: [], tools: [], mcp: [], personal_connections: [] },
 	limits: [],
 	teamTree: ['t1', 't2']
 };

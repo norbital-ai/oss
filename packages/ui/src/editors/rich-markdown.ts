@@ -7,10 +7,12 @@ import StarterKit from '@tiptap/starter-kit';
 
 export type { Editor };
 
-/** What the editor tells its owner: each edit as Markdown, each transaction (toolbar state), each picture handed in. */
+/** What the editor tells its owner: each edit as Markdown, each transaction/selection/focus change, key interception, and pictures. */
 export type RichMarkdownHooks = {
 	readonly on_markdown: (markdown: string) => void;
 	readonly on_transaction: () => void;
+	readonly on_focus?: (focused: boolean) => void;
+	readonly on_keydown?: (event: KeyboardEvent) => boolean;
 	/** Pictures pasted or dropped at a document position; `false` leaves the event to the editor (no pictures taken). */
 	readonly on_pictures: (files: readonly File[], at: number | null) => boolean;
 };
@@ -25,6 +27,7 @@ export const rich_markdown = (
 		readonly value: string;
 		readonly placeholder: string;
 		readonly editable: boolean;
+		readonly autofocus?: boolean;
 		readonly label: string | undefined;
 		readonly id: string | undefined;
 	},
@@ -41,14 +44,17 @@ export const rich_markdown = (
 		content: options.value,
 		contentType: 'markdown',
 		editable: options.editable,
+		autofocus: options.autofocus && options.editable ? 'end' : false,
 		editorProps: {
 			attributes: {
-				class: 'rich-markdown prose prose-sm max-w-none dark:prose-invert focus:outline-none',
+				class:
+					'rich-markdown prose prose-sm max-w-none dark:prose-invert min-h-full flex-1 focus:outline-none',
 				role: 'textbox',
 				'aria-multiline': 'true',
 				...(options.label === undefined ? {} : { 'aria-label': options.label }),
 				...(options.id === undefined ? {} : { id: options.id })
 			},
+			handleKeyDown: (_view, event) => hooks.on_keydown?.(event) ?? false,
 			handlePaste: (_view, event) => {
 				const files = pictures(event.clipboardData?.files);
 				return files.length > 0 && hooks.on_pictures(files, null);
@@ -61,5 +67,7 @@ export const rich_markdown = (
 			}
 		},
 		onUpdate: ({ editor }) => hooks.on_markdown(editor.getMarkdown()),
-		onTransaction: () => hooks.on_transaction()
+		onTransaction: () => hooks.on_transaction(),
+		onFocus: () => hooks.on_focus?.(true),
+		onBlur: () => hooks.on_focus?.(false)
 	});

@@ -13,7 +13,8 @@ import { catalog_of } from '../src/engine/access/pred.ts';
 import { parts, type Commit, type Write } from '../src/engine/write/commit.ts';
 import { admin as fixtureAdmin, manifest as base, NOW } from './write-fixture.ts';
 
-const LINES = 2_500;
+// one row past two full statements (`PART.rows` is 1,000): the smallest act with a first, a middle and a last statement
+const LINES = 2_001;
 const lines = base.exposures.lines;
 if (lines?.create === undefined) throw new Error('The write fixture needs a lines create.');
 /** The write fixture with an effect on each created line. */
@@ -75,10 +76,10 @@ describe('a large act', () => {
 						]
 					})
 				);
-				// 2,501 rows: three statements in one transaction, after the table their rows wait in for the effects
+				// 2,002 rows: three statements in one transaction, after the table their rows wait in for the effects
 				expect(statements).toContain(4);
 				const done = yield* state;
-				expect(done).toMatchObject({ lines: LINES, changed: 0, history: LINES, total: '2500.00', number: 'PO-2026-0001' });
+				expect(done).toMatchObject({ lines: LINES, changed: 0, history: LINES, total: `${LINES}.00`, number: 'PO-2026-0001' });
 				// each later statement's roll-up moved the order: its record names the revision it holds now
 				expect(created.records).toHaveLength(LINES + 1);
 				expect(created.records.find((record) => record.model === 'orders')?.revision).toBe(done.revision);
@@ -106,7 +107,7 @@ describe('a large act', () => {
 				expect(statements).toContain(4);
 				expect(failed._tag).toBe('ActConflict');
 				// the first two statements' updates went with the third's conflict
-				expect(yield* state).toMatchObject({ changed: 0, total: '2500.00', revision: done.revision });
+				expect(yield* state).toMatchObject({ changed: 0, total: `${LINES}.00`, revision: done.revision });
 			})
 		)
 	);
@@ -178,7 +179,7 @@ describe('a large delete, erasure or restore', () => {
 				stale(ids.at(-1)?.id);
 				expect((yield* remove().pipe(Effect.flip))._tag).toBe('ActConflict');
 				expect(gates).toContain(3);
-				expect(yield* state).toEqual({ lines: LINES, total: '2500.00', deleted: 0, transactions: 0 });
+				expect(yield* state).toEqual({ lines: LINES, total: `${LINES}.00`, deleted: 0, transactions: 0 });
 
 				const before = new Map((yield* lines).map((line) => [line.id, line.revision]));
 				gates.length = 0;
@@ -253,7 +254,7 @@ describe('a large delete, erasure or restore', () => {
 			output: null
 		};
 		const split = parts(manifest, cat, { ...commit, restored: ids.map((id) => ({ model: 'lines', id, revision: 1 })) }) ?? [];
-		expect(split.map((x) => x.writes.length)).toEqual([1_000, 1_000, 500]);
+		expect(split.map((x) => x.writes.length)).toEqual([1_000, 1_000, 1]);
 		for (const x of split) expect(x.restored?.map((r) => r.id)).toEqual(x.writes.map((w) => w.id));
 		// the lines' roll-up moves their order, which the act also writes: a later statement would find it moved
 		const deletes = ids.map((id): Write => ({ model: 'lines', id, op: 'delete', revision: 1 }));

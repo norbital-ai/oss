@@ -135,6 +135,7 @@ import { Audit } from '../engine/audit.ts';
 import { audited, auditContext } from '../engine/audit-operation.ts';
 
 import { canonical } from '@norbital-ai/store';
+import { scope_of } from '../decl/runtime/integration.ts';
 import { fromBase64, timingSafeEqual } from '../engine/crypto.ts';
 import { PUSH_WORKER } from './push-worker.ts';
 
@@ -328,6 +329,23 @@ const sessionToken = (
 	const token = cookies(request).get(name);
 	return token === undefined || token === '' ? null : token;
 };
+/** Personal connections offered to this caller in `/connections`: held capabilities for staff, declared union for admins. */
+const personalConnectionsFor = (
+	manifest: EngineManifest,
+	authority: Authority,
+	preview: boolean
+): readonly string[] => {
+	if (preview || authority.render === true || authority.actor.kind !== 'member' || authority.actor.external)
+		return [];
+	if (!authority.admin) return authority.capabilities.personal_connections;
+	const names = new Set<string>();
+	for (const spec of Object.values(manifest.policies))
+		for (const name of spec.capabilities?.personal_connections ?? []) names.add(name);
+	for (const [name, def] of Object.entries(manifest.integrations))
+		if (scope_of(def) === 'personal') names.add(name);
+	return [...names].sort();
+};
+
 /** The common shell boot; members and visitors only add their own data and host capabilities. */
 const bootFor = (
 	manifest: EngineManifest,
@@ -337,6 +355,11 @@ const bootFor = (
 	available?: ShellBoot['nav']
 ): Effect.Effect<ShellBoot, BoltError> =>
 	Effect.gen(function* () {
+		const personal_connections = personalConnectionsFor(
+			manifest,
+			authority,
+			workspace.live !== undefined
+		);
 		return {
 			workspace,
 			actor: authority.actor,
@@ -348,6 +371,7 @@ const bootFor = (
 			kiosks: kiosk_nav(manifest, authority),
 			startable: startable_automations(manifest, authority),
 			envoys: {},
+			...(personal_connections.length > 0 ? { personal_connections } : {}),
 			surfaces: surfaces(
 				manifest,
 				authority.actor,

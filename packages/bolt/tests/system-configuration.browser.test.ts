@@ -780,3 +780,172 @@ it("a definition's configuration tab receives the page context", async () => {
 		target.remove();
 	}
 });
+
+it('envoys render as plugin cards with the shared FSM and channel-card creation sheet', async () => {
+	const runtime = ManagedRuntime.make(Layer.empty),
+		dispose = mount_edge(runtime);
+	const scope = Effect.runSync(Scope.make());
+	const bolt = await runtime.runPromise(
+		shell_bolt(
+			{
+				workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
+				actor: null,
+				policies: [],
+				name: null,
+				admin: true,
+				preview: null,
+				nav: [],
+				inbox: 0,
+				kiosks: [],
+				startable: [],
+				envoys: {},
+				search: [],
+				contract: 'fixture',
+				push: null,
+				visitor: null,
+				automations: {},
+				read_catalog: {},
+				operation_outputs: { automations: {} },
+				surfaces: { inbox: false, runs: false, settings: true, agent: false, studio: false },
+				catalog: {
+					sys_envoy: {
+						record_label: 'record.name',
+						label: ['name'],
+						fields: {
+							name: { kind: 'text' },
+							audience: { kind: 'enum', values: ['private', 'public'] },
+							task: { kind: 'text', optional: true },
+							policies: { kind: 'text', many: true },
+							group_messages: { kind: 'enum', values: ['disabled', 'mention_or_reply', 'all'] },
+							delegation: { kind: 'enum', values: ['enabled', 'disabled'] },
+							dm: { kind: 'enum', values: ['union', 'envoy'] },
+							triage: { kind: 'bool' },
+							active: { kind: 'bool' }
+						}
+					}
+				}
+			},
+			{
+				fetch: async () => Response.json({ answers: [] }),
+				open_stream: () => ({ onmessage: null, onerror: null, close() {} })
+			}
+		).pipe(Effect.provideService(Scope.Scope, scope))
+	);
+	const api = {
+		...nativeApi,
+		settings: () =>
+			Effect.succeed({
+				...settings,
+				policies: ['site_intake'],
+				envoys: [
+					{
+						id: 'envoy-1',
+						name: 'Site Desk',
+						audience: 'private' as const,
+						task: 'Triage site updates',
+						policies: ['site_intake'],
+						group_messages: 'mention_or_reply' as const,
+						delegation: 'disabled' as const,
+						triage: false,
+						dm: 'union' as const,
+						active: true
+					}
+				],
+				integrations: [
+					...settings.integrations,
+					{
+						name: 'whatsapp',
+						driver: 'whatsapp',
+						description: 'WhatsApp channel',
+						scope: 'both' as const,
+						custom: false,
+						conversation: true,
+						personal: true,
+						sends: true,
+						syncs: false,
+						configuration: {}
+					}
+				],
+				instances: [
+					...settings.instances,
+					{
+						id: 'wa-shared',
+						name: 'Main WhatsApp',
+						integration: 'whatsapp',
+						owner: null,
+						envoy: null,
+						active: true,
+						status: { state: 'connected', account: '+6590001111' },
+						configuration: {},
+						revision: 1,
+						delivery: {
+							sent: 0,
+							pending: 0,
+							retrying: 0,
+							failed: 0,
+							skipped: 0,
+							nextRetry: null,
+							lastError: null
+						}
+					}
+				]
+			}),
+		integration_offers: () =>
+			Effect.succeed([
+				{
+					integration: 'whatsapp',
+					driver: 'whatsapp' as const,
+					description: 'WhatsApp channel',
+					scope: 'both' as const,
+					custom: false,
+					conversation: true,
+					personal: [],
+					workspace: [
+						{
+							id: 'baileys',
+							name: 'WhatsApp',
+							label: 'WhatsApp Web',
+							icon: 'simple-icons:whatsapp',
+							setup: { kind: 'qr' as const, steps: [] }
+						}
+					]
+				}
+			]),
+		integration: (instance: string) => ({
+			...nativeApi.integration(instance),
+			watch: () => Stream.never
+		})
+	};
+	const target = document.createElement('div');
+	document.body.replaceChildren(target);
+	const view = mount(Configuration, {
+		target,
+		props: {
+			api,
+			bolt,
+			t: (x: string) => x,
+			tab: 'integrations',
+			workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' }
+		}
+	});
+	try {
+		await page.getByRole('tab', { name: 'Connections', exact: true }).click();
+		await expect.element(page.getByText('Installed', { exact: true })).toBeVisible();
+		await expect.element(page.getByText('Main WhatsApp', { exact: true })).toBeVisible();
+
+		await page.getByRole('tab', { name: 'Envoys', exact: true }).click();
+		await expect.element(page.getByText('Site Desk', { exact: true })).toBeVisible();
+		await expect.element(page.getByText('Not yet installed', { exact: true })).toBeVisible();
+		await expect.element(page.getByRole('button', { name: 'Install', exact: true })).toBeVisible();
+		await page.getByRole('button', { name: 'New envoy', exact: true }).click();
+		await expect.element(page.getByText('Choose a channel', { exact: true })).toBeVisible();
+		await expect.element(page.getByRole('radiogroup')).toBeVisible();
+		await expect.element(page.getByRole('radio', { name: /Main WhatsApp/ })).toBeVisible();
+		await expect.element(page.getByRole('radio', { name: /WhatsApp/ }).first()).toBeVisible();
+	} finally {
+		await unmount(view);
+		await runtime.runPromise(Scope.close(scope, Exit.void));
+		await dispose();
+		target.remove();
+	}
+});

@@ -19,7 +19,14 @@ import {
 	Stream
 } from 'effect';
 import { bindingsAt } from '../query/reader.ts';
-import { driver_name, driver_of, type IntegrationSpec } from '../../decl/runtime/integration.ts';
+import {
+	allows_personal,
+	allows_workspace,
+	driver_name,
+	driver_of,
+	scope_of,
+	type IntegrationSpec
+} from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { under } from '../../protocol/wire.ts';
 import {
@@ -1087,17 +1094,22 @@ export const integration_links = (
 			offers: h.enter(
 				Effect.map(Manifest, (manifest) =>
 					[
-						...Object.entries(SYSTEM.integrations).filter(
-							([name]) => !Object.hasOwn(manifest.integrations, name)
-						),
-						...Object.entries(manifest.integrations)
-					].map(([integration, definition]): IntegrationOffer => ({
+						...Object.entries(SYSTEM.integrations)
+							.filter(([name]) => !Object.hasOwn(manifest.integrations, name))
+							.map(([integration, definition]) => [integration, definition, false] as const),
+						...Object.entries(manifest.integrations).map(
+							([integration, definition]) => [integration, definition, true] as const
+						)
+					].map(([integration, definition, custom]): IntegrationOffer => ({
 						integration,
 						driver: driver_name(definition),
 						description: definition.description,
+						scope: scope_of(definition),
+						custom,
+						configuration: definition.configuration ?? {},
 						conversation: conversational(definition),
-						personal: driver_of(definition).personal === true ? offered(definition, true) : [],
-						workspace: offered(definition, false)
+						personal: allows_personal(definition) ? offered(definition, true) : [],
+						workspace: allows_workspace(definition) ? offered(definition, false) : []
 					}))
 				)
 			),
@@ -1254,6 +1266,17 @@ export const integration_links = (
 					instance,
 					Effect.gen(function* () {
 						const held = live.get(instance);
+						const existing = yield* row(instance);
+						const stored =
+							existing === undefined
+								? Option.none()
+								: Schema.decodeUnknownOption(LinkStatusSchema)(existing.status);
+						const wasPaired =
+							held?.status.state === 'connected' ||
+							held?.status.state === 'reconnecting' ||
+							(existing !== undefined &&
+								(existing.stored ||
+									(Option.isSome(stored) && stored.value.state === 'connected')));
 						// the provider forgets this host first (a linked device logs out, a grant is revoked) …
 						if (held !== undefined && !held.replaced)
 							yield* held.calls.unpair.pipe(Effect.ensuring(shut(instance)));
@@ -1266,7 +1289,7 @@ export const integration_links = (
 							databaseVerified: false,
 							account: null,
 							error: null,
-							code: null,
+							code: wasPaired ? 'disconnected' : null,
 							last_disconnect: null
 						});
 						yield* publish(instance);

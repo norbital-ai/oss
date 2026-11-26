@@ -72,7 +72,11 @@ export const has_nav_page = (nodes: readonly NavNode[], app: string, page: strin
 		node.name === app && node.pages.some(p => p.name === page));
 
 /** Exact workspace pages the in-app assistant may request; never URLs, API routes or sign-in actions. */
-export function navigation_paths(nodes: readonly NavNode[], admin: boolean): string[] {
+export function navigation_paths(
+	nodes: readonly NavNode[],
+	admin: boolean,
+	personalConnections = false
+): string[] {
 	const pages = (items: readonly NavNode[]): string[] =>
 		items.flatMap((node) =>
 			node.kind === 'group' ? pages(node.children) : node.pages.map((page) => page.href)
@@ -80,6 +84,7 @@ export function navigation_paths(nodes: readonly NavNode[], admin: boolean): str
 	return [
 		'/',
 		'/inbox',
+		...(personalConnections ? ['/connections'] : []),
 		...pages(nodes),
 		...(admin
 			? [
@@ -214,6 +219,8 @@ export type ShellBoot = {
 	}[];
 	/** Each runtime envoy's display name by ID, for the agent panel's conversation groups. */
 	envoys: { readonly [envoy: string]: string };
+	/** Personal integration definitions this member may connect in `/connections` (empty when the workspace declares none). */
+	personal_connections?: readonly string[];
 	/** The VAPID public key to subscribe this device to notices with, or `null` when the host sends no push. */
 	push: string | null;
 	/** A visitor page's app and, when it declares one, the Turnstile site key. */
@@ -505,6 +512,7 @@ export type Route =
 	| { kind: 'kiosk'; kiosk: string; page: string }
 	| { kind: 'home' }
 	| { kind: 'inbox' }
+	| { kind: 'connections' }
 	| { kind: 'settings'; tab: SettingsTab }
 	| { kind: 'command_center'; tab?: CommandCenterTab }
 	| { kind: 'studio'; tab?: StudioTab }
@@ -542,7 +550,11 @@ const named = <T extends string>(tabs: readonly T[], value: string | undefined):
  */
 export function preview_route(r: Route, preview: boolean): Route {
 	return preview &&
-		(r.kind === 'studio' || r.kind === 'command_center' || r.kind === 'settings' || r.kind === 'inbox')
+		(r.kind === 'studio' ||
+			r.kind === 'command_center' ||
+			r.kind === 'settings' ||
+			r.kind === 'inbox' ||
+			r.kind === 'connections')
 		? { kind: 'home' }
 		: r;
 }
@@ -599,6 +611,8 @@ export function route(m: ShellManifest, url: URL): Route {
 			return { kind: 'home' };
 		case 'inbox':
 			return seg.length === 1 ? { kind: 'inbox' } : { kind: 'not_found' };
+		case 'connections':
+			return seg.length === 1 ? { kind: 'connections' } : { kind: 'not_found' };
 		case 'settings': {
 			const tab = named(SETTINGS_TABS, seg[1]);
 			return seg.length === 2 && tab !== undefined

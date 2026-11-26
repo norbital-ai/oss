@@ -116,7 +116,7 @@ const member = (
 				).models
 			: {},
 	automations: [],
-	capabilities: { apps: [], tools: o.tools ?? [], mcp: [], syncs: [] },
+	capabilities: { apps: [], tools: o.tools ?? [], mcp: [], syncs: [], personal_connections: [] },
 	limits: [],
 	teamTree: []
 });

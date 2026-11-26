@@ -56,6 +56,9 @@ export type {
 	ModelName,
 	PolicyName,
 	InstanceId,
+	IntegrationName,
+	PersonalIntegrationName,
+	WorkspaceIntegrationName,
 	Row,
 	StoredRow
 } from './decl/names.ts';
@@ -90,7 +93,8 @@ export type {
 	CalendarEvent,
 	Integration,
 	IntegrationLiteral,
-	IntegrationLiteralInput
+	IntegrationLiteralInput,
+	IntegrationScope
 } from './decl/runtime/integration.ts';
 export type { Finding, Health, SyncCtx, SyncRow } from './decl/runtime/sync.ts';
 export type { DatabaseRequest, DatabaseResult } from '@norbital-ai/host-api';

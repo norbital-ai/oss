@@ -7,7 +7,21 @@ import type { UiContext } from '@norbital-ai/ui';
 export type { PageBolt } from './page-bolt.ts';
 export type { PageSnapshotHost } from './bolt.ts';
 export { file_ref } from './file-ref.ts';
+export { default as Connections } from './Connections.svelte';
+export { default as IntegrationCard } from './IntegrationCard.svelte';
 export { default as IntegrationSetup } from './IntegrationSetup.svelte';
+export {
+	decodeStoredStatus,
+	resolveConnectionState,
+	type ConnectionAction,
+	type ConnectionCta,
+	type ConnectionFsmInput,
+	type ConnectionPhase,
+	type ConnectionSnapshot,
+	type ConnectionTone,
+	type StoredStatus
+} from './connection-fsm.ts';
+export type { IntegrationOffer } from '../protocol/schema.ts';
 export type { IntegrationSetupEntry } from '../shell/integration/setup.ts';
 
 /**
@@ -19,7 +33,21 @@ export type { IntegrationSetupEntry } from '../shell/integration/setup.ts';
 export interface PageContext
 	extends PageBolt,
 		UiContext,
-		Pick<ShellBolt, 'locale' | 'tz' | 'catalog' | 'device' | 'href' | 'org' | 'agent' | 'integration' | 'runs'> {}
+		Pick<
+			ShellBolt,
+			| 'locale'
+			| 'tz'
+			| 'catalog'
+			| 'device'
+			| 'href'
+			| 'org'
+			| 'agent'
+			| 'integration'
+			| 'integration_offers'
+			| 'integration_setup'
+			| 'personal_connections'
+			| 'runs'
+		> {}
 /**
  * A public page's `ctx`: `PageContext`'s counterpart for apps whose audience is not members, over the public client.
  *

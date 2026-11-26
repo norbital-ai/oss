@@ -150,6 +150,7 @@ export function integration_clients(options: Options = {}) {
 		readonly fail: (error: ProtocolFailed) => void;
 	};
 	const subscribers = new Set<Subscriber>();
+	const clients = new Map<string, IntegrationClient>();
 	let source: EventSource | null = null;
 	const open = () => {
 		const opened = new EventSource(`${list(options)}?stream=1`);
@@ -166,6 +167,11 @@ export function integration_clients(options: Options = {}) {
 					if (subscriber.instance === status.instance) subscriber.send(status);
 		};
 		opened.onerror = () => {
+			// Native EventSource fires `onerror` while transparently reconnecting (readyState === CONNECTING);
+			// only fail mounted subscribers when the stream is closed and will not recover on its own.
+			if (typeof EventSource !== 'undefined' && opened.readyState === EventSource.CONNECTING)
+				return;
+			if (source === opened) source = null;
 			const error = new ProtocolFailed({
 				message: 'The integration status stream was interrupted.'
 			});
@@ -173,38 +179,44 @@ export function integration_clients(options: Options = {}) {
 		};
 		return opened;
 	};
-	return (instance: string): IntegrationClient => ({
-		...integration_client(instance, options),
-		watch: () =>
-			Stream.callback<InstanceStatus, ProtocolFailed>((queue) =>
-				Effect.acquireRelease(
-					Effect.try({
-						try: () => {
-							source ??= open();
-							const subscriber: Subscriber = {
-								instance,
-								send: (status) => {
-									Queue.offerUnsafe(queue, status);
-								},
-								fail: (error) => {
-									Queue.failCauseUnsafe(queue, Cause.fail(error));
+	return (instance: string): IntegrationClient => {
+		const cached = clients.get(instance);
+		if (cached !== undefined) return cached;
+		const created: IntegrationClient = {
+			...integration_client(instance, options),
+			watch: () =>
+				Stream.callback<InstanceStatus, ProtocolFailed>((queue) =>
+					Effect.acquireRelease(
+						Effect.try({
+							try: () => {
+								source ??= open();
+								const subscriber: Subscriber = {
+									instance,
+									send: (status) => {
+										Queue.offerUnsafe(queue, status);
+									},
+									fail: (error) => {
+										Queue.failCauseUnsafe(queue, Cause.fail(error));
+									}
+								};
+								subscribers.add(subscriber);
+								return subscriber;
+							},
+							catch: () =>
+								new ProtocolFailed({ message: 'The integration status stream could not be opened.' })
+						}),
+						(subscriber) =>
+							Effect.sync(() => {
+								subscribers.delete(subscriber);
+								if (subscribers.size === 0) {
+									source?.close();
+									source = null;
 								}
-							};
-							subscribers.add(subscriber);
-							return subscriber;
-						},
-						catch: () =>
-							new ProtocolFailed({ message: 'The integration status stream could not be opened.' })
-					}),
-					(subscriber) =>
-						Effect.sync(() => {
-							subscribers.delete(subscriber);
-							if (subscribers.size === 0) {
-								source?.close();
-								source = null;
-							}
-						})
+							})
+					)
 				)
-			)
-	});
+		};
+		clients.set(instance, created);
+		return created;
+	};
 }

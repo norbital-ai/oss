@@ -73,7 +73,8 @@ const PolicyData = Schema.Struct({
 			automations: Schema.optionalKey(Schema.Array(Schema.String)),
 			syncs: Schema.optionalKey(Schema.Array(Schema.String)),
 			mcp: Schema.optionalKey(Schema.Array(Schema.String)),
-			tools: Schema.optionalKey(Schema.Array(Schema.String))
+			tools: Schema.optionalKey(Schema.Array(Schema.String)),
+			personal_connections: Schema.optionalKey(Schema.Array(Schema.String))
 		})
 	)
 });

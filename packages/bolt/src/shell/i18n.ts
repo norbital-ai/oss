@@ -223,6 +223,20 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	write: '写入',
 	'This connection could not be made.': '无法建立此连接。',
 	'Not available on this host': '此主机不提供',
+	'Not yet installed': '尚未安装',
+	Install: '安装',
+	'Installing…': '正在安装…',
+	Uninstall: '卸载',
+	'Uninstall {name}?': '卸载 {name}？',
+	Disconnected: '已断开',
+	'Disconnecting…': '正在断开…',
+	'Continue setup': '继续设置',
+	'View status': '查看状态',
+	'Install channel': '安装渠道',
+	'Add connection': '添加连接',
+	Change: '更改',
+	'Choose a channel': '选择渠道',
+	'No channel yet': '尚未配置渠道',
 	'Not connected': '未连接',
 	'Other ways to connect': '其他连接方式',
 	'Disconnect {name}?': '断开 {name}？',
@@ -1165,7 +1179,17 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Stop response': '停止回复',
 	'you asked for it': '由你发起',
 	'the assistant asked for it': '由助手发起',
-	'the context was full': '上下文已满'
+	'the context was full': '上下文已满',
+	'My connections': '我的连接',
+	'Personal accounts synced for you. They never send messages on your behalf.':
+		'为你同步的个人账号，绝不会代你发送消息。',
+	'No personal connections are configured for your role.': '你的角色未配置个人连接。',
+	Installed: '已安装',
+	Available: '可安装',
+	'Use existing': '使用现有连接',
+	'Existing channel': '现有渠道',
+	'New channel': '新建渠道',
+	'Existing workspace connection': '现有工作区连接'
 };
 
 /** The framework copy of a locale (none for English: the key is the text). */

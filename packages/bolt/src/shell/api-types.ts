@@ -4,7 +4,7 @@
 // the implementation in `runtime.ts` and the Svelte components that run it on the ui edge.
 import { Schema, type Effect } from 'effect';
 import type { FileRef } from '@norbital-ai/store/kind';
-import type { Attachment } from '../decl/runtime/integration.ts';
+import { IntegrationScope, type Attachment } from '../decl/runtime/integration.ts';
 import { SyncDeadLetter, SyncHealth } from '../engine/sync/health-schema.ts';
 import type { Json } from '../decl/values.ts';
 import {
@@ -291,6 +291,7 @@ export const ShellBootAnswer: Schema.Decoder<ShellBoot> = Schema.Struct({
 		})
 	),
 	envoys: Schema.Record(Schema.String, Schema.String),
+	personal_connections: Schema.optionalKey(Strings),
 	push: NullableString,
 	visitor: Schema.NullOr(Schema.Struct({ app: Schema.String, site_key: Optional })),
 	catalog: Schema.Record(Schema.String, ModelExposureSchema),
@@ -381,6 +382,8 @@ export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 				name: Schema.String,
 				driver: Driver,
 				description: Schema.String,
+				scope: Schema.optionalKey(IntegrationScope),
+				custom: Schema.optionalKey(Schema.Boolean),
 				conversation: Schema.Boolean,
 				personal: Schema.Boolean,
 				sends: Schema.Boolean,

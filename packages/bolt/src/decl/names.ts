@@ -98,6 +98,17 @@ export type IntegrationSpecOf<D> = D extends keyof Definitions
 		? S
 		: never
 	: never;
+/** The declared scope of integration definition `D` (`'workspace'` when omitted). */
+export type IntegrationScopeOf<D> =
+	IntegrationSpecOf<D> extends { scope: infer S extends string } ? S : 'workspace';
+/** Integration definitions a member may connect as a personal account (`scope: 'personal' | 'both'`). */
+export type PersonalIntegrationName = {
+	[D in IntegrationName]: IntegrationScopeOf<D> extends 'personal' | 'both' ? D : never;
+}[IntegrationName];
+/** Integration definitions an administrator may connect for the workspace (`scope: 'workspace' | 'both'`). */
+export type WorkspaceIntegrationName = {
+	[D in IntegrationName]: IntegrationScopeOf<D> extends 'workspace' | 'both' ? D : never;
+}[IntegrationName];
 declare const definition: unique symbol;
 /** A `sys_integration` id known to be an instance of definition `D`: what an FK pinned to `D` holds. */
 export type InstanceId<D extends string = IntegrationName> = Id<'sys_integration'> & {

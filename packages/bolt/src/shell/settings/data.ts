@@ -7,7 +7,12 @@ import type { SecretsShape } from '../../engine/secrets.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import type { Authority } from '../../engine/contracts.ts';
 import type { Json } from '../../decl/values.ts';
-import { driver_name, driver_of } from '../../decl/runtime/integration.ts';
+import {
+	allows_personal,
+	driver_name,
+	scope_of,
+	type IntegrationScope
+} from '../../decl/runtime/integration.ts';
 import type { Fields } from '@norbital-ai/store/kind';
 import { SYSTEM } from '../../system/index.ts';
 import { conversational } from '../../engine/integrations/instances.ts';
@@ -106,6 +111,8 @@ export type Settings = {
 		name: string;
 		driver: string;
 		description: string;
+		scope?: IntegrationScope;
+		custom?: boolean;
 		conversation: boolean;
 		personal: boolean;
 		sends: boolean;
@@ -259,8 +266,10 @@ export const settings = Effect.fn('shell.settings')(function* (
 				name,
 				driver: driver_name(d),
 				description: d.description,
+				scope: scope_of(d),
+				custom: Object.hasOwn(m.integrations, name),
 				conversation: conversational(d),
-				personal: driver_of(d).personal === true,
+				personal: allows_personal(d),
 				sends:
 					conversational(d) ||
 					Object.values(m.exposures).some((model) =>

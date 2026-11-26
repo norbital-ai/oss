@@ -113,7 +113,6 @@ describe('versioned record history', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
 					const old: EngineManifest = {
 						...before,
 						workspace: { ...before.workspace, currency: 'USD' },
@@ -131,7 +130,7 @@ describe('versioned record history', () => {
 						workspace: { ...old.workspace, currency: 'SGD' }
 					};
 					const initial = schema_slice(old);
-					yield* TestDb.migrate(db, initial);
+					const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(initial)));
 					yield* db.write({
 						text: "insert into items(id,title,price) values($1,'Money',12.50)",
 						params: [ID]
@@ -161,8 +160,7 @@ describe('versioned record history', () => {
 	it.live('refuses missing, unknown, retired-flag and incomplete history metadata without rewriting it', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
-				yield* TestDb.migrate(db, before);
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(before)));
 				yield* db.write({
 					text: "insert into documents(id,title) values($1,'Original')",
 					params: [ID]
@@ -205,8 +203,7 @@ describe('versioned record history', () => {
 	);
 	it.live('keeps unsupported versioned descriptors raw without normalizing retired reference or state metadata', () =>
 		Effect.scoped(Effect.gen(function* () {
-			const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
-			yield* TestDb.migrate(db, before);
+			const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(before)));
 			yield* db.write({ text: "insert into documents(id,title) values($1,'Archived raw value')", params: [ID] });
 			const version = yield* db.value(Schema.String, {
 				text: "select meta->>'schema' from bolt_history where record=$1 and revision=1", params: [ID]
@@ -265,9 +262,8 @@ describe('versioned record history', () => {
 	);
 	it.live('versions native identity history and rolls back a mutation without its registered schema', () =>
 		Effect.scoped(Effect.gen(function* () {
-			const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
 			const native: EngineManifest = { ...before, models: {}, relationships: {}, exposures: {} };
-			yield* TestDb.migrate(db, native);
+			const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(native)));
 			const create = new IdentityStatement();
 			identityPiece(create, 'member', 'sys_user', `insert into sys_user(id,name) values(${create.p(ID)},'Native member')`);
 			identityHistory(create, 'sys_user', 'member', new Date(NOW), 'host', undefined, 0);
@@ -293,9 +289,8 @@ describe('versioned record history', () => {
 	it.live('rolls back a schema change while an affected erasure is pending', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
 				const initial = schema_slice(before);
-				yield* TestDb.migrate(db, initial);
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(initial)));
 				yield* db.write({
 					text: "insert into documents(id,title) values($1,'Kept')",
 					params: [ID]
@@ -328,7 +323,6 @@ describe('versioned record history', () => {
 	it.live('preserves exact decimals, points and periods when restoring an old schema', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
 				const old: EngineManifest = {
 					...before,
 					models: {
@@ -351,7 +345,7 @@ describe('versioned record history', () => {
 					}
 				};
 				const initial = schema_slice(old);
-				yield* TestDb.migrate(db, initial);
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(initial)));
 				yield* db.write({
 					text: "insert into items(id,title,amount,location,span) values($1,'Original',9007199254740993.1234,'(103.8,1.3)','[2026-01-01,2026-01-31]')",
 					params: [ID]
@@ -428,9 +422,8 @@ describe('versioned record history', () => {
 	it.live('prunes across renamed models and keeps a restorable schema snapshot', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
 				const initial = schema_slice(before);
-				yield* TestDb.migrate(db, initial);
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(initial)));
 				yield* db.write({
 					text: "insert into documents(id,title,quantity) values($1,'Original','42')",
 					params: [ID]
@@ -480,9 +473,8 @@ describe('versioned record history', () => {
 	it.live('erases renamed fields from both readable history and retained audit payloads', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
 				const initial = schema_slice(before);
-				yield* TestDb.migrate(db, initial);
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(initial)));
 				yield* db.write({
 					text: "insert into documents(id,title,quantity) values($1,'Sensitive title','42')",
 					params: [ID]
@@ -530,9 +522,8 @@ describe('versioned record history', () => {
 	it.live('keeps historical fields outside a named output and hidden fields private', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
 				const initial = schema_slice(before);
-				yield* TestDb.migrate(db, initial);
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(initial)));
 				yield* db.write({
 					text: "insert into documents(id,title,quantity,removed,secret) values($1,'Original','42','Retired private','Secret')",
 					params: [ID]
@@ -590,9 +581,8 @@ describe('versioned record history', () => {
 	it.live('registers a fresh definition parameter without confusing the schema table column', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
 				const initial = schema_slice(before);
-				yield* TestDb.migrate(db, initial);
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(initial)));
 				const table = initial.tables.documents;
 				if (table === undefined) throw new Error('The native schema did not define documents.');
 				const definition = JSON.stringify(table);
@@ -620,8 +610,7 @@ describe('versioned record history', () => {
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
-					yield* TestDb.migrate(db, before);
+					const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(before)));
 					yield* db.write({
 						text: 'insert into documents(id,title,quantity,removed,secret) values($1,$2,$3,$4,$5)',
 						params: [ID, 'Original', '42', 'Retired value', 'Private']
@@ -707,8 +696,7 @@ describe('versioned record history', () => {
 	it.live('marks unconvertible values and a dropped/re-added field incompatible', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const db = TenantDb.typed(PgliteDb.make(yield* PgliteDb.open()));
-				yield* TestDb.migrate(db, before);
+				const db = TenantDb.typed(PgliteDb.make(yield* TestDb.open(before)));
 				yield* db.write({
 					text: 'insert into documents(id,title,quantity,removed) values($1,$2,$3,$4)',
 					params: [ID, 'Original', 'not a number', 'Old meaning']

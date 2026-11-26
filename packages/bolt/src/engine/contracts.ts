@@ -189,6 +189,7 @@ export type Authority = {
 		syncs: readonly string[];
 		tools: readonly string[];
 		mcp: readonly string[];
+		personal_connections: readonly string[];
 	};
 	limits: readonly LimitRule[];
 	/** The actor variable `actor.team_tree`. */

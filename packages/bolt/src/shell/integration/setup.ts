@@ -138,13 +138,27 @@ const BRANDS: { readonly [driver: string]: string } = {
 	sqlserver: 'SQL Server',
 	calendar: 'Calendar'
 };
+const DRIVER_ICONS: { readonly [driver: string]: string } = {
+	whatsapp: 'simple-icons:whatsapp',
+	wechat: 'simple-icons:wechat',
+	chat: 'lucide:message-square',
+	telegram: 'simple-icons:telegram',
+	slack: 'simple-icons:slack',
+	discord: 'simple-icons:discord',
+	email: 'lucide:mail',
+	calendar: 'lucide:calendar',
+	http: 'lucide:globe',
+	sqlserver: 'lucide:database'
+};
 /** A driver as its brand's name (`whatsapp` → `WhatsApp`). */
 export const driverLabel = (driver: string): string =>
 	BRANDS[driver] ?? driver.replace(/^\w/, (x) => x.toUpperCase());
+/** A sensible default Iconify mark for a driver when no provider icon is supplied. */
+export const driverIcon = (driver: string): string => DRIVER_ICONS[driver] ?? 'lucide:plug';
 
 /** The state line every instance shows, so two providers never word the same state differently. */
 export const statusLabel = (
-	c: Pick<InstanceStatus, 'state' | 'account' | 'stored'> | null,
+	c: Pick<InstanceStatus, 'state' | 'account' | 'stored' | 'code'> | null,
 	t: (key: string) => string
 ): string => {
 	if (c === null) return t('Asking the host…');
@@ -163,6 +177,7 @@ export const statusLabel = (
 		case 'error':
 			return t('Needs attention');
 		default:
+			if (c.code === 'disconnected') return t('Disconnected');
 			return c.stored ? t('Paired, not connected') : t('Not paired');
 	}
 };

@@ -890,13 +890,15 @@
 		}
 	});
 	const mobileTitle = $derived(
-		pageIdentity?.title ??
-			app?.label ??
-			[...(model?.sections.flatMap((s) => s.items) ?? []), ...(model?.utilities ?? [])].find(
-				(i) => i.active
-			)?.label ??
-			boot?.workspace.name ??
-			''
+		current.kind === 'connections'
+			? t('My connections')
+			: (pageIdentity?.title ??
+				app?.label ??
+				[...(model?.sections.flatMap((s) => s.items) ?? []), ...(model?.utilities ?? [])].find(
+					(i) => i.active
+				)?.label ??
+				boot?.workspace.name ??
+				'')
 	);
 	const mobileDescription = $derived(pageIdentity?.description ?? app?.description ?? null);
 	// the open app's identity (its AppShell's once published, the registry's until then): the desktop hero, the phone's bar
@@ -943,7 +945,15 @@
 			const allowed = navigationBoot();
 			if (
 				allowed === null ||
-				!clientNavigationPath(path, navigation_paths(allowed.nav, allowed.admin), allowed.admin)
+				!clientNavigationPath(
+					path,
+					navigation_paths(
+						allowed.nav,
+						allowed.admin,
+						(allowed.personal_connections?.length ?? 0) > 0
+					),
+					allowed.admin
+				)
 			)
 				return;
 			const next = new URL(path, url);
@@ -1115,6 +1125,14 @@
 			{@render openingFeature()}
 		{:then { default: Inbox }}
 			<Inbox ctx={pageContext()} {bolt} {t} on_count={(n) => (waiting = n)} />
+		{:catch}
+			{@render failedFeature()}
+		{/await}
+	{:else if current.kind === 'connections' && (boot?.personal_connections?.length ?? 0) > 0 && bolt}
+		{#await import('./integration/PersonalConnections.svelte')}
+			{@render openingFeature()}
+		{:then { default: PersonalConnections }}
+			<PersonalConnections ctx={pageContext()} {t} />
 		{:catch}
 			{@render failedFeature()}
 		{/await}
@@ -1328,6 +1346,17 @@
 					on_theme={chooseTheme}
 					{chimes}
 					{awaiting}
+					{...(boot?.personal_connections?.length ?? 0) > 0 &&
+					!previewEnv &&
+					boot?.actor?.kind === 'member' &&
+					!boot.actor.external
+						? {
+								on_connections: () => {
+									navOpen = false;
+									navigate('/connections');
+								}
+							}
+						: {}}
 					on_sounds={() => {
 						navOpen = false;
 						soundsOpen = true;

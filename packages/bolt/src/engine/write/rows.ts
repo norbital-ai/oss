@@ -143,15 +143,30 @@ export const wireRows = Effect.fn('Bolt.wireRows')(function* (
 	c: string,
 	ids: readonly (string | null)[],
 	b: Bindings,
-	select: SelectIR = { fields: null, relations: {} }
+	select: SelectIR = { fields: null, relations: {} },
+	writeScope?: { readonly authority: Authority; readonly verb: 'update' | 'delete' }
 ) {
 	const want = ids.filter((id) => id !== null);
 	if (want.length === 0) return ids.map(() => null);
+	const preds =
+		writeScope === undefined
+			? undefined
+			: writePredicates(writeScope.authority, c, writeScope.verb);
+	if (preds !== undefined && preds.length === 0) return ids.map(() => null);
 	const [res] = yield* db.read([
 		composable(
-			yield* compile_gets(cat, c, want, select, readOptions({ as: 'workspace' }, b)).pipe(
-				Effect.mapError(from_store)
-			)
+			yield* compile_gets(
+				cat,
+				c,
+				want,
+				select,
+				writeScope === undefined
+					? readOptions({ as: 'workspace' }, b)
+					: {
+							...readOptions({ as: 'caller', authority: writeScope.authority }, b),
+							scope: { rows: (path) => (path === c ? preds : undefined) }
+						}
+			).pipe(Effect.mapError(from_store))
 		)
 	]);
 	if (res === undefined)
@@ -180,9 +195,10 @@ export const storedTrees = (
 	model: string,
 	ids: readonly (string | null)[],
 	b: Bindings,
-	paths = Object.keys(m.exposures[model]?.update?.columns ?? {})
+	paths = Object.keys(m.exposures[model]?.update?.columns ?? {}),
+	writeScope?: { readonly authority: Authority; readonly verb: 'update' | 'delete' }
 ) =>
-	wireRows(db, cat, model, ids, b, treeSelect(cat, paths, model, model)).pipe(
+	wireRows(db, cat, model, ids, b, treeSelect(cat, paths, model, model), writeScope).pipe(
 		Effect.flatMap((rows) =>
 			Effect.try({
 				try: () => rows.map((row) => writeTree(cat, model, row)),

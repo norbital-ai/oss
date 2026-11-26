@@ -360,9 +360,14 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						expect(yield* sealed('a2')).toEqual({});
 						expect((yield* row('a2'))['status']).toMatchObject({
 							state: 'unpaired',
-							account: null
+							account: null,
+							code: 'disconnected'
 						});
-						expect(yield* links.state('a2')).toMatchObject({ state: 'unpaired', stored: false });
+						expect(yield* links.state('a2')).toMatchObject({
+							state: 'unpaired',
+							code: 'disconnected',
+							stored: false
+						});
 						expect(yield* links.port.send('a2', { text: 'x' }, []).pipe(Effect.flip)).toMatchObject(
 							{
 								message: expect.stringMatching(/not connected/)

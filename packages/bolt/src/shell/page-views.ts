@@ -17,6 +17,8 @@ export const route_pattern = (r: Route): string => {
 			return '/';
 		case 'inbox':
 			return '/inbox';
+		case 'connections':
+			return '/connections';
 		case 'settings':
 			return `/settings/${r.tab}`;
 		case 'command_center':

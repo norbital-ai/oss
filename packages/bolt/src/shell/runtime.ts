@@ -669,6 +669,8 @@ export function shell_bolt(
 				}),
 			/** A definition's own setup component (`integration/<name>/+integration.svelte`), loaded only when its UI opens. */
 			integration_setup: (name: string) => options.integration_setups?.[name]?.load,
+			/** Personal integration definitions this caller may connect in `/connections` or `<Connections scope="personal" />`. */
+			personal_connections: boot.personal_connections ?? [],
 			/** The path of an app page, optionally opening a record: `bolt.href(app, page?, record?)`. */
 			href: (...a: Parameters<typeof href>) => based(href(...a)),
 			/** The page's organization: the workspace name and its brand logo (the host's first icon), or `null`. */

@@ -339,6 +339,19 @@ export type RequesterOf<D> = Requester<IntegrationSpecOf<D>>;
 /** An instance's decoded configuration for definition `D`: every defaulted field present, an `optional` one without a default absent or null. */
 export type ConfigurationOf<D> = ConfigurationIn<IntegrationSpecOf<D>>;
 
+/** Where instances of an integration may be created: workspace-owned (`owner = null`), member-owned (`owner = me`), or both. */
+export const IntegrationScope = Schema.Literals(['workspace', 'personal', 'both']);
+export type IntegrationScope = typeof IntegrationScope.Type;
+/** The effective scope of an integration definition (`'workspace'` when omitted). */
+export const scope_of = (def: Pick<IntegrationSpec, 'scope'>): IntegrationScope =>
+	def.scope ?? 'workspace';
+/** Whether a member may create a personal (`owner != null`) instance of `def`. */
+export const allows_personal = (def: Pick<IntegrationSpec, 'scope' | 'driver'>): boolean =>
+	driver_of(def).personal === true && (scope_of(def) === 'personal' || scope_of(def) === 'both');
+/** Whether an administrator may create a workspace (`owner = null`) instance of `def`. */
+export const allows_workspace = (def: Pick<IntegrationSpec, 'scope'>): boolean =>
+	scope_of(def) === 'workspace' || scope_of(def) === 'both';
+
 // ── the literal ──
 type HttpAuth<C> =
 	{ bearer: C } | { header: { name: string; value: C } } | { basic: { user: C; password: C } };
@@ -346,6 +359,8 @@ type HttpAuth<C> =
 export const IntegrationSpec = Schema.Struct({
 	description: Schema.String,
 	driver: DriverSpec,
+	/** Whether instances are workspace-owned (`'workspace'`, default), member-owned (`'personal'`), or `'both'`. */
+	scope: Schema.optionalKey(IntegrationScope),
 	/** Safe settings each instance edits at run time (with history), decoded against these fields. */
 	configuration: Schema.optionalKey(Schema.Record(Schema.String, FieldData)),
 	/** The secret each instance pairs with, sealed host-side and never readable (`http` and `sqlserver` only). */
@@ -496,6 +511,7 @@ export type IntegrationLiteral<N> = Omit<IntegrationSpec, 'webhook'> & {
 interface IntegrationFor<N, S, D = DriverIn<S>> {
 	description: string;
 	driver: DriverName | typeof DeclaredDriver.Type;
+	scope?: Contract<D> extends { personal: true } ? IntegrationScope : 'workspace';
 	configuration?: ValidInputs<Part<S, 'configuration'>>;
 	credential?: Contract<D> extends { credential: true }
 		? ValidInputs<Part<S, 'credential'>>

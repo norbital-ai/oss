@@ -48,6 +48,7 @@
 		on_theme,
 		chimes = true,
 		awaiting = null,
+		on_connections,
 		on_sounds,
 		on_feedback,
 		sync = 'idle',
@@ -79,6 +80,8 @@
 		chimes?: boolean;
 		/** What Norbius left unseen: a dot on its icon. */
 		awaiting?: AwaitingKind | null;
+		/** Member has personal connections configured: opens `/connections`. */
+		on_connections?: () => void;
 		on_sounds?: () => void;
 		/** The host takes feedback: the menu offers its dialog. */
 		on_feedback?: () => void;
@@ -746,6 +749,21 @@
 						{/each}
 					</Inline>
 				</Inline>
+			{/if}
+			{#if on_connections !== undefined}
+				<Button
+					type="button"
+					variant="ghost"
+					class="h-9 w-full justify-start px-2 text-xs font-normal"
+					aria-label={t('My connections')}
+					data-testid="workspace-my-connections"
+					onclick={() => {
+						menuOpen = false;
+						on_connections();
+					}}
+				>
+					<Icon name="lucide:plug" class="size-3.5" /><span>{t('My connections')}</span>
+				</Button>
 			{/if}
 			{#if on_sounds !== undefined}
 				<Button

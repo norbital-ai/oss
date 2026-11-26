@@ -13,9 +13,11 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { PARTS } from '../src/engine/runs/queue.ts';
 import { manifest as base, NOW } from './write-fixture.ts';
 
-const EARLIER = 300,
+// the smallest shape past both bounds of a statement (`PART`: 1,000 rows, 1 MiB): the slips alone pass the bytes, the
+// entries the rows, so the act is three statements in whichever order its rows are taken
+const EARLIER = 120,
 	SLIPS = 100,
-	ENTRIES = 1_500;
+	ENTRIES = 1_100;
 /** A payslip's breakdown: some 4 KiB of lines. */
 const breakdown = (n: number) => ({
 	lines: Array.from({ length: 40 }, (_, i) => ({ code: `LINE_${i}`, amount: `${n}.${i}`, note: 'x'.repeat(60) }))
@@ -136,7 +138,7 @@ describe('a March-shaped act', () => {
 				expect(first).toBeGreaterThan(0);
 				expect(commit.slice(0, first).every((text) => text.startsWith('SELECT bolt_assert') && !text.includes('INSERT'))).toBe(true);
 				expect(commit.slice(first).some(digest)).toBe(false);
-				// 1,601 rows, 1.2 MiB of them slips: bounded by rows and by bytes
+				// 1,201 rows, 1.2 MiB of them slips: bounded by rows and by bytes
 				expect(commit.slice(first).filter((text) => text.startsWith('WITH')).length).toBeGreaterThanOrEqual(3);
 				// no statement aggregates its row images as a jsonb tree
 				expect(commit.some((text) => /jsonb_agg\(jsonb_build_object\('model', c, 'id', id, 'op'/.test(text))).toBe(false);

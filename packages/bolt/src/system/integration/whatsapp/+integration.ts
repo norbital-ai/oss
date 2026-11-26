@@ -2,5 +2,6 @@ import { integration } from '../../../decl/runtime/integration.ts';
 
 export default integration('whatsapp', {
 	description: 'WhatsApp: a paired WhatsApp number, its chats and groups.',
+	scope: 'both',
 	driver: { name: 'whatsapp', read: 'deliveries', conversation: { kind: 'chat', handle: 'phone', address: '{}@s.whatsapp.net' }, personal: true }
 });

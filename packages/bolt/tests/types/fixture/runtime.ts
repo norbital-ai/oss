@@ -75,6 +75,7 @@ export const support_mail = integration('support_mail', {
 export const calendar = integration('calendar', {
 	description: "A member's calendar.",
 	driver: 'calendar',
+	scope: 'personal',
 	oauth: { client: 'CALENDAR_CLIENT', secret: 'CALENDAR_SECRET' },
 	configuration: { calendars: { kind: 'text', many: true, default: [] } }
 });

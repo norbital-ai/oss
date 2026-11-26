@@ -501,6 +501,7 @@ declare module '../../src/index.ts' {
 				spec: {
 					description: "A member's calendar.";
 					driver: 'calendar';
+					scope: 'personal';
 					oauth: {
 						client: 'CALENDAR_CLIENT';
 						secret: 'CALENDAR_SECRET';

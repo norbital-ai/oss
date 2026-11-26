@@ -4,7 +4,14 @@ export { BUILTIN_FIELDS } from '../decl/builtin-fields.ts';
 export { LAYOUT_HELP, NAME, ROLES, file_re, match_dir } from '../decl/layout.ts';
 export { layer_models } from '../decl/model.ts';
 export { split_model } from '../decl/model-data.ts';
-export { DRIVERS, driver_name, driver_of } from '../decl/runtime/integration.ts';
+export {
+	DRIVERS,
+	allows_personal,
+	allows_workspace,
+	driver_name,
+	driver_of,
+	scope_of
+} from '../decl/runtime/integration.ts';
 export { with_syncs } from '../decl/runtime/sync.ts';
 export { literal } from './literal.ts';
 export { parse_rate } from '../engine/access/rate.ts';

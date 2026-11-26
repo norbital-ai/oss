@@ -21,6 +21,8 @@ import { KindSchema } from '@norbital-ai/store/kind';
 import type { EngineManifest } from '../manifest.ts';
 import type { Json } from '../../decl/values.ts';
 import {
+	allows_personal,
+	allows_workspace,
 	configuration_defaults,
 	driver_name,
 	driver_of,
@@ -117,8 +119,10 @@ export function instanceTransform(
 		if (def === undefined)
 			return refuse(c.path, 'integration', `No integration '${name}' is defined.`);
 		const owner = pre === undefined ? (values['owner'] ?? null) : (pre['owner'] ?? null);
-		if (pre === undefined && owner !== null && driver_of(def).personal !== true)
-			return refuse(c.path, 'owner', `A ${driver_name(def)} instance is never personal.`);
+		if (pre === undefined && owner !== null && !allows_personal(def))
+			return refuse(c.path, 'owner', `'${name}' cannot be connected as a personal account.`);
+		if (pre === undefined && owner === null && !allows_workspace(def))
+			return refuse(c.path, 'owner', `'${name}' is a personal-only integration and requires an owner.`);
 		const start = values['import_start'];
 		if (start !== undefined && start !== null) {
 			const decoded = Schema.decodeUnknownOption(ImportStart)(start);
