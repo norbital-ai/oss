@@ -4,7 +4,7 @@
 	bundle analyzer (artifact digest, client bytes, package pins, bundle files and cache), resource telemetry and the
 	runtime log. Activity and Improvements are the same inspection asked for that view (a host that serves neither
 	answers `null`, and the view says so). Logs reads the log itself
-	(`logs`), scoped to one release's serving window (the serving release by default) and optionally a run; its opt-in
+	(`logs`), every release by default or one release's serving window, and optionally a run; its opt-in
 	Auto-refresh re-reads only that. Audit is the audit trail,
 	Automations every run, AI the members' chats, readable envoy threads and automation transcripts (inspection is
 	read-only in Norbius), People the
@@ -92,8 +92,8 @@
 	// one inspection serves Bundle, Telemetry and Logs: switching between them is a local render
 	let range = $state<WorkspaceRange>('7d');
 	let runFilter = $state<string | null>(null),
-		// the release Logs reads (its publication instant): the serving one until chosen, `null` every release
-		release = $state<string | null | undefined>();
+		// the release Logs reads (its publication instant): `null`, every release, until one is chosen
+		release = $state<string | null>(null);
 	const inspecting = $derived(view !== undefined);
 	// Activity and Improvements are read only when asked for by name
 	const named = $derived(view === 'activity' || view === 'improvements' ? view : undefined);
@@ -108,15 +108,13 @@
 			if (next !== undefined) shown = next;
 		}
 	);
-	// Logs reads the log itself, scoped to the chosen release's serving window and run: Auto-refresh re-reads only this
+	// Logs reads the log itself, scoped to the chosen release's serving window (every release until one is chosen) and run:
+	// Auto-refresh re-reads only this
 	const releases = $derived(shown?.studio?.releases ?? []);
-	const releaseAt = $derived(
-		release === undefined ? (releases.find((r) => r.current)?.at ?? null) : release
-	);
 	const logs = observe_once(() =>
 		view === 'logs' && shown !== null
 			? api.logs({
-					...release_window(releases, releaseAt),
+					...release_window(releases, release),
 					...(runFilter === null ? {} : { run: runFilter })
 				})
 			: null
@@ -228,6 +226,7 @@
 			on_change={scope}
 			bind:release
 			{t}
+			{...on_conversation === null ? {} : { on_conversation }}
 		>
 			{#snippet actions()}<AutoRefresh {t} on_refresh={() => fork(logs.refetch())} />{/snippet}
 		</WorkspaceOperations>

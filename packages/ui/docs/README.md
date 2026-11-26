@@ -155,7 +155,9 @@ permission-only, so an invalid field is never locked.
 ## Text formats
 
 A text field's `format` picks its editor and viewer: `email`, `phone` and `url` are links, `zone` is a time-zone picker
-and `markdown` is the rich-text editor. `cel` is a CEL expression: the record form edits it in a wrapped `CodeEditor`,
+and `markdown` is edited as it reads (WYSIWYG, loaded on first use) while its value stays Markdown; with `images`
+naming a sibling many-file field, pictures pasted, dropped or added are stored there and shown in place. Page code
+uses the same editor as `RichMarkdownEditor`. `cel` is a CEL expression: the record form edits it in a wrapped `CodeEditor`,
 the readonly form shows it there read-only, and a table cell shows it as wrapped code. It works on a leaf of a json
 `shape` as well, so a structured value's expressions need no editor of their own. `CodeEditor` takes `wrap` for the same
 line wrapping anywhere else.

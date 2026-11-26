@@ -74,6 +74,8 @@ export type NoticeInsert = {
 	id: string;
 	to: readonly Addressee[];
 	via: readonly string[];
+	/** Also email each member recipient through the host's mail port (`via: ['email']`). */
+	email: boolean;
 	title: string;
 	body: string | null;
 	link: { model: string; id: string } | null;
@@ -112,7 +114,8 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 	);
 	if (list.length > LIMITS.changesPerAct)
 		return yield* Effect.fail(BoltError.make('too_large', 'guest', 'too many notices at once'));
-	const channels = [...new Set(list.flatMap((notice) => notice.via ?? []))];
+	const channelsOf = (notice: Notice) => (notice.via ?? []).filter((channel) => channel !== 'email');
+	const channels = [...new Set(list.flatMap(channelsOf))];
 	const accounts = channels.length === 0 ? [] : yield* (yield* TenantDb).rows(
 		Schema.Struct({ id: Schema.String, integration: Schema.String, owner: Schema.NullOr(Schema.String) }),
 		{ text: 'SELECT id,integration,owner FROM sys_integration WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))',
@@ -152,7 +155,7 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 				)
 			);
 		if (to.length === 0) continue;
-		for (const channel of notice.via ?? []) {
+		for (const channel of channelsOf(notice)) {
 			const account = byId.get(channel);
 			const definition = account === undefined ? undefined : definitionOf(ctx.manifest, account.integration);
 			if (account === undefined || account.owner !== null || definition === undefined || conversationOf(definition) === undefined)
@@ -160,7 +163,7 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 					BoltError.make(
 						'invalid_input',
 						'guest',
-						`A notice channel '${channel}' must name a conversation connection.`
+						`A notice channel '${channel}' must be 'email' or name a conversation connection.`
 					)
 				);
 		}
@@ -168,7 +171,8 @@ export const noticeRows = Effect.fn('Bolt.noticeRows')(function* (
 		rows.push({
 			id,
 			to,
-			via: [...new Set(notice.via ?? [])],
+			via: [...new Set(channelsOf(notice))],
+			email: notice.via?.includes('email') === true,
 			title: notice.title,
 			body: notice.description ?? null,
 			link: notice.link ?? ctx.link ?? null,

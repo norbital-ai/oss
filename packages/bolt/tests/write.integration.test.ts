@@ -709,6 +709,7 @@ describe('engine/write: locks and queued pieces', () => {
 						id: 'n1',
 						to: [{ user: 'u' }],
 						via: ['mail'],
+						email: false,
 						title: 'Hi',
 						body: null,
 						link: null,

@@ -124,9 +124,11 @@ yield* ctx.request('mail', {}).pipe(Effect.catchTag('Unavailable', () =>
 			const ctx = { manifest, id: 'notice', link: { model: 'orders', id: 'order' } };
 			const notice = { title: 'Changed', description: 'Desk', to: [{ user: 'member' }, { user: 'member' }] };
 			expect(yield* noticeRows(notice, ctx)).toEqual([{
-				id: 'notice:0', to: [{ user: 'member' }], via: [], title: 'Changed', body: 'Desk',
+				id: 'notice:0', to: [{ user: 'member' }], via: [], email: false, title: 'Changed', body: 'Desk',
 				link: ctx.link, once: 'notice:0', attachments: []
 			}]);
+			// 'email' is the host's mail, not a connection: it marks the notice and leaves no channel row
+			expect(yield* noticeRows({ ...notice, via: ['email', 'email'] }, ctx)).toMatchObject([{ via: [], email: true }]);
 			expect(yield* noticeRows([], ctx)).toEqual([]);
 			expect(yield* noticeRows({ title: 'Unaddressed', to: ['requester', 'approvers'] }, ctx)).toEqual([]);
 			expect(yield* Effect.flip(noticeRows(

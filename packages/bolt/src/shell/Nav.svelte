@@ -8,11 +8,7 @@
 	import { fork } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
-	import {
-		create_radio_group,
-		create_switch,
-		watch
-	} from '@norbital-ai/ui/behaviors';
+	import { create_radio_group, watch } from '@norbital-ai/ui/behaviors';
 	import {
 		Badge,
 		Button,
@@ -51,10 +47,8 @@
 		theme = 'system',
 		on_theme,
 		chimes = true,
-		email_notifications = true,
 		awaiting = null,
 		on_sounds,
-		on_email_notifications,
 		on_feedback,
 		sync = 'idle',
 		previewing = false,
@@ -83,11 +77,9 @@
 		theme?: Theme;
 		on_theme?: (theme: Theme) => void;
 		chimes?: boolean;
-		email_notifications?: boolean;
 		/** What Norbius left unseen: a dot on its icon. */
 		awaiting?: AwaitingKind | null;
 		on_sounds?: () => void;
-		on_email_notifications?: (enabled: boolean) => void;
 		/** The host takes feedback: the menu offers its dialog. */
 		on_feedback?: () => void;
 		sync?: SyncStatus;
@@ -136,10 +128,6 @@
 			const match = THEMES.find((x) => x === next);
 			if (match !== undefined) on_theme?.(match);
 		}
-	});
-	const emailSwitch = create_switch({
-		checked: () => email_notifications,
-		on_change: (next) => on_email_notifications?.(next)
 	});
 	// the versions `bolt build` bakes into the client (L-BOLT-073); absent when the shell is mounted unbuilt (tests)
 	const build = typeof __BOLT_BUILD__ === 'undefined' ? null : __BOLT_BUILD__;
@@ -773,19 +761,6 @@
 					<Icon name={chimes ? 'lucide:volume-1' : 'lucide:volume-x'} class="size-3.5" />
 					<span>{t('Sounds')}</span><span class="ml-auto text-muted-foreground"
 						>{t(chimes ? 'On' : 'Off')}</span
-					>
-				</Button>
-			{/if}
-			{#if on_email_notifications !== undefined}
-				<Button
-					variant="ghost"
-					{...emailSwitch.attrs()}
-					class="h-9 w-full justify-start px-2 text-xs font-normal"
-					aria-label={t('Email notifications')}
-				>
-					<Icon name={email_notifications ? 'lucide:mail' : 'lucide:mail-x'} class="size-3.5" />
-					<span>{t('Email notifications')}</span><span class="ml-auto text-muted-foreground"
-						>{t(email_notifications ? 'On' : 'Off')}</span
 					>
 				</Button>
 			{/if}

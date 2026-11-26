@@ -64,7 +64,7 @@ ${escapedBody === null ? '' : `<tr><td style="padding:4px 32px 16px;font-family:
 	return { subject, text, html };
 };
 
-/** Emails each inbox notification via the host's transactional mail port unless the member opted out. */
+/** Emails each inbox notification whose notice asked for email (`via: ['email']`) via the host's transactional mail port. */
 export const notice_mail = Effect.gen(function* () {
 	const db = yield* TenantDb,
 		transport = yield* Transport,
@@ -82,7 +82,6 @@ export const notice_mail = Effect.gen(function* () {
 					text: `SELECT n.id, n.title, n.body, n.link, u.email
 FROM sys_notification n
 JOIN sys_user u ON u.id = n.member AND u.active AND u.email IS NOT NULL AND u.email <> ''
-AND coalesce(u.preferences->>'email_notifications', 'true') <> 'false'
 WHERE n.id IN (SELECT jsonb_array_elements_text($1::jsonb))
 ORDER BY u.id, n.id`,
 					params: [JSON.stringify(body.ids)]

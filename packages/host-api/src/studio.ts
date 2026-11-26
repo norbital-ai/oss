@@ -712,22 +712,25 @@ export const StudioInspection = Schema.Struct({
 		})
 	),
 	/**
-	 * The workspace's improvement threads, most recently changed first. `seen`: how many times a thread's signal
-	 * arrived; `last`: its newest timeline entry as one plain line (`null`: no entry); `change`: the commits its agent
-	 * left for an administrator to merge (`null`: none yet). `null`: the host does not serve this view, or it was not the
-	 * one asked for.
+	 * The workspace's improvement threads, most recently changed first. `kind`: what raised it (a person's feedback or
+	 * request, or an automation that keeps failing); `seen`: how many times its signal arrived; `last`: its newest
+	 * timeline entry as one plain line (`null`: no entry); `change`: the commits its agent left for an administrator to
+	 * merge (`null`: none yet); `conversation`: its system agent's conversation (`null`: no agent started). `null`: the
+	 * host does not serve this view, or it was not the one asked for.
 	 */
 	improvements: Schema.NullOr(
 		Schema.Struct({
 			threads: Schema.Array(
 				Schema.Struct({
 					id: Schema.String,
+					kind: Schema.Literals(['feedback', 'request', 'failure']),
 					status: Schema.String,
 					title: Schema.String,
 					seen: count,
 					updated_at: Schema.String,
 					last: Schema.NullOr(Schema.String.check(Schema.isMaxLength(300))),
-					change: Schema.NullOr(Schema.String)
+					change: Schema.NullOr(Schema.String),
+					conversation: Schema.NullOr(Schema.String)
 				})
 			)
 		})

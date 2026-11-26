@@ -30,12 +30,14 @@ for the chosen scope.
 		/** Translates the panel's English strings (keys are the English text). Default: identity. */
 		t?: (key: string) => string;
 		/**
-		 * The release whose logs Logs shows, by its publication instant (`at`): omitted, the serving release; `null`, every
-		 * release. Bind it to read the selection (the owner scopes its own log read to `release_window`).
+		 * The release whose logs Logs shows, by its publication instant (`at`); omitted or `null`, every release. Bind it to
+		 * read the selection (the owner scopes its own log read to `release_window`).
 		 */
-		release?: string | null | undefined;
+		release?: string | null;
 		/** Trailing controls on the Logs header line (an Auto-refresh toggle). */
 		actions?: Snippet;
+		/** Opens an improvement thread's agent conversation; without it, the board's cards do not open. */
+		on_conversation?: (id: string) => void;
 	};
 </script>
 
@@ -46,9 +48,12 @@ for the chosen scope.
 	import Icon from '../primitives/icon/icon-wrapper.svelte';
 	import Tabs from '../primitives/tabs/tabs.svelte';
 	import CustomView from '../model/CustomView.svelte';
+	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import LogView from '../logs/LogView.svelte';
 	import UsageChart, { format_metric_value } from '../chart/UsageChart.svelte';
 	import { memberStatus, newestReleases, release_window } from './filters.js';
+	import { words_of } from '../client/context.js';
+	import { msg } from '../text/messages.js';
 	let {
 		ctx,
 		data,
@@ -59,7 +64,8 @@ for the chosen scope.
 		on_change,
 		t = (key) => key,
 		release = $bindable(),
-		actions
+		actions,
+		on_conversation
 	}: WorkspaceOperationsProps = $props();
 	let runSearch = $state('');
 	const can_inspect = $derived(data.can_inspect);
@@ -104,11 +110,9 @@ for the chosen scope.
 			...Array.from(ids, (id) => ({ value: id, label: id, keywords: id }))
 		];
 	});
-	// Logs reads one release: the serving one unless another (or every one, `null`) is chosen
+	// Logs reads every release unless one is chosen
 	const releases = $derived(newestReleases(studio?.releases ?? []));
-	const releaseAt = $derived(
-		release === undefined ? (releases.find((r) => r.current)?.at ?? null) : release
-	);
+	const releaseAt = $derived(release ?? null);
 	const releaseOptions = $derived([
 		{ value: '', label: t('All releases') },
 		...releases.map((r) => ({
@@ -158,15 +162,39 @@ for the chosen scope.
 			currency: 'USD',
 			maximumFractionDigits: 4
 		}).format(value);
-	const THREAD_STATUS: { readonly [status: string]: { label: string; variant: BadgeVariant } } = {
-		open: { label: 'Open', variant: 'outline' },
-		working: { label: 'Agent working', variant: 'info' },
-		blocked: { label: 'Needs your answer', variant: 'warning' },
-		ready: { label: 'Ready to merge', variant: 'success' },
-		merged: { label: 'Merged', variant: 'brand' },
-		platform: { label: 'Platform fault', variant: 'outline' },
-		dismissed: { label: 'Dismissed', variant: 'outline' }
+	const THREAD_STATUS: {
+		readonly [status: string]: { label: string; variant: BadgeVariant; lane: string };
+	} = {
+		open: { label: 'Open', variant: 'outline', lane: 'open' },
+		working: { label: 'Agent working', variant: 'info', lane: 'working' },
+		blocked: { label: 'Needs your answer', variant: 'warning', lane: 'blocked' },
+		ready: { label: 'Ready to merge', variant: 'success', lane: 'ready' },
+		merged: { label: 'Merged', variant: 'brand', lane: 'done' },
+		platform: { label: 'Platform fault', variant: 'outline', lane: 'done' },
+		dismissed: { label: 'Dismissed', variant: 'outline', lane: 'done' }
 	};
+	// the board's lanes, in the order a thread moves; `working` is what an agent is on now
+	const LANES = [
+		{ key: 'open', label: 'Open', dot: 'bg-muted-foreground/60' },
+		{ key: 'working', label: 'Agent working', dot: 'bg-info animate-pulse motion-reduce:animate-none' },
+		{ key: 'blocked', label: 'Needs your answer', dot: 'bg-warning' },
+		{ key: 'ready', label: 'Ready to merge', dot: 'bg-success' },
+		{ key: 'done', label: 'Closed', dot: 'bg-muted-foreground/30' }
+	] as const;
+	const KIND = { feedback: 'Feedback', request: 'Request', failure: 'Failing automation' } as const;
+	const threadRows = $derived(
+		(data.improvements?.threads ?? []).map((thread) => {
+			const status = THREAD_STATUS[thread.status];
+			return {
+				...thread,
+				kind: t(KIND[thread.kind]),
+				status: t(status?.label ?? thread.status),
+				variant: status?.variant ?? 'outline',
+				lane: status?.lane ?? 'open',
+				updated: when(thread.updated_at)
+			};
+		})
+	);
 </script>
 
 <!-- fills a bounded parent: on a wide container Bundle's details scroll in place -->
@@ -281,46 +309,84 @@ for the chosen scope.
 		</div>{/if}
 {/snippet}
 {#snippet improvements()}
-	{@const board = data.improvements}
-	{#if board === null}{@render unserved()}{:else}<div class="grid min-w-0 gap-3">
-			<h2 class="text-sm font-semibold">{t('Improvements')}</h2>
-			<p class="text-meta">
-				{t(
-					'Feedback, requests and automations that keep failing. Turn automatic improvement on or off in Settings, under Assistant.'
-				)}
-			</p>
-			{#if board.threads.length === 0}<p class="text-meta">
-					{t('Nothing to improve yet.')}
-				</p>{:else}<div class="overflow-x-auto rounded-md border border-border px-3">
-					<table class="w-full text-left">
-						<thead
-							><tr
-								><th scope="col">{t('Subject')}</th><th scope="col">{t('Status')}</th><th scope="col"
-									>{t('Times')}</th
-								><th scope="col">{t('Updated')}</th><th scope="col">{t('Latest')}</th><th
-									scope="col">{t('To merge')}</th
-								></tr
-							></thead
-						><tbody
-							>{#each board.threads as thread (thread.id)}<tr
-									><th scope="row" class="max-w-xs font-medium">{thread.title}</th><td
-										><Badge variant={THREAD_STATUS[thread.status]?.variant ?? 'outline'}
-											>{t(THREAD_STATUS[thread.status]?.label ?? thread.status)}</Badge
-										></td
-									><td class="tabular-nums">{thread.seen}</td><td class="whitespace-nowrap"
-										>{when(thread.updated_at)}</td
-									><td class="max-w-md text-meta">{thread.last ?? ''}</td><td
-										class="whitespace-nowrap tabular-nums"
-										>{thread.change === null ? '' : `!${thread.change}`}</td
-									></tr
-								>{/each}</tbody
-						>
-					</table>
-				</div>{/if}
+	{#if data.improvements === null}{@render unserved()}{:else}<div class="flex min-h-0 flex-1 flex-col gap-3">
+			<CustomView
+				{ctx}
+				of={threadRows}
+				fields={[
+					{ field: 'title', label: t('Subject') },
+					{ field: 'kind', label: t('Source') },
+					{ field: 'status', label: t('Status') },
+					{ field: 'last', label: t('Latest') }
+				]}
+				key="improvements"
+				toolbar={{
+					title: t('Improvements'),
+					description: t(
+						'Feedback, requests and automations that keep failing. Turn automatic improvement on or off in Settings, under Assistant.'
+					)
+				}}
+				empty={false}
+			>
+				{#snippet children(shown)}
+					<!-- five lanes side by side, each scrolling its own cards; a narrow panel scrolls them sideways -->
+					<div
+						class="grid h-full min-h-0 grid-cols-[repeat(5,minmax(14rem,1fr))] gap-3 overflow-x-auto pb-2"
+						data-improvement-board
+					>
+						{#each LANES as lane (lane.key)}
+							{@const cards = shown.filter((row) => row.lane === lane.key)}
+							<section
+								aria-label={t(lane.label)}
+								class="flex min-h-0 min-w-0 flex-col gap-2 rounded-control border border-border-lane bg-surface-lane p-3"
+								data-lane={lane.key}
+							>
+								<header class="flex items-center gap-1.5 border-b pb-2 text-sm font-medium dark:border-b-0 dark:pb-0">
+									<span class={['size-2 shrink-0 rounded-full', lane.dot]} aria-hidden="true"></span>
+									<span class="truncate">{t(lane.label)}</span>
+									<span class="shrink-0 text-xs text-muted-foreground tabular-nums">{cards.length}</span>
+								</header>
+								{#if cards.length === 0}<p class="py-6 text-center text-sm text-muted-foreground">
+										{msg(words_of(ctx), 'board.laneEmpty')}
+									</p>{:else}<ul class="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-1">
+										{#each cards as card (card.id)}
+											<li>
+												{#if card.conversation !== null && on_conversation !== undefined}<button
+														type="button"
+														onclick={() => card.conversation !== null && on_conversation(card.conversation)}
+														class="flex w-full cursor-pointer flex-col gap-1 rounded-control border bg-surface-raised p-2.5 text-left text-sm transition-colors hover:border-border-control focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none motion-reduce:transition-none"
+														data-improvement={card.id}>{@render threadCard(card, lane.key)}</button
+													>{:else}<div
+														class="flex flex-col gap-1 rounded-control border bg-surface-raised p-2.5 text-sm"
+														data-improvement={card.id}
+													>
+														{@render threadCard(card, lane.key)}
+													</div>{/if}
+											</li>
+										{/each}
+									</ul>{/if}
+							</section>
+						{/each}
+					</div>
+				{/snippet}
+			</CustomView>
 			<p class="text-meta">
 				{t('Reply to one or dismiss it by asking Norbius. Merge ready commits in Studio.')}
 			</p>
 		</div>{/if}
+{/snippet}
+{#snippet threadCard(card: (typeof threadRows)[number], lane: string)}
+	<span class="flex items-center justify-between gap-2">
+		<Badge variant="outline">{card.kind}</Badge>
+		{#if card.change !== null}<span class="text-xs text-muted-foreground tabular-nums">!{card.change}</span>{/if}
+	</span>
+	<span class="line-clamp-2 font-medium">{card.title}</span>
+	{#if card.last !== null}<span class="text-meta line-clamp-2">{card.last}</span>{/if}
+	<span class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+		{#if lane === 'done'}<Badge variant={card.variant}>{card.status}</Badge>{/if}
+		<span class="tabular-nums">{t('Reported')} {card.seen}×</span>
+		<span>{card.updated}</span>
+	</span>
 {/snippet}
 {#snippet telemetry()}
 	<div class="grid gap-3">
@@ -490,6 +556,15 @@ for the chosen scope.
 							runSearch = query;
 						}}
 						on_change={(run) => run !== null && on_change({ run: run || null })}
+					/>
+				{/snippet}
+				{#snippet empty()}
+					<EmptyState
+						variant="inset"
+						size="fill"
+						icon="history"
+						title={t(releaseAt === null ? 'No log lines' : 'No log lines in this release')}
+						hint={t('Automation runs, assistant turns and envoy messages write here.')}
 					/>
 				{/snippet}
 			</LogView>

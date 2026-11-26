@@ -2,7 +2,7 @@
 // could misread, and on nothing else, so equal numbers interoperate whatever Bolt release answers.
 
 /** The HOST_API this package describes. */
-export const HOST_API_VERSION = 25;
+export const HOST_API_VERSION = 26;
 
 /** Hosts and releases must speak this exact protocol. */
 export const supports = (version: number): boolean => version === HOST_API_VERSION;

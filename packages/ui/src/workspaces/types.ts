@@ -164,12 +164,14 @@ export type WorkspaceOperationsData = Readonly<{
 	improvements: Readonly<{
 		threads: readonly Readonly<{
 			id: string;
+			kind: 'feedback' | 'request' | 'failure';
 			status: string;
 			title: string;
 			seen: number;
 			updated_at: string;
 			last: string | null;
 			change: string | null;
+			conversation: string | null;
 		}>[];
 	}> | null;
 }>;

@@ -15,7 +15,7 @@ export function noticePiece(c: Chain, name: string, statement: string): string {
 		[NOTICE_DELIVER]: "coalesce(n.image->'recipient'->>'channel', 'inbox') <> 'inbox' AND n.member IS NULL",
 		[NOTICE_PUSH]: "coalesce(n.image->'recipient'->>'channel', 'inbox') = 'inbox' AND EXISTS (SELECT 1 FROM bolt_push_subscriptions)",
 		[NOTICE_MAIL]:
-			"coalesce(n.image->'recipient'->>'channel', 'inbox') = 'inbox' AND n.member IS NOT NULL AND EXISTS (SELECT 1 FROM sys_user u WHERE u.id = n.member AND u.active AND u.email IS NOT NULL AND u.email <> '' AND coalesce(u.preferences->>'email_notifications', 'true') <> 'false' AND lower(split_part(u.email, '@', 2)) !~ '(^|\\.)(invalid|example|test|localhost|example\\.(com|net|org))$')"
+			"coalesce(n.image->'recipient'->>'channel', 'inbox') = 'inbox' AND (n.image->'recipient'->>'email')::boolean IS TRUE AND n.member IS NOT NULL AND EXISTS (SELECT 1 FROM sys_user u WHERE u.id = n.member AND u.active AND u.email IS NOT NULL AND u.email <> '' AND lower(split_part(u.email, '@', 2)) !~ '(^|\\.)(invalid|example|test|localhost|example\\.(com|net|org))$')"
 	}))
 		enqueue(c, {
 			select: `SELECT ${c.p(automation)}::text AS automation, jsonb_build_object('ids', jsonb_agg(n.id)) AS input,

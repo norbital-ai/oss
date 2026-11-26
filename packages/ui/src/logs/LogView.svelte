@@ -25,6 +25,8 @@ level, message and source). It fills its parent.
 		controls?: Snippet;
 		/** Before Follow (an Auto-refresh toggle). */
 		trailing?: Snippet | undefined;
+		/** No lines: this snippet instead of an empty log (what writes here). */
+		empty?: Snippet;
 	};
 </script>
 
@@ -40,7 +42,8 @@ level, message and source). It fills its parent.
 		has_older = false,
 		follow = $bindable(true),
 		controls,
-		trailing
+		trailing,
+		empty
 	}: LogViewProps = $props();
 </script>
 
@@ -61,7 +64,7 @@ level, message and source). It fills its parent.
 	fields={['level', 'message', 'source']}
 	key="logs"
 	toolbar={{ title: false, description: false, controls, trailing: tail }}
-	empty={false}
+	empty={empty ?? false}
 >
 	{#snippet children(shown)}<LogLines {ctx} rows={shown} {load_older} {has_older} bind:follow />{/snippet}
 </CustomView>

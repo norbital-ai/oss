@@ -33,7 +33,10 @@ import type {
  */
 /** A `file` field's cap. */
 type FileSize = `${bigint}KiB` | `${bigint}MiB` | `${bigint}GiB` | `${bigint}KB` | `${bigint}MB` | `${bigint}GB`;
-/** `markdown`: the text is Markdown, rendered as prose; the others are checked on write. */
+/**
+ * `markdown`: the text is Markdown, rendered as prose and edited as it reads (WYSIWYG); with `images` naming a sibling
+ * many-`file` field, pictures pasted or dropped into it are stored there. The others are checked on write.
+ */
 /**
  * How a text field is shown and edited: `cel` is a CEL expression, a wrapped code editor; `team` holds a team handle
  * declared in source (`+team.ts`), refused on write when undeclared.
@@ -76,7 +79,8 @@ export type FieldCommon = {
 
 /** Each stored field kind with its own options, beside the options every field shares (`optional`, `default`, …). */
 export type StoredArm =
-	| { kind: 'text'; format?: TextFormat; max?: number; many?: true }
+	/** `images` (with `format: 'markdown'`): the sibling many-`file` field pictures pasted or dropped into the text go to. */
+	| { kind: 'text'; format?: TextFormat; max?: number; many?: true; images?: string }
 	| { kind: 'int'; min?: number; max?: number }
 	| { kind: 'decimal'; scale: number; precision?: number; min?: number; max?: number }
 	/** `scale`: places kept beyond the currency's minor unit (a unit price at 4); the CHECK holds it instead of the minor unit. */
@@ -417,16 +421,23 @@ export type ValidOutput<T> = T extends { kind: 'row' }
 type IdWhere<C> = C extends string ? ModelWhere<C> : never;
 
 /** The spec one stored field literal must satisfy, given its model's own field literals `F`. */
-export type ValidField<T, F> = T extends {
-	kind: 'state' | 'money' | DerivedKind | 'json' | 'number' | 'ref' | 'object' | 'union' | 'record';
-}
+export type ValidField<T, F> = T extends
+	| { kind: 'state' | 'money' | DerivedKind | 'json' | 'number' | 'ref' | 'object' | 'union' | 'record' }
+	| { kind: 'text'; images: string }
 	? T extends { kind: 'state'; states: infer S }
 		? {
 				kind: 'state';
 				initial: keyof S & string;
 				states: StateTransitions<S, KeyFor<F, { kind: 'instant'; many?: never }>>;
 			} & DerivedCommon
-		: T extends { kind: 'money' }
+		: T extends { kind: 'text'; images: string }
+			? {
+					kind: 'text';
+					format: 'markdown';
+					images: KeyFor<F, { kind: 'file'; many: true }>;
+					max?: number;
+				} & Common<DefaultOf<T>>
+			: T extends { kind: 'money' }
 			? {
 					kind: 'money';
 					currency?: CurrencyCode | FieldsOfKind<F, 'currency'>;

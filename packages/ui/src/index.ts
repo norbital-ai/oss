@@ -182,6 +182,7 @@ export {
 	type CommandItem,
 	MarkdownEditor,
 	ReadonlyMarkdown,
+	RichMarkdownEditor,
 	highlighted_line
 } from './editors/index.js';
 export {

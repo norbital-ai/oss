@@ -305,7 +305,6 @@
 			if (!savingLocale && language !== locale) fork(setLocale(language));
 			chimes = preferences.sounds ?? true;
 			if (chimeStore !== null) chimeStore.current = chimes;
-			emailNotifications = preferences.email_notifications ?? true;
 		}
 	);
 	/** Norbius's last opened conversation, kept per workspace and member so a shared browser never crosses accounts. */
@@ -315,7 +314,6 @@
 			: undefined
 	);
 	let chimes = $state(true);
-	let emailNotifications = $state(true);
 	let soundsOpen = $state(false);
 	let feedbackOpen = $state(false);
 	let soundStatus = $state<SoundStatus>(
@@ -354,14 +352,6 @@
 		chimes = enabled;
 		if (chimeStore !== null) chimeStore.current = enabled;
 		if (enabled) void sounds.test();
-	};
-	const chooseEmailNotifications = (enabled: boolean) => {
-		if (boot?.actor?.kind !== 'member' || bolt === null) return;
-		emailNotifications = enabled;
-		fork(savePreferences({ email_notifications: enabled }), (error) => {
-			emailNotifications = personal?.preferences?.email_notifications ?? true;
-			toast.error(t(error.message));
-		});
 	};
 	onMount(() => {
 		const unlock = () => {
@@ -1337,15 +1327,11 @@
 					{theme}
 					on_theme={chooseTheme}
 					{chimes}
-					email_notifications={emailNotifications}
 					{awaiting}
 					on_sounds={() => {
 						navOpen = false;
 						soundsOpen = true;
 					}}
-					{...boot?.actor?.kind === 'member' && boot.preview === null
-						? { on_email_notifications: chooseEmailNotifications }
-						: {}}
 					{...boot?.actor?.kind === 'member' && boot.preview === null && boot.workspace.feedback
 						? {
 								on_feedback: () => {

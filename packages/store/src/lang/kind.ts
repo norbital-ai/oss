@@ -81,6 +81,8 @@ export type Kind = Common &
 				readonly format?: 'email' | 'phone' | 'url' | 'zone' | 'markdown' | 'cel' | 'team';
 				readonly max?: number;
 				readonly many?: true;
+				/** A `markdown` text's sibling many-`file` field: pictures pasted or dropped into the text are stored there. */
+				readonly images?: string;
 		  }
 		| ({ readonly kind: 'int' } & Range)
 		| ({ readonly kind: 'number' } & Range)
@@ -197,7 +199,8 @@ export const KindSchema: Schema.Codec<Kind> = /* @__PURE__ */ (() => {
 	const text_arm = descriptor_arm('text', {
 		format: Schema.optionalKey(Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel', 'team'])),
 		max: Num,
-		many: Bool
+		many: Bool,
+		images: Str
 	});
 	const int_arm = descriptor_arm('int', { min: Num, max: Num });
 	const number_arm = descriptor_arm('number', { min: Num, max: Num });

@@ -6,7 +6,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 | Kind | Rule |
 | --- | --- |
-| `text` | `format`: `email` (case-folded), `phone`, `url`, `zone`, `markdown`, `cel`; `many` |
+| `text` | `format`: `email` (case-folded), `phone`, `url`, `zone`, `markdown` (edited as it reads; `images: '<many file field>'` stores pasted pictures there), `cel`; `many` |
 | `int`, `number`, `decimal`, `money` | `decimal`/`money` are exact (Effect `BigDecimal`, never floats); `money` rounds to currency minor unit unless `scale` |
 | `currency`, `bool`, `point`, `vector` | `point` `{ lat, lng }`; `vector` `dim` ≤2000, `metric` |
 | `date`, `instant`, `time`, `duration`, `period` | see [dates-and-time.md](dates-and-time.md); `instant` named `*_on`/`*_date` is refused |

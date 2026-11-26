@@ -21,7 +21,8 @@ import { noticePiece } from '../notifications/queue.ts';
 export const GATED = 'EXISTS (SELECT 1 FROM idem)';
 
 /**
- * One in-app notice per active staff recipient, plus one external delivery row per `via` connection. `rows` are
+ * One in-app notice per active staff recipient (marked `email` when the notice asked for it), plus one external delivery
+ * row per `via` connection. `rows` are
  * `noticeRows`' (engine/notifications/notify.ts): `to` is the expanded recipient list, `attachments` the notice's files.
  */
 export const noticeInsert = (
@@ -44,12 +45,13 @@ export const noticeInsert = (
 		c.cte(
 			`${name}_source`,
 			`SELECT * FROM jsonb_to_recordset(${c.p(rows)}::jsonb)
-		AS v(id text, "to" jsonb, via jsonb, title text, body text, link jsonb, once text, attachments jsonb)`
+		AS v(id text, "to" jsonb, via jsonb, email boolean, title text, body text, link jsonb, once text, attachments jsonb)`
 		),
 		c.cte(
 			`${name}_to`,
 			`SELECT v.id || ':' || mem.id AS id, v.id AS notice,
-		jsonb_build_object('channel', 'inbox', 'recipients', v."to") AS "to", mem.id AS member,
+		jsonb_build_object('channel', 'inbox', 'recipients', v."to")
+			|| CASE WHEN v.email THEN '{"email":true}'::jsonb ELSE '{}'::jsonb END AS "to", mem.id AS member,
 		v.title, v.body, v.link, v.once || ':' || mem.id AS once, v.attachments
 	FROM ${name}_source v LEFT JOIN LATERAL (SELECT u.id FROM sys_user u
 		WHERE u.active AND u.kind = 'staff' AND EXISTS (SELECT 1 FROM jsonb_array_elements(v."to") r

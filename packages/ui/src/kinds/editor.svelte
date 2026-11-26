@@ -62,10 +62,11 @@ writes `{ model, id }`. Cleared text writes `null`.
 </script>
 
 <script lang="ts">
-	import { Schema } from 'effect';
+	import { Effect, Schema } from 'effect';
 	import { watch } from '../behaviors/index.js';
 	import CodeEditor from '../editors/code-editor.svelte';
-	import MarkdownEditor from '../editors/markdown-editor.svelte';
+	import RichMarkdownEditor from '../editors/rich-markdown-editor.svelte';
+	import { use_form } from '../form/form-state.svelte.js';
 	import { use_enum_text } from '../model/context.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
@@ -75,7 +76,7 @@ writes `{ model, id }`. Cleared text writes `null`.
 	import { field_entry } from './builtin/index.js';
 	import TimeInput from './time-input.svelte';
 	import { presentation } from './registry.js';
-	import { arcOf } from './kind.js';
+	import { arcOf, isFile } from './kind.js';
 	import { humanize } from '../text/messages.js';
 	import TimeRangeInput from './time-range-input.svelte';
 	import Picker from './picker.svelte';
@@ -104,6 +105,26 @@ writes `{ model, id }`. Cleared text writes `null`.
 		relation
 	}: EditorProps = $props();
 	const host = $derived(ctx.ui.kinds);
+	const form = use_form();
+	/** A Markdown field's pictures go to its declared sibling file field (`images`) and show by their URL. */
+	const picture = $derived.by(() => {
+		const images = kind.kind === 'text' ? kind.images : undefined;
+		const send = host.upload;
+		const url = host.file_url;
+		if (images === undefined || send === undefined || url === undefined) return undefined;
+		if (form?.spec.target.of !== 'model') return undefined;
+		const target = `${form.spec.target.model}.${images}`;
+		return (file: File) =>
+			send(file, target).pipe(
+				Effect.tap((ref) =>
+					Effect.sync(() => {
+						const held = form.get(images);
+						form.set(images, [...(Arr.isArray(held) ? held.filter(isFile) : []), ref]);
+					})
+				),
+				Effect.map((ref) => url(ref))
+			);
+	});
 	// an explicit mode here reaches every control of a structured value too
 	const controls = provideControls(() => ({ readonly, disabled: ownDisabled }));
 	const disabled = $derived(controls.disabled);
@@ -279,12 +300,13 @@ writes `{ model, id }`. Cleared text writes `null`.
 		on_change={(next) => on_change(next === '' ? null : next)}
 	/>
 {:else if plan.editor === 'markdown'}
-	<MarkdownEditor
+	<RichMarkdownEditor
 		{id}
 		value={str(v) ?? ''}
 		on_change={(next) => on_change(next === '' ? null : next)}
 		{disabled}
 		{invalid}
+		{...picture === undefined ? {} : { upload: picture }}
 	/>
 {:else if plan.editor === 'textarea' && kind.kind === 'text'}
 	<Textarea

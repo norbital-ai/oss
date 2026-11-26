@@ -400,7 +400,7 @@ describe('notifications from durable model effects', () => {
 			}))
 		);
 
-	it.live('emails inbox notifications with a direct record link, respects opt-out, skips RFC 2606 placeholders, and retries transient mail failures', () =>
+	it.live("emails only the notices whose call names 'email', with a direct record link, skips RFC 2606 placeholders, and retries transient mail failures", () =>
 		Effect.scoped(Effect.gen(function* () {
 			const sent: MailMessage[] = [];
 			let recovered = false;
@@ -415,18 +415,18 @@ describe('notifications from durable model effects', () => {
 					return { provider_id: 'mail-accepted' };
 				})
 			};
-			const optedOut = '0199a000-0000-7000-8000-000000000010';
 			const placeholder = '0199a000-0000-7000-8000-000000000011';
 			const transient = '0199a000-0000-7000-8000-000000000012';
 			const f = yield* setup(
 				`function* (changes, ctx) {
  const row = changes[0].after;
- yield* ctx.notify({
+ yield* ctx.notify([{
   title: 'Order ready',
   description: 'Check ' + row.title,
-  to: [{ user: '${recipient}' }, { user: '${optedOut}' }, { user: '${placeholder}' }, { user: '${transient}' }],
-  link: { model: 'orders', id: row.id }
- });
+  to: [{ user: '${recipient}' }, { user: '${placeholder}' }, { user: '${transient}' }],
+  link: { model: 'orders', id: row.id },
+  via: ['email']
+ }, { title: 'Inbox only', to: [{ user: '${recipient}' }] }]);
 }`,
 				undefined,
 				transport
@@ -437,10 +437,9 @@ describe('notifications from durable model effects', () => {
 			});
 			yield* f.t.db.write({
 				text: `INSERT INTO sys_user(id,name,email,kind,team,admin,preferences) VALUES
-				($1,'Opted out','muted@acme.io','staff','reviewers',false,'{"email_notifications":false}'::jsonb),
-				($2,'Placeholder','mock@example.invalid','staff','reviewers',false,'{}'::jsonb),
-				($3,'Transient','transient@acme.io','staff','reviewers',false,'{}'::jsonb)`,
-				params: [optedOut, placeholder, transient]
+				($1,'Placeholder','mock@example.invalid','staff','reviewers',false,'{}'::jsonb),
+				($2,'Transient','transient@acme.io','staff','reviewers',false,'{}'::jsonb)`,
+				params: [placeholder, transient]
 			});
 			const outcome = (yield* f.writes.acts(one_act(f.request('email-order')))).outcome;
 			if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
@@ -449,6 +448,8 @@ describe('notifications from durable model effects', () => {
 
 			yield* f.t.run_due();
 			expect(sent.map((m) => m.to)).toEqual(['reviewer@acme.io', 'transient@acme.io']);
+			// the notice that named no 'email' stays in the inbox
+			expect(sent.every((m) => m.subject.includes('Order ready'))).toBe(true);
 			const delivered = sent[0];
 			expect(delivered).toMatchObject({
 				_tag: 'Mail',

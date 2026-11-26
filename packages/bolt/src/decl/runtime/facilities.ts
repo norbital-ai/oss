@@ -190,24 +190,22 @@ type ConversationDefinition = {
 /**
  * One notice passed to `ctx.notify`.
  *
- * Every notice lands in each recipient's in-app inbox (`sys_notification`), live stream, web/APNs push (`bolt.push`),
- * and — for active members with a deliverable non-placeholder `sys_user.email` who have not turned off **Email
- * notifications** in their account menu (`sys_user.preferences.email_notifications !== false`) — transactional email
- * (`bolt.mail`) through the host's configured `mail` port (with a direct link to `link`, no attachments, zero workspace
- * configuration).
+ * Every notice lands in each recipient's in-app inbox (`sys_notification`), live stream and web/APNs push
+ * (`bolt.push`). The call decides every other channel in `via`:
  *
- * Supply `via` to also deliver through active workspace-owned conversation integrations (`sys_integration` with
- * `owner: null`, including envoy-paired accounts such as WhatsApp). Each channel resolves the recipient's handle on
- * `sys_user` (`whatsapp` → `phone`, `telegram` → `telegram`, `slack` → `slack`, `discord` → `discord`, `email` →
- * `email`); members without that handle are skipped on that channel while still receiving inbox and transactional email
- * notices, and replies on an envoy-paired channel continue on that envoy thread. Channels without auto-handles (such as
+ * - `'email'`: transactional email (`bolt.mail`) through the host's configured `mail` port to each active member with a
+ *   deliverable non-placeholder `sys_user.email` (a direct link to `link`, no attachments, zero workspace configuration).
+ * - an active workspace-owned conversation integration (`sys_integration` with `owner: null`, including envoy-paired
+ *   accounts such as WhatsApp). Each resolves the recipient's handle on `sys_user` (`whatsapp` → `phone`, `telegram` →
+ *   `telegram`, `slack` → `slack`, `discord` → `discord`, `email` → `email`); members without that handle are skipped
+ *   on that channel, and replies on an envoy-paired channel continue on that envoy thread. Channels without auto-handles (such as
  * `wechat`) or external/group recipients use `ctx.send`. Host transactional SMS is reserved for sign-in and invitation
  * codes, not `ctx.notify`; send SMS notifications via an SMS `chat` integration or an `http` integration.
  *
  * Code decides wording, grouping and which events notify; approval inbox notices already exist.
  * @example
  * { title: 'New review job', description: `${name} is waiting on the board.`, to: [{ team: 'reviewers' }],
- *   link: { model: 'projects', id: project.id }, via: [hotline.id],
+ *   link: { model: 'projects', id: project.id }, via: ['email', hotline.id],
  *   attachments: [{ document: { html }, to: 'pdf', name: 'Brief.pdf' }], once: `review:${project.id}` }
  */
 export type Notice<To = Recipient> = {
@@ -218,10 +216,11 @@ export type Notice<To = Recipient> = {
 	/** Target recipients: `{ user }`, `{ team }`, `{ policy }` (and `'requester'` / `'approvers'` in approval effects). */
 	to: readonly To[];
 	/**
-	 * Optional active workspace-owned conversation instances (runtime `sys_integration` rows with `owner: null`, wrapped
-	 * with `instance_id`) that also send the notice to each staff recipient's matching `sys_user` handle.
+	 * The channels beyond the inbox and push: `'email'` (the host's transactional mail) and active workspace-owned
+	 * conversation instances (runtime `sys_integration` rows with `owner: null`, wrapped with `instance_id`) that send
+	 * the notice to each staff recipient's matching `sys_user` handle.
 	 */
-	via?: readonly InstanceId<ConversationDefinition>[];
+	via?: readonly ('email' | InstanceId<ConversationDefinition>)[];
 	/** Optional files or render-at-delivery documents attached to the inbox notice and `via` channel sends. */
 	attachments?: readonly NoticeAttachment[];
 	/** Record opened in the workspace's record sheet (and linked from push and transactional emails); defaults to the event's record. */
@@ -234,9 +233,9 @@ export type Notice<To = Recipient> = {
  * Automations notify under their declared `policies`; model effects notify as the writer, after a committed write or
  * approval move.
  *
- * Inbox notices automatically fan out to live views, push subscriptions (`bolt.push`), and transactional email
- * (`bolt.mail`, using the host's `mail` transport unless the member opts out in account preferences). `messages`
- * returns the `sys_message` ids queued for any `via` conversation instances (queue admission, as `ctx.send`'s).
+ * Inbox notices fan out to live views and push subscriptions (`bolt.push`); `via: ['email']` adds transactional email
+ * (`bolt.mail`, the host's `mail` transport). `messages` returns the `sys_message` ids queued for any `via` conversation
+ * instances (queue admission, as `ctx.send`'s).
  * @example
  * update: { effect: function* (changes, ctx) {
  * 	if (ctx.event.kind !== 'write') return;

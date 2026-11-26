@@ -584,6 +584,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 						id: `${refreshKey}:requester`,
 						to: [{ user: a.user }],
 						via: [],
+						email: false,
 						title: label === undefined ? told : `${told} · ${label}`,
 						body: reason === '' ? null : reason,
 						link: { model: a.model, id: a.record },

@@ -49,7 +49,7 @@ A related-record grid with explicit child operations, original revisions and par
 	import { type Outcome } from '../client/contract.js';
 	import { actOutcome } from '../actions/outcome.js';
 	import { and } from '../filter/scope.js';
-	import { msg, catalogText } from '../text/messages.js';
+	import { msg, catalogText, label } from '../text/messages.js';
 	import { by_id, first_of, page_of, request_json } from '../read/request.js';
 	import { mapped, queryState } from '../read/state.js';
 	import ReadGate from '../read/ReadGate.svelte';
@@ -746,7 +746,7 @@ A related-record grid with explicit child operations, original revisions and par
 <section class="grid min-w-0 gap-3" data-child-grid={relation} data-save-scope={save}>
 	<div class="flex flex-wrap items-center justify-between gap-2">
 		<h3 class="font-medium">
-			{catalogText(bolt, `field.${of}.${relation}`, relation.replaceAll('_', ' '))}
+			{label(bolt, of, relation)}
 		</h3>
 		{#if save === 'independent' && !scope?.historical}<Button
 				variant="outline"

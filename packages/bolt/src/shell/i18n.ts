@@ -107,10 +107,12 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'System agent': '系统智能体',
 	'Feedback, requests and automations that keep failing. Turn automatic improvement on or off in Settings, under Assistant.':
 		'反馈、请求以及反复失败的自动化。可在"设置"的"助手"中开启或关闭自动改进。',
-	'Nothing to improve yet.': '暂无需要改进的事项。',
+	'No log lines in this release': '此版本暂无日志',
+	'Automation runs, assistant turns and envoy messages write here.': '自动化运行、助手回合和代理消息会写入此处。',
 	Subject: '事项',
-	Times: '次数',
-	'To merge': '待合并',
+	Request: '请求',
+	'Failing automation': '反复失败的自动化',
+	Reported: '报告',
 	'Agent working': '智能体处理中',
 	'Needs your answer': '等待你的答复',
 	'Ready to merge': '可以合并',
@@ -636,7 +638,6 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Requests you make and requests awaiting your decision appear here.':
 		'您发起的请求和等待您决定的请求会显示在此处。',
 	Notices: '通知',
-	'Email notifications': '邮件通知',
 	Sounds: '声音',
 	'Norbius is waiting for you': 'Norbius 在等你回复',
 	'Norbius finished': 'Norbius 已完成',
