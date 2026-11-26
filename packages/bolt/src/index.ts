@@ -54,6 +54,7 @@ export type { InputFields, InputOf, ValueOf } from './decl/fields.ts';
 export type {
 	Names,
 	ModelName,
+	PolicyName,
 	InstanceId,
 	Row,
 	StoredRow

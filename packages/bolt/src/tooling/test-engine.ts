@@ -1612,10 +1612,11 @@ export const test_engine = <P extends TestPorts = never>(
 					party: null,
 					...over
 				};
+				// a team the member is put in holds the member's policies, as an administrator would have set it
 				for (const team of actor.teams)
 					pending.push({
-						text: 'INSERT INTO sys_team (id, name) VALUES ($1,$1) ON CONFLICT DO NOTHING',
-						params: [team]
+						text: 'INSERT INTO sys_team (id, name, policies) VALUES ($1,$1,ARRAY(SELECT jsonb_array_elements_text($2::jsonb))) ON CONFLICT DO NOTHING',
+						params: [team, JSON.stringify(policies)]
 					});
 				pending.push({
 					text: 'INSERT INTO sys_user (id, email, phone, name, kind, admin, party, team) VALUES ($1,$2,$7,$3,$4,$5,$6::jsonb,$8) ON CONFLICT DO NOTHING',
