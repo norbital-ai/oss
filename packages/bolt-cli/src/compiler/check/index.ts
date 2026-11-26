@@ -40,6 +40,8 @@ export type CheckResult = {
 	/** The stages that ran, in order (test `compiler/check-order`). */
 	stages: Stage[];
 	errors: CheckDiagnostic[];
+	/** What the author may want to know and need not fix; never fails a check or a build. */
+	advice: CheckDiagnostic[];
 	manifest?: EngineManifest;
 	guest?: GuestProgram;
 	/** The model transforms, per verb: `'<model>.create'`, `'<model>.update'`, `'<model>.delete'`. */
@@ -172,7 +174,7 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 		}
 		stages.push(s);
 	};
-	const out: CheckResult = { stages, errors, transforms: [] };
+	const out: CheckResult = { stages, errors, advice: [], transforms: [] };
 
 	const evaluated = yield* front(root, stage, errors, options.bolt, options.timing ?? true);
 	if (evaluated === undefined) return out;
@@ -247,13 +249,14 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 
 	if (diagnostics) {
 		stage('rules');
-		const { checkRules } = yield* Effect.tryPromise({
+		const { checkRules, checkAdvice } = yield* Effect.tryPromise({
 			try: () => import('./rules.ts'),
 			catch: (cause) => new EvalError({ cause })
 		});
 		const where = (role: string, name: string) =>
 			files.find((f) => f.role === role && f.name === name)?.path ?? `src (${role} ${name})`;
 		errors.push(...checkRules(m, bodies, where));
+		out.advice.push(...checkAdvice(m, where));
 		const src = join(root, 'src'),
 			sources = new Map<string, string>();
 		for (const entry of yield* fs.readDirectory(src, { recursive: true }))

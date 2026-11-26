@@ -64,7 +64,7 @@ export type RunCause = 'cron' | 'effect' | 'event' | 'schedule' | 'start' | 'ret
  * the `start` callable, an envoy), `agent` set when Norbius started it in that conversation for them; else the `system`
  * did: a `cron`, a model `effect` after `verb` on `records`, an `event` (a committed `verb` on `model`'s `records` the
  * automation listens to), or a `schedule` from another run's code (`by`,
- * absent on a run queued before triggers were recorded).
+ * absent when a seed pack started the run).
  */
 export type RunTrigger =
 	| {

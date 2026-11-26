@@ -3,7 +3,7 @@
 // the outputs, paths and columns its model declares. A mistyped `check` argument is the type corpus's gate
 // (`tests/types/policy-layers.ts`).
 import { describe, expect, it } from 'vitest';
-import { checkRules } from '../src/compiler/check/rules.ts';
+import { checkAdvice, checkRules } from '../src/compiler/check/rules.ts';
 import { LAYER_MAX_DEPTH } from '../../bolt/src/decl/model.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 
@@ -298,6 +298,47 @@ describe('layer maps at compile time (bolt check)', () => {
 			'access/blind-write alone: delete of tickets is granted, but no policy that grants it reads tickets; the write reaches no row',
 			// the second policy reads and updates, so the pair reaches rows to update; neither that deletes reads
 			'access/blind-write both: delete of tickets is granted, but no policy that grants it reads tickets; the write reaches no row'
+		]);
+	});
+	it('notes a written field no granted output shows, and a model no policy reads', () => {
+		const tickets: EngineManifest['exposures'][string] = {
+			outputs: { default: { tickets: { fields: 'all' } }, brief: { tickets: { fields: ['title'] } } },
+			update: { columns: { tickets: ['title', 'note'] } }
+		};
+		const models: EngineManifest['models'] = {
+			...base.models,
+			tickets: {
+				description: 'A ticket',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' }, note: { kind: 'text', optional: true } }
+			}
+		};
+		expect(
+			checkAdvice(
+				{
+					...base,
+					models,
+					exposures: { tickets, notes: { outputs: { default: { notes: { fields: 'all' } } } } },
+					policies: {
+						narrow: {
+							description: 'Narrow',
+							grants: {
+								tickets: { outputs: { brief: {} }, update: { columns: { tickets: ['title', 'note'] } } }
+							}
+						},
+						wide: {
+							description: 'Wide',
+							grants: {
+								tickets: { outputs: { default: {} }, update: { columns: { tickets: ['note'] } } }
+							}
+						}
+					}
+				},
+				(_role, name) => name
+			).map((f) => `${f.code} ${f.message}`)
+		).toEqual([
+			"access/unseen-field narrow: tickets: update admits 'note', which no output this policy grants shows",
+			'access/unread notes: no policy reads this model; only an administrator sees its rows'
 		]);
 	});
 });

@@ -176,6 +176,7 @@ const fromRun = (r: typeof RunChecked.Type) =>
 		const result: CheckResult = {
 			stages: [...r.stages],
 			errors: r.errors.map((e) => ({ ...e })),
+			advice: [],
 			transforms: [...r.transforms],
 			...(manifest === undefined ? {} : { manifest }),
 			...(r.seed === undefined ? {} : { seed: r.seed }),

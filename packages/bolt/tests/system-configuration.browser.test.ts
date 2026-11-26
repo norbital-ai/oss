@@ -16,7 +16,7 @@ import './support/shell.css';
 
 const settings: Settings = {
 	members: [],
-	teams: [],
+	teams: [{ id: 'sales', name: 'Sales desk', parent: null, policies: ['quoting'] }],
 	invitations: [],
 	keys: [],
 	policies: [],
@@ -293,6 +293,10 @@ it('organization settings are one tab per concern, each saving only its own', as
 		await page.getByRole('tab', { name: 'Billing' }).click();
 		const billing = target.querySelector('iframe[title="Billing"]');
 		expect(billing?.getAttribute('src')).toBe('/billing?embed=1');
+		// the Teams tab lists each team with the policies its members hold
+		await page.getByRole('tab', { name: 'Teams' }).click();
+		await expect.element(page.getByText('Sales desk', { exact: true }).first()).toBeVisible();
+		await expect.element(page.getByText('quoting', { exact: true }).first()).toBeVisible();
 		await page.getByRole('tab', { name: 'Data retention' }).click();
 		await page.getByLabelText('Keep finished runs (days)').fill('60');
 		await page.getByRole('button', { name: 'Save', exact: true }).click();

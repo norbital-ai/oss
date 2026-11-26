@@ -946,6 +946,46 @@ const RULES = [
 	embedRules
 ] as const;
 
+/**
+ * What a workspace may want to know and need not fix: a field a policy lets its holders write that none of its outputs
+ * shows them, and a model no policy reads.
+ */
+export function checkAdvice(
+	m: EngineManifest,
+	path: (role: string, name: string) => string
+): Finding[] {
+	const out: Finding[] = [];
+	const at = (code: string, role: string, name: string, message: string) =>
+		out.push({ code, path: path(role, name), message: `${path(role, name)}: ${message}` });
+	const read = new Set<string>();
+	for (const [p, spec] of Object.entries(m.policies))
+		for (const [c, g] of Object.entries(spec.grants)) {
+			const outputs = grantedOutputs(g);
+			if (outputs.length > 0) read.add(c);
+			const shown = outputs.map(([output]) => outputFields(m, c, output));
+			// an output that shows every field shows every written one
+			if (outputs.length === 0 || shown.some((fields) => fields === undefined)) continue;
+			for (const verb of ['create', 'update'] as const)
+				for (const col of grantColumns(g[verb], c) ?? [])
+					if (!shown.some((fields) => fields?.includes(col)))
+						at('access/unseen-field', 'policy', p, `${c}: ${verb} admits '${col}', which no output this policy grants shows`);
+		}
+	// a model another's output reads as a layer is read through that model
+	const layered = new Set(
+		Object.entries(m.exposures).flatMap(([c, e]) =>
+			Object.values(e.outputs).flatMap((layers) =>
+				Object.keys(layers)
+					.filter((layer) => layer !== c)
+					.map((layer) => layer_models(c, e, m.relationships).models[layer])
+			)
+		)
+	);
+	for (const c of Object.keys(m.exposures))
+		if (!read.has(c) && !layered.has(c))
+			at('access/unread', 'model', c, 'no policy reads this model; only an administrator sees its rows');
+	return out;
+}
+
 export function checkRules(
 	m: EngineManifest,
 	bodies: { automations: readonly string[] },

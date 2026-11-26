@@ -211,6 +211,7 @@ export const diagnose = Effect.fn('bolt.diagnose')(function* (
 	const result = yield* check(root, options);
 	return {
 		stages: result.stages,
+		advice: result.advice,
 		errors: [
 			...result.errors,
 			...(result.manifest === undefined ? [] : yield* types(root, options))

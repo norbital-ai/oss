@@ -342,6 +342,15 @@ it.live('the requester of a request that asks for changes is told that saving re
 	})
 );
 
+it.live('a pending step nobody can decide says so', () =>
+	Effect.gen(function* () {
+		const { target } = yield* panel([{ ...request, stalled: true }]);
+		assert.match(textOf(element(target, '[data-view=approval-stalled]')), /Nobody can decide this step/);
+		const settled = yield* panel([request]);
+		assert.equal(settled.target.querySelector('[data-view=approval-stalled]'), null);
+	})
+);
+
 it.live('several requests: the selector defaults to the open one and switches the timeline', () =>
 	Effect.gen(function* () {
 		const old: ApprovalView = {

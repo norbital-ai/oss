@@ -924,7 +924,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 									? {
 											run: {
 												...(job === undefined ? {} : { id: run.id }),
-												// ponytail: a run queued before triggers were recorded reads as an unattributed schedule
+												// a run enqueued with no trigger (a seed pack's start) reads as the system's schedule
 												trigger: run.trigger ?? { kind: 'system' as const, cause: 'schedule' as const }
 											}
 										}

@@ -81,6 +81,7 @@ const checkCommand = Command.make('check', { dir, json, noTypes }, ({ dir, json,
 			return yield* Effect.fail(
 				authorErrors(result.errors)
 			);
+		for (const advice of result.advice) yield* Console.log(`note ${advice.code} ${advice.message}`);
 		yield* Console.log(
 			`ok (${result.stages.join(' → ')}${noTypes ? '' : ' → types'})`
 		);
