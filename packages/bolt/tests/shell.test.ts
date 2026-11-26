@@ -240,7 +240,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 			})
 	);
 	const TRUE = { t: 'const', value: true } as const;
-	/** One policy `p`'s access points on a model: none unless named (decision 3: reads and write columns per path). */
+	/** One policy `p`'s access points on a model: none unless named (reads and write columns per path). */
 	const access = (over: Partial<ModelAuthority> = {}): ModelAuthority => ({
 		read: {},
 		create: [],
@@ -562,7 +562,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 				expect((yield* exposure(source, both))['jobs']?.fields).toHaveProperty('pay');
 			})
 	);
-	it.effect('sends a readable computed field, so a label naming one resolves (A5)', () =>
+	it.effect('sends a readable computed field, so a label naming one resolves', () =>
 		Effect.gen(function* () {
 			const withComputed = Result.getOrThrow(
 				decode_manifest({
@@ -600,7 +600,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 			).not.toHaveProperty('code');
 		})
 	);
-	it.effect('a roll-up sum over a money field keeps its money and literal currency (A9)', () =>
+	it.effect('a roll-up sum over a money field keeps its money and literal currency', () =>
 		Effect.gen(function* () {
 			const orders = Result.getOrThrow(
 				decode_manifest({
@@ -1145,7 +1145,7 @@ describe('visitor fetch', () => {
 			admits(visitor, { m: 'query', a: [{ openings: { where: { id: { eq: 'id' } } } }] })
 		).toBe(true);
 		expect(admits(visitor, { m: 'query', a: [{ orders: {} }] })).toBe(false);
-		// the single-model form is gone: a model name and its arguments are no request
+		// there is no single-model form: a model name and its arguments are no request
 		expect(admits(visitor, { m: 'query', a: ['openings', {}] })).toBe(false);
 		expect(
 			BoltRoutes['POST /__bolt/live'].admits(visitor, { m: 'aggregate', a: ['openings', {}] })

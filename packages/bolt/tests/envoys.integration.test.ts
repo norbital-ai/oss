@@ -1,6 +1,6 @@
 import { with_accounts } from './support/accounts.ts';
 import { with_envoys } from './support/envoys.ts';
-// engine/envoys on PGlite with the agent area's real turn loop and a scripted model ((5)):
+// engine/envoys on PGlite with the agent area's real turn loop and a scripted model:
 // Envoys and their account deployments are durable runtime rows; ingestion queues each admission.
 // A DM holds the envoy's policies joined by the linked sender's own authority (a contractor's DM does what the
 // contractor's team grants where the envoy's policies would refuse it), a group turn
@@ -23,7 +23,7 @@ import { TestWorkspace, type Kit, type WorkspaceServices, respond_system_1 } fro
 import { teams_sql } from './support/teams.ts';
 
 const TEAMS = { 't-con': { name: 'Contractors', policies: ['contractor'] } };
-import { layer } from '../../bolt-cli/src/test/effect.ts'; // hook:decisions
+import { layer } from '../../bolt-cli/src/test/effect.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -45,7 +45,7 @@ const manifest = {
 			desk: { 'envoys.receive': [{ rate: '2/min', per: 'sender' }] },
 			desk_turns: { agent: [{ rate: '2/h', per: 'actor' }] }
 		}
-	}, // hook:decisions — not a triage test
+	}, // not a triage test
 	models: {
 		jobs: {
 			description: 'A job',

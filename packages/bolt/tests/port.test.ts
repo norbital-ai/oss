@@ -1,4 +1,4 @@
-// `Port` (L-BOLT-288, 289): a port call is bounded by its wall, and a missing port, a throw, a rejection or a bad answer
+// `Port`: a port call is bounded by its wall, and a missing port, a throw, a rejection or a bad answer
 // is a typed failure — never a throw.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';

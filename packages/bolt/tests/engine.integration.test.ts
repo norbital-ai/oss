@@ -1,4 +1,4 @@
-// P2-INTEGRATE end to end on PGlite: the kit → engine entry → access, write, query, schema and guest areas together.
+// The engine end to end on PGlite: the kit → engine entry → access, write, query, schema and guest areas together.
 // One workspace, its tests in order (the first order is SO-0001); each later test reads only the rows it wrote. The guest
 // CPU wall is guest.test's.
 import { expect, layer } from '@effect/vitest';

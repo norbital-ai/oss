@@ -1,4 +1,4 @@
-// Runtime gaps the template migration found: `ctx.progress` in automations, stopping
+// Runtime mechanisms: `ctx.progress` in automations, stopping
 // a queued or running run (the engine and the shell route), and the files facility over the host's files port.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, layer } from '@effect/vitest';
@@ -256,7 +256,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 					const tick = yield* Effect.forkChild(t.run_due());
 					yield* Deferred.await(entered);
 					yield* runs.stop((yield* t.as(t.admin)).authority, id);
-					// the stop used to wait for the crossing to end (the workspace's frozen clock never fires its wall: a hang)
+					// the stop does not wait for the crossing to end (the workspace's frozen clock never fires its wall: waiting would hang)
 					yield* Fiber.join(tick);
 					expect(
 						yield* sql(t, `SELECT state, error->>'code' AS code FROM sys_run WHERE id = $1`, [id])

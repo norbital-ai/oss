@@ -467,18 +467,18 @@ model('products', {
 model('orders', { ...m.orders.spec, create: { fields: ['nte'] } });
 // @ts-expect-error C7 a derived field in an allowlist
 model('orders', { ...m.orders.spec, update: { fields: ['total'] } });
-// @ts-expect-error C8 the `columns` wrapper is gone: a write verb lists its `fields` beside its relations
+// @ts-expect-error C8 there is no `columns` wrapper: a write verb lists its `fields` beside its relations
 model('orders', { ...m.orders.spec, update: { columns: ['note'] } });
 model('orders', {
 	...m.orders.spec,
-	// @ts-expect-error C9 `with` relation-action allowlists are gone: a write layer is a relation beside `fields`
+	// @ts-expect-error C9 there are no `with` relation-action allowlists: a write layer is a relation beside `fields`
 	update: { fields: [], with: { lines: {} } }
 });
 // @ts-expect-error C10 an unexposable read field
 model('orders', { ...m.orders.spec, outputs: { default: { fields: ['nope'] } } });
-// @ts-expect-error C10b a read without its path key (`relations` is gone)
+// @ts-expect-error C10b a read without its path key (there is no `relations`)
 model('orders', { ...m.orders.spec, read: { fields: ['note'], relations: ['lines'] } });
-// @ts-expect-error C11 declared queries are gone: read the layers, transform in a src/lib helper
+// @ts-expect-error C11 there are no declared queries: read the layers, transform in a src/lib helper
 model('orders', { ...m.orders.spec, queries: {} });
 model('orders', {
 	...m.orders.spec,
@@ -581,7 +581,7 @@ automation({
 			is<Eq<typeof first.$sync, Row<'orders'>['$sync']>>();
 			is<Eq<'$approval' extends keyof typeof first.customer ? 1 : 0, 0>>();
 		}
-		// @ts-expect-error B9 the single-model `query(model, args)` form is gone: every read is a read request
+		// @ts-expect-error B9 there is no single-model `query(model, args)` form: every read is a read request
 		yield* ctx.query('orders', { all: true });
 	}
 });
@@ -644,7 +644,7 @@ automation({
 	run: function* ({ ids }, ctx) {
 		const id = ids[0];
 		if (id !== undefined) {
-			// @ts-expect-error B7 upsert is retired; imports carry their conflict policy
+			// @ts-expect-error B7 there is no upsert; imports carry their conflict policy
 			yield* ctx.act({ 'orders.upsert': [{ id, note: 'x' }] });
 		}
 		return 1;
@@ -714,7 +714,7 @@ model('probe', { description: 'x', record_label: "record.a", fields: { a: { kind
 // @ts-expect-error O3 outputs need the model's `read`
 model('probe', { description: 'x', record_label: "record.a", fields: { a: { kind: 'text' } }, outputs: { narrow: { probe: { fields: ['a'] } } } });
 
-// Display catalogues own model field text; inline descriptor labels are retired.
+// Display catalogues own model field text; there are no inline descriptor labels.
 model('probe', {
 	description: 'x', fields: {
 		// @ts-expect-error field labels come from the message catalogue

@@ -1,4 +1,4 @@
-// The driver ABI, the engine's side (D10b): a provider's Promise link as Effects. Interrupting a call aborts the
+// The driver ABI, the engine's side: a provider's Promise link as Effects. Interrupting a call aborts the
 // provider's signal, an answer is decoded, a send's refusal is the engine's `SendRefused` (from any module graph, by
 // name), a member the provider lacks is `Unavailable`, and closing the link's scope closes it and aborts its signal.
 import { describe, expect, it } from '@effect/vitest';

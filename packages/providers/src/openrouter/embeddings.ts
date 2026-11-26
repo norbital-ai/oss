@@ -193,7 +193,7 @@ export const ai_modality_refusals = Effect.fn('openrouter.modalities')(function*
 				continue;
 			}
 			out.push(
-				`${check.system} model '${id}' ${mods === undefined ? 'has no published input modalities' : `takes ${mods.join(', ') || 'nothing'}`}: it must take image (P39)`
+				`${check.system} model '${id}' ${mods === undefined ? 'has no published input modalities' : `takes ${mods.join(', ') || 'nothing'}`}: it must take image`
 			);
 		}
 	}

@@ -1,5 +1,5 @@
-// Type corpus for layer-map policies (decision 3, plan "Type safety of the policy"): everything a grant says is typed from
-// the model's own declaration. Each `@ts-expect-error` line is a planted mistake from the plan's table; a clean tsc proves
+// Type corpus for layer-map policies: everything a grant says is typed from
+// the model's own declaration. Each `@ts-expect-error` line is a planted mistake; a clean tsc proves
 // every valid literal compiles and every mistake is refused at its literal.
 import { policy } from '../../src/index.ts';
 import type { CreateInput, Id, StoredTree, UpdateInput } from '../../src/index.ts';
@@ -113,7 +113,7 @@ policy({
 });
 policy({
 	description: 'x',
-	// @ts-expect-error a write grant's `where` is gone: judge the batch in `check`
+	// @ts-expect-error a write grant has no `where`: judge the batch in `check`
 	grants: { orders: { update: { where: { status: { eq: 'draft' } } } } }
 });
 policy({
@@ -196,7 +196,7 @@ policy({
 });
 policy({
 	description: 'x',
-	// @ts-expect-error policy `queries` and `via` are gone
+	// @ts-expect-error there are no policy `queries` or `via`
 	grants: { orders: { queries: ['open_total'] }, order_lines: { via: 'order' } }
 });
 

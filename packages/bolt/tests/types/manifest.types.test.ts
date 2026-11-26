@@ -1,4 +1,4 @@
-// The engine manifest's part types are the decl types (W2.F2b): each part decodes as its declaration's literal type, so
+// The engine manifest's part types are the decl types: each part decodes as its declaration's literal type, so
 // an interior reads what an author wrote without a cast. `Same` is mutual assignability: a Schema-built part is
 // `readonly` where the decl type is not. Never run, only checked.
 import { expectTypeOf } from '@effect/vitest';

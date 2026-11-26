@@ -83,7 +83,9 @@ export const ApprovalViewSchema = Schema.Struct({
 		})
 	),
 	mine: Schema.Boolean,
-	participant: Schema.Boolean
+	participant: Schema.Boolean,
+	/** Pending, and no active member but the requester may decide its current step. */
+	stalled: Schema.Boolean
 });
 /** The request and its history as the viewer is allowed to read them. */
 export type ApprovalView = typeof ApprovalViewSchema.Type;

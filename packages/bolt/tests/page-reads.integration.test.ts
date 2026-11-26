@@ -330,7 +330,7 @@ layer(seeded, { excludeTestServices: true })('/q page reads', (it) => {
 					title: 'alder',
 					doc: { lines: ['alder'] }
 				});
-				// no fields reads every field the layer exposes, heavy ones included (decision 8)
+				// no fields reads every field the layer exposes, heavy ones included
 				expect((yield* Schema.decodeUnknownEffect(Rows)(plain)).orders.rows[0]).toMatchObject({
 					title: 'alder',
 					doc: { lines: ['alder'] }

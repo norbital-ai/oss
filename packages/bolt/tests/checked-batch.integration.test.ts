@@ -195,7 +195,7 @@ it.live(
 				);
 				expect(denied).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
 				expect(yield* f.count('customers')).toBe(1);
-				// Retired operation lists fail at the guest JSON boundary.
+				// Operation lists fail at the guest JSON boundary.
 				expect(yield* f.dynamic_json([{ callable: 'customers.import', input: {} }])).toMatchObject({
 					_tag: 'Some',
 					value: { state: 'failed', error: { code: 'invalid_input' } }

@@ -317,7 +317,7 @@ export class Authorities {
 		);
 	}
 	/**
-	 * hook:envoys — an envoy's turn on `instance`: the envoy's declared `policies`, never admin by itself, no
+	 * An envoy's turn on `instance`: the envoy's declared `policies`, never admin by itself, no
 	 * party; `{ var: 'actor.instance' }` is the instance. On a DM from a linked sender, `dm: 'union'` (the default) joins the
 	 * member's own policies and team tree: the least constraining grant admits; `dm: 'envoy'`, and every administrator's DM
 	 * (an envoy never holds admin), holds the envoy's policies alone with every operand bound to the member — no member

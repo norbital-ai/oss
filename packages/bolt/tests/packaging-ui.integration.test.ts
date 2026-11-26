@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// Packaging gaps found migrating the 0.0.1 templates, on PGlite: a restore fills a column's default for a key a row
+// Packaging on PGlite: a restore fills a column's default for a key a row
 // omits; `/runs` lists a holder's runs as their run grants let them read them.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';

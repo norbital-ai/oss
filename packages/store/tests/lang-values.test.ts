@@ -125,7 +125,7 @@ describe('formula', () => {
 		assert.ok(!('error' in c));
 		assert.equal(evaluate(c, { wage: '100.5', age: 3 }), 26.1);
 	});
-	it('types a derived root builder (M1)', () => {
+	it('types a derived root builder', () => {
 		const derived = context(
 			{ age: { kind: 'int' } },
 			{

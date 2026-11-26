@@ -1,4 +1,4 @@
-// Rule 11a: the strict `Where`/`OrderBy` decoder, materialized time bounds, child aggregates, json contains, `bolt.decode`.
+// The strict `Where`/`OrderBy` decoder, materialized time bounds, child aggregates, json contains, `bolt.decode`.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import type { Reader } from '../src/engine/contracts.ts';

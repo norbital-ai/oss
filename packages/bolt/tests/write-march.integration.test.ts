@@ -1,6 +1,6 @@
 // A payroll-shaped act: its callback reads every earlier period (large json rows), writes payslips with large json
-// breakdowns and carries a ledger. A 0.25 CU compute ran such an act out of memory when the reads' re-digests, the
-// writes and every row image aggregated as jsonb shared one statement: each re-digest is now a statement of its own,
+// breakdowns and carries a ledger. Sharing one statement between the reads' re-digests, the
+// writes and every row image aggregated as jsonb runs a 0.25 CU compute out of memory: each re-digest is a statement of its own,
 // ahead of bounded write statements whose images aggregate as json text.
 import { Context, Effect, Layer, Schema } from 'effect';
 import { describe, expect, it } from '@effect/vitest';

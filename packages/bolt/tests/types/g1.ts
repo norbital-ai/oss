@@ -261,7 +261,7 @@ automation({
 automation({
 	...rt.orders_submit.spec,
 	run: function* (_, ctx) {
-		// @ts-expect-error Q4 `all` is gone: a list's limit defaults to 10,000
+		// @ts-expect-error Q4 there is no `all`: a list's limit defaults to 10,000
 		yield* ctx.query({ orders: { limit: 5, all: true } });
 	}
 });
@@ -328,7 +328,7 @@ automation({
 model('probe', {
 	description: 'x',
 	record_label: 'record.s',
-	// @ts-expect-error S1 state edit lists are retired; locks are named constraints
+	// @ts-expect-error S1 there are no state edit lists; locks are named constraints
 	fields: { s: { kind: 'state', initial: 'a', states: { a: { edit: 'some' } } } }
 });
 model('probe', {

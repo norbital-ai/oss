@@ -1,4 +1,4 @@
-// The multilingual search tokenizer (L-BOLT-121/122), ported case for case: the SQL the schema plan installs folds and
+// The multilingual search tokenizer: the SQL the schema plan installs folds and
 // tokenizes both the stored document and the typed query, so these pin what a row and a term turn into.
 import { Effect, Schema } from 'effect';
 import { PgliteDb, Pristine } from '@norbital-ai/host-api/node';

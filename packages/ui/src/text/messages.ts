@@ -26,6 +26,7 @@ const MESSAGES = {
 	'approval.request': 'Request',
 	'approval.requested_by': 'Requested by {who}',
 	'approval.resubmitOnSave': 'Saving resubmits for approval',
+	'approval.stalled': 'Nobody can decide this step. An administrator can add an approver to the team or close the request.',
 	'approval.rolled_back': 'Rolled back',
 	'approval.skipped': 'Not restored',
 	'approval.status.ChangesRequested': 'Changes requested',

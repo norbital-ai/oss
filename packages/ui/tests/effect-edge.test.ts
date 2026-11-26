@@ -1,4 +1,4 @@
-// The ui edge (D9): `run` rejects with the tagged failure, `fork` needs `onFailure` when the effect can fail, unmounting
+// The ui edge: `run` rejects with the tagged failure, `fork` needs `onFailure` when the effect can fail, unmounting
 // the edge interrupts every fiber it runs, and `live` hands Svelte a fresh reference per value.
 import './dom.ts';
 import assert from 'node:assert/strict';

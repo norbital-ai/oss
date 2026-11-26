@@ -1,4 +1,4 @@
-// Type corpus for gaps found migrating real templates (CTX-TYPES): query refusal and search indexes, atomic imports with
+// Type corpus for ctx types: query refusal and search indexes, atomic imports with
 // `on_conflict`, transform-filled create fields, custom `default`/`many`, untagged unions. Each `@ts-expect-error` is a
 // planted mistake.
 import { Effect } from 'effect';
@@ -13,7 +13,7 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 type Flat<T> = { [K in keyof T]: T[K] };
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
-// (1) automations run named similarity searches (declared queries, and their `refuse`, are gone)
+// automations run named similarity searches (there are no declared queries, nor their `refuse`)
 automation({
 	...rt.orders_submit.spec,
 	run: function* (_, ctx) {
@@ -46,12 +46,12 @@ automation({
 				.rows[0] ?? null;
 		if (target === null) return yield* ctx.refuse('errors.refused');
 		yield* ctx.act({ 'orders.update': [{ target, set: { note: 'observed' } }] });
-		// @ts-expect-error write options reject the retired observed map
+		// @ts-expect-error write options take no observed map
 		yield* ctx.act({ 'orders.update': [{ target, set: { note: 'invalid' } }] }, { observed: { [target.id]: '1' } });
 	}
 });
 
-// (2) imports name their conflict policy in their own input.
+// imports name their conflict policy in their own input.
 automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
@@ -67,13 +67,13 @@ automation({
 automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
-		// @ts-expect-error U1 upsert is retired
+		// @ts-expect-error U1 there is no upsert
 		yield* ctx.act({ 'notice_notes.upsert': [] });
 		return 1;
 	}
 });
 
-// (4) a create field the transform fills is optional in the input
+// a create field the transform fills is optional in the input
 is<
 	Eq<
 		Flat<CreateInput<'customers'>>,
@@ -88,7 +88,7 @@ automation({
 	}
 });
 
-// (5) a custom field takes a default and `many`
+// a custom field takes a default and `many`
 model('probe', {
 	description: 'x',
 	record_label: 'record.a',
@@ -111,7 +111,7 @@ model('probe', {
 	fields: { a: { kind: 'text' }, r: { kind: 'custom', of: 'rating', default: { score: 'high' } } }
 });
 
-// (6) an untagged scalar union
+// an untagged scalar union
 custom_field({
 	description: 'x',
 	shape: {

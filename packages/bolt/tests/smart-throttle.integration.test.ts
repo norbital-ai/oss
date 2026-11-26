@@ -628,7 +628,7 @@ describe('never wedged', () => {
 			yield* say(DM, '@bot long job', { ...group(5), invocation: 'mention' });
 			while (ai.requests.length === 0) yield* Effect.sleep('5 millis');
 			yield* say(CAL_WA, 'chatter during the turn', group(5));
-			// answered while the turn runs, not after it: this is what used to wedge
+			// answered while the turn runs, not after it: waiting for the turn would wedge
 			expect(yield* row('chatter during the turn')).toMatchObject({ addressed: false });
 			yield* say(DM, 'a direct word meanwhile');
 			yield* Deferred.succeed(gate, undefined);

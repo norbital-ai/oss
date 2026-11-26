@@ -1,4 +1,4 @@
-// A local host's `download` (P21): media by its first bytes streams into the store under its sha256; a refusal, a body
+// A local host's `download`: media by its first bytes streams into the store under its sha256; a refusal, a body
 // past the cap, a stall, a private redirect or a long chain leaves nothing behind.
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';

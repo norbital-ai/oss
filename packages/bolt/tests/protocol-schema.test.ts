@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The wire's Schemas (A.4) and the C9 artifact a host reads: each body decodes and encodes back to itself, the
+// The wire's Schemas and the artifact a host reads: each body decodes and encodes back to itself, the
 // status map runs both ways, the own callables keep their refusals, an instance status drops what it cannot read, the
 // artifact's files are decoded once (`ManifestInvalid`) as native Effects, and a workspace's pages resolve alike
 // on every host.
@@ -440,7 +440,7 @@ describe('norbital.template.json', () => {
 	});
 });
 
-// ── the artifact (C9) ──
+// ── the artifact ──
 const workspace: EngineManifest = {
 	needs: [],
 	workspace: { tz: 'Asia/Singapore', locale: 'en' },

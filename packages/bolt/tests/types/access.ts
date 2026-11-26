@@ -38,7 +38,7 @@ export const salesRep = policy({
 			create: {
 				fields: ['customer', 'note'],
 				lines: { fields: ['item', 'qty'] },
-				// one read over the batch replaces the old relation-hop `where`; steps in order, `if` adds one only when it
+				// one read over the batch, never a relation-hop `where`; steps in order, `if` adds one only when it
 				// holds, finance may decide in any step's place
 				verdict: function* (rows, ctx) {
 					const { customers } = yield* ctx.query({
@@ -60,7 +60,7 @@ export const salesRep = policy({
 			update: {
 				fields: ['status', 'note'],
 				moves: { status: ['draft->submitted', 'submitted->draft'] },
-				// the pre-image check `previous` was; the owner's team reviews a status change
+				// a pre-image check; the owner's team reviews a status change
 				verdict: function* (changes, ctx) {
 					if (changes.some((c) => c.before.status === 'ordered'))
 						return yield* ctx.refuse('errors.refused', { field: 'status' });
@@ -190,16 +190,16 @@ policy({ description: 'x', grants: { orders: { outputs: { default: { owner: { eq
 // @ts-expect-error A4 a create column outside the declared create columns
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { create: { fields: ['status'] } } } });
-// @ts-expect-error A5 the `'read'` write shorthand is gone
+// @ts-expect-error A5 there is no `'read'` write shorthand
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { outputs: { default: {} }, update: 'read' } } });
-// @ts-expect-error A6 `previous` is gone: the update check judges `before`
+// @ts-expect-error A6 there is no `previous`: the update check judges `before`
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { previous: { status: { eq: 'draft' } } } } } });
-// @ts-expect-error A6b a write `where` is gone: the check reads what it needs
+// @ts-expect-error A6b there is no write `where`: the check reads what it needs
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { create: { where: { note: { is_null: true } } } } } });
-// @ts-expect-error A7 `via` is gone: a child is a layer of its root
+// @ts-expect-error A7 there is no `via`: a child is a layer of its root
 // prettier-ignore
 policy({ description: 'x', grants: { order_lines: { via: 'order' } } });
 // @ts-expect-error A8 a write layer is a declared write path (orders.customer is a read layer only)
@@ -211,7 +211,7 @@ policy({ description: 'x', grants: { orders: { update: { moves: { status: ['draf
 // @ts-expect-error A10 moves on a field that is not a state
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { moves: { note: ['a->b'] } } } } });
-// @ts-expect-error A11 policy `queries` are gone with declared queries
+// @ts-expect-error A11 there are no policy `queries`, nor declared queries
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { queries: ['open_total'] } } });
 // @ts-expect-error A12 an automation the workspace does not declare
@@ -328,7 +328,7 @@ policy({ description: 'x', grants: {}, capabilities: { mcp: ['sap'] } });
 // @ts-expect-error A35 an unknown limit key
 // prettier-ignore
 workspace({ tz: 'UTC', locale: 'en', limits: { sales_rep: { unknown_limit: '600/min' } } });
-// @ts-expect-error A36 a `'<model>.<query>'` limit key is gone with declared queries
+// @ts-expect-error A36 there is no `'<model>.<query>'` limit key, nor declared queries
 // prettier-ignore
 workspace({ tz: 'UTC', locale: 'en', limits: { sales_rep: { 'orders.open_total': '1/min' } } });
 // @ts-expect-error A37 a rate outside the grammar

@@ -1,4 +1,4 @@
-// Reproduction for Bolt audit bug 27: `bolt check` judges a cron with the engine's own parser.
+// `bolt check` judges a cron with the engine's own parser.
 import { describe, expect, it } from 'vitest';
 import { Result } from 'effect';
 import { parse_cron } from '@norbital-ai/bolt/tooling';

@@ -673,7 +673,7 @@ describe('the AI port under the 20 s idle wall', () => {
 		'sys_2.infer: quoted scalars ("true", "95") are read as the kind, nested too; other strings are still refused',
 		() =>
 			Effect.gen(function* () {
-				// deepseek wrote `is_change_notice: "true"` and `confidence_pct: "95"`; every submit was refused
+				// a model may write `is_change_notice: "true"` and `confidence_pct: "95"`: the submit is not refused
 				const quoted = {
 					kind: 'object',
 					fields: {
@@ -1101,7 +1101,7 @@ describe('the AI port under the 20 s idle wall', () => {
 		'sys_2.infer: a structured answer that misses the output is handed back with its problems, at most 3 times running',
 		() =>
 			Effect.gen(function* () {
-				// one impossible field used to end the inference, which cost the automation that owned it the whole answer
+				// one impossible field does not end the inference, which would cost the automation that owns it the whole answer
 				const { p, requests } = port([done('{"n":3.5}'), done('{"n":4}')]);
 				expect(yield* infer_facility(p)(at({ prompt: 'q', output }))).toEqual({
 					ok: true,
@@ -1119,7 +1119,7 @@ describe('the AI port under the 20 s idle wall', () => {
 		'sys_2.infer: a structured answer written out as text is taken as a submission; prose is asked to edit, at most 3 times running',
 		() =>
 			Effect.gen(function* () {
-				// one chatty turn used to fail the whole inference, which failed the automation that owned it
+				// one chatty turn does not fail the whole inference, which would fail the automation that owns it
 				const { p, requests } = port([
 					done('Sure! Here is the verdict: suspicious.'),
 					done('{"n":3}')

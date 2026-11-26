@@ -20,7 +20,7 @@ import { equal_json } from '@norbital-ai/store/kind';
 import { isList, isObj } from './draft.ts';
 import { confirmed_send } from '../conversations/status.ts';
 
-/** Rule 62: tool results are bounded; clipped cells and dropped rows say so. */
+/** Tool results are bounded; clipped cells and dropped rows say so. */
 export const BOUNDS = {
 	resultBytes: 64 * 1024,
 	cellBytes: 32 * 1024
@@ -99,7 +99,7 @@ export function bounded(result: Json): { value: Json; kept: number | null } {
 	return { kept: rows === null ? null : 0, value: wrap(fitPrefix(text, BOUNDS.resultBytes, wrap)) };
 }
 
-/** Rule 62: the kernel prompt: how to work, never who may do what. It is the same bytes for every workspace (providers cache the shared prefix), so it names no tool a turn may lack and carries no example. */
+/** The kernel prompt: how to work, never who may do what. It is the same bytes for every workspace (providers cache the shared prefix), so it names no tool a turn may lack and carries no example. */
 const KERNEL = `You operate inside a Bolt workspace: models are tables declared in its source, policies decide who may read and write what, automations run on a schedule, after a change, or when started, and skills hold protocols for harder work. Connections pair integrations with accounts; envoys are named agents that answer messages on those connections under their own policies. Use the available capabilities to ingest and analyse information, answer questions, navigate and configure the workspace, and build or improve its source when authorized. Domain rules come from this workspace and the supplied evidence. Pursue the task until it is done.
 
 - Ask only for a missing fact or a consequential choice the person must own, then wait. Decide routine technical details yourself, especially when the person delegates them. Do what was asked and no more: reading material writes nothing unless the task says to.
@@ -149,7 +149,7 @@ export function projection(
 			r.state !== 'scheduled' &&
 			r.state !== 'pending' &&
 			r.state !== 'cancelled'
-	); // hook:triage (pending)
+	);
 	const checkpoint = out.findLast((r) => r.meta?.tag === 'compact');
 	if (checkpoint?.meta?.tag === 'compact') {
 		const { cutoff, keep } = checkpoint.meta;
@@ -179,12 +179,12 @@ function fileLines(r: MessageRow): string[] {
 		}`;
 	});
 }
-/** Rule 57: whether an envoy's sender is linked, and to which member; what the turn may do is the closing note's (`turnFacts`). */
+/** Whether an envoy's sender is linked, and to which member; what the turn may do is the closing note's (`turnFacts`). */
 function linkage(r: MessageRow): string[] {
 	const e = r.as !== null && 'envoy' in r.as ? r.as.envoy : null;
 	return e === null ? [] : [e.member === null ? 'not linked' : `linked member ${e.member}`];
 }
-/** The inbound envelope (today's `inboundAgentInput`): sent time, sender, invocation, provider ids, linkage, the mail subject, and
+/** The inbound envelope (`inboundAgentInput`): sent time, sender, invocation, provider ids, linkage, the mail subject, and
  * the message it quotes (its text and files), which a quote-reply is about even when it is ambient and never input itself. */
 function envelope(r: MessageRow, all: readonly MessageRow[]): string {
 	const head = [

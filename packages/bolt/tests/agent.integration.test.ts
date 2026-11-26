@@ -69,7 +69,7 @@ const runtime_accounts = [
 
 const manifest: EngineManifest = {
 	needs: [],
-	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test
+	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // not a triage test
 	models: {
 		quotes: {
 			description: 'A quote',
@@ -2085,9 +2085,8 @@ describe('durable turns', () => {
 	);
 });
 
-// The colour-ingest probe (2026-10-29): an administrator in no team; the form names a person. Before, the agent described
-// each model (one call each), could not read sys_user and spent 17 calls over three turns searching the source for a
-// name, then copied another record's owner. Now the schema is in the prompt and the directory is one read away.
+// An administrator in no team; the form names a person. The schema is in the prompt and the directory is one read
+// away, so the agent neither describes each model nor searches the source for a name.
 describe('a replayed ingest takes its fewest calls', () => {
 	it.live(
 		"an administrator's first step reads the people and records it needs in one call, from the schema in its prompt",
@@ -2229,7 +2228,7 @@ describe('an agent-started automation run is a job', () => {
 		)
 	);
 });
-// Plan 12's replay of the tender ingest: read_file parses past its inline wall as a job, the turn ends, the job's end wakes
+// A replayed tender ingest: read_file parses past its inline wall as a job, the turn ends, the job's end wakes
 // the conversation with its steering message once, and the agent reads a window, files the line and reads it back.
 describe('a replayed ingest: job, steering message, windows, act, read-back', () => {
 	it.live(

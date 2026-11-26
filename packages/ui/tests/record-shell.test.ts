@@ -106,6 +106,7 @@ const approvalView = (request: Partial<ApprovalView> & { id: string }): Approval
 	moves: [],
 	mine: false,
 	participant: true,
+	stalled: false,
 	...request
 });
 async function fake(

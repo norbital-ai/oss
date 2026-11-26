@@ -1,5 +1,5 @@
 import { required } from './kit.ts';
-// Embeddings and P39 on an OpenAI-compatible endpoint, as both hosts' copies did them: batches of the model's size, a
+// Embeddings on an OpenAI-compatible endpoint: batches of the model's size, a
 // file in the multimodal shape, vectors in input order, a rate limit retried after `retry-after`, the provider's charge
 // metered; a model that does not take images refused unless its listing did not answer and the host tolerates that.
 import { describe, expect, it } from '@effect/vitest';
@@ -239,7 +239,7 @@ describe('open_ai_embeddings', () => {
 	);
 });
 
-describe('ai_modality_refusals (P39)', () => {
+describe('ai_modality_refusals', () => {
 	const endpoint = { base_url: 'https://ai.example/v1', api_key: 'k' };
 	const checks = [
 		{
@@ -279,8 +279,8 @@ describe('ai_modality_refusals (P39)', () => {
 				expect(
 					yield* ai_modality_refusals(checks, { tolerate_unread: false }).pipe(textOnly.provide)
 				).toEqual([
-					"sys_2 model 'vendor/chat' takes text: it must take image (P39)",
-					"embed model 'vendor/embed' takes text: it must take image (P39)"
+					"sys_2 model 'vendor/chat' takes text: it must take image",
+					"embed model 'vendor/embed' takes text: it must take image"
 				]);
 			})
 	);
@@ -294,8 +294,8 @@ describe('ai_modality_refusals (P39)', () => {
 			expect(
 				yield* ai_modality_refusals(checks, { tolerate_unread: false }).pipe(down().provide)
 			).toEqual([
-				"sys_2 model 'vendor/chat' has no published input modalities: it must take image (P39)",
-				"embed model 'vendor/embed' has no published input modalities: it must take image (P39)"
+				"sys_2 model 'vendor/chat' has no published input modalities: it must take image",
+				"embed model 'vendor/embed' has no published input modalities: it must take image"
 			]);
 		})
 	);

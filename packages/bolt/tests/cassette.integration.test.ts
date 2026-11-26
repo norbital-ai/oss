@@ -1,4 +1,4 @@
-// The test kit's provider cassette (L-BOLT-1015): `TestWorkspace.layer({ fakes: { ai: { cassette } } })` replays recorded
+// The test kit's provider cassette: `TestWorkspace.layer({ fakes: { ai: { cassette } } })` replays recorded
 // responses per model class through the real agent loop; an unmapped class is Unavailable, a malformed recording fails
 // the kit, a class played past its end throws.
 import { randomUUID } from 'node:crypto';

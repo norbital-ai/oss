@@ -1,4 +1,4 @@
-// P2 compile gates (`bolt check` rules `model/layer`, `access/layer`): a layer map's paths resolve through declared
+// Layer compile gates (`bolt check` rules `model/layer`, `access/layer`): a layer map's paths resolve through declared
 // relations, at most `LAYER_MAX_DEPTH` deep, each with its parent; write layers are many-relations; a policy names only
 // the outputs, paths and columns its model declares. A mistyped `check` argument is the type corpus's gate
 // (`tests/types/policy-layers.ts`).

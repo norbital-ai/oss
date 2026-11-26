@@ -459,7 +459,7 @@ describe('next schema: SQLSTATE → refusal (every row)', () => {
 			{ code: 'required', field: 'qty' }
 		],
 		[DbError.make('22003', 'integer out of range'), { code: 'overflow' }],
-		// D2: the native row rules raise unnamed 23514s (a state move); their own text is the refusal
+		// the native row rules raise unnamed 23514s (a state move); their own text is the refusal
 		[
 			DbError.make('23514', 'status cannot move from draft to done', undefined, 'status'),
 			{ code: 'invalid_input', field: 'status', message: 'status cannot move from draft to done' }
@@ -471,7 +471,7 @@ describe('next schema: SQLSTATE → refusal (every row)', () => {
 	it('serialization and deadlock failures are a conflict to replay; anything else is a bug keeping its cause', () => {
 		expect(refusalOf(DbError.make('40001', 'x'), idx)).toBe('conflict');
 		expect(refusalOf(DbError.make('40P01', 'x'), idx)).toBe('conflict');
-		// A1.7: a lock_timeout is a concurrent act holding a lock, replayed then a conflict, never a bug
+		// a lock_timeout is a concurrent act holding a lock, replayed then a conflict, never a bug
 		expect(refusalOf(DbError.make('55P03', 'canceling statement due to lock timeout'), idx)).toBe('conflict');
 		const e = DbError.make('42P01', 'relation "x" does not exist');
 		const bug = refusalOf(e, idx);

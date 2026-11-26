@@ -18,7 +18,7 @@ import { act_failure } from '../src/decl/errors/act.ts';
 import type { Json } from '../src/decl/values.ts';
 import { transcriptRow } from '../src/engine/agent/schema.ts';
 import { conversationId } from '../src/engine/conversations/store.ts';
-import { KitInvalid, respond_system_1, TestWorkspace } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
+import { KitInvalid, respond_system_1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const runtime_accounts = [
 	{ id: 'field', integration: 'whatsapp' },

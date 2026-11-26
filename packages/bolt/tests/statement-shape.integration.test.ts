@@ -132,7 +132,7 @@ it.live(
 );
 
 // A label naming a related record's fields several times reads each of them once: the planner never copies a related
-// lookup into every place the label's operators name it (which grew the plan 12-fold per nested `+`).
+// lookup into every place the label's operators name it (which grows the plan 12-fold per nested `+`).
 const labelled: EngineManifest = {
 	...base,
 	models: {

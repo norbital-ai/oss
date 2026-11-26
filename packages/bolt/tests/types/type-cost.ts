@@ -32,7 +32,7 @@ is<Eq<LayeredOrder['due'], PlainDate | null>>(true);
 is<Eq<NonNullable<LayeredOrder['customer']>['name'], string>>(true);
 is<Eq<NonNullable<LayeredOrder['customer']>['id'], Id<'customers'>>>(true);
 is<Eq<Answer<typeof layered>['customers']['next'], Cursor | null>>(true);
-// @ts-expect-error K0 the single-model `query(model, args)` form is gone
+// @ts-expect-error K0 there is no single-model `query(model, args)` form
 caller.query('orders', { all: true });
 
 const stored = db.query({ orders: { where: { status: { eq: 'draft' } }, fields: ['note'] } });
@@ -70,7 +70,7 @@ is<Eq<Where<never>, never>>(true);
 caller.query({ nope: {} });
 // @ts-expect-error K4 an operand of the wrong kind
 caller.query({ orders: { where: { due: { eq: 5 } } } });
-// @ts-expect-error K6 `all` is gone: a list defaults to 10,000
+// @ts-expect-error K6 there is no `all`: a list defaults to 10,000
 caller.query({ orders: { all: true } });
 // @ts-expect-error K7 an absent optional is absent, not `undefined` (exactOptionalPropertyTypes)
 caller.query({ orders: { limit: 1, after: undefined } });
@@ -78,7 +78,7 @@ caller.query({ orders: { limit: 1, after: undefined } });
 caller.query({ orders: { owner: {} } });
 // @ts-expect-error K10 `after` belongs to a root
 caller.query({ orders: { lines: { after } } });
-// @ts-expect-error K11 the keyed `{ alias: { from } }` form is gone
+// @ts-expect-error K11 there is no keyed `{ alias: { from } }` form
 caller.query({ o: { from: 'orders' } });
 declare const answer: Answer<typeof layered>;
 // @ts-expect-error K9 a root's answer has only its picked fields

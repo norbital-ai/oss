@@ -21,7 +21,7 @@
 </script>
 
 <script lang="ts">
-	// Mounts one kit part under a scripted `bolt` and catalog, for the kit's default display (the template UI audit).
+	// Mounts one kit part under a scripted `bolt` and catalog, for the kit's default display.
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import { mount_edge } from '../src/effect/index.js';

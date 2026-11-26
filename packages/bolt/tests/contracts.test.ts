@@ -13,7 +13,7 @@ import { install } from '../src/decl/runtime/guest.ts';
 install();
 
 describe('next engine contracts', () => {
-	it.effect('port failures remain typed and calls remain bounded (L-BOLT-288, 289)', () =>
+	it.effect('port failures remain typed and calls remain bounded', () =>
 		Effect.gen(function* () {
 			expect(yield* Port.unavailable('geo').pipe(Effect.flip)).toEqual(
 				new Unavailable({ facility: 'geo', reason: 'the host provides no geo' })

@@ -1,4 +1,4 @@
-// Type corpus for the P34 filter language: each `@ts-expect-error` is a shape the decoder refuses too.
+// Type corpus for the filter language: each `@ts-expect-error` is a shape the decoder refuses too.
 import type { OrderBy, Sortable, Where } from '../src/decl/where.ts';
 import './types/registry.ts';
 

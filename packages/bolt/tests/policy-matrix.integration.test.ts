@@ -1,5 +1,5 @@
-// The production read-policy matrix (ported from `access-structured-policy-matrix.integration.test.ts`) as
-// a table on the new engine: each row's grant `Where` compiles through the query area (`toPred` → `where_sql`, the SQL
+// The production read-policy matrix as
+// a table on the engine: each row's grant `Where` compiles through the query area (`toPred` → `where_sql`, the SQL
 // every caller read conjoins) and runs against allow/deny rows on PGlite. The rows over agent tables
 // (conversation, plan, message, turn, usage, notification) are not here: those system models are the agents
 // area's. `jsonPath` has no counterpart (no `Where` reads json); the correction flag is a stored enum.

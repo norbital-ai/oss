@@ -1,4 +1,4 @@
-// P3 gaps: native semantic embeddings, the erase live lane, and caller-minted start ids.
+// Native semantic embeddings, the erase live lane, and caller-minted start ids.
 import { describe, expect, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Queue, Result, Schema, Stream } from 'effect';
 import type { Json } from '../src/decl/values.ts';

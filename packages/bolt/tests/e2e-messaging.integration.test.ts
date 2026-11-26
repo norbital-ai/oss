@@ -14,7 +14,7 @@ import { act_reply, route_fixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { TestWorkspace, respond_system_1 } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
+import { TestWorkspace, respond_system_1 } from '../../bolt-cli/src/test/index.ts';
 import { teams_sql } from './support/teams.ts';
 
 const TEAMS = {
@@ -35,7 +35,7 @@ const runtime_accounts = [
 ] as const;
 
 const manifest = {
-	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test
+	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // not a triage test
 	models: {
 		jobs: {
 			description: 'A job',
@@ -208,7 +208,7 @@ const scriptedAi = () => {
 							finish: 'stop',
 							usage
 						};
-					const close = /^close (\S+)/m.exec(text(last.content)); // hook:agent — the message line of the inbound envelope
+					const close = /^close (\S+)/m.exec(text(last.content)); // the message line of the inbound envelope
 					if (close !== null)
 						return {
 							content: '',

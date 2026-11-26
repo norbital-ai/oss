@@ -206,7 +206,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 			)
 				range('text max is a positive integer');
 			if (k.kind === 'file' && !(size_bytes(String(k.max)) > 0))
-				range('file max is a positive size'); // hook:runtime
+				range('file max is a positive size');
 			// a precision the kind cannot hold (a JS manifest or a cast: tsc refuses it in a declaration)
 			const units = PRECISION[k.kind === 'period' ? String(k.of) : k.kind] ?? [];
 			if ('precision' in k && k.precision !== undefined && !units.includes(String(k.precision)))
@@ -607,7 +607,7 @@ function grantRules({ m, at }: RuleContext): void {
 		for (const message of blindWrites(m, a.policies)) at('access/blind-write', 'automation', name, message);
 }
 
-/** Rule 38: a rate admits at least one request per window. */
+/** A rate admits at least one request per window. */
 const validRate = (rate: string): boolean => {
 	const parsed = Result.try(() => {
 		const r = parse_rate(rate);

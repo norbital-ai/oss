@@ -337,7 +337,7 @@ it('exercises P0/P1/P2 interactive behaviors, agent observability and upgraded U
 		flushSync();
 		expect(Number(repeatBtn.textContent)).toBeGreaterThanOrEqual(3);
 
-		// 12. P2 Canvas & direct manipulation
+		// 12. Canvas & direct manipulation
 		const moverEl = must(target.querySelector<HTMLElement>('[data-testid="mover"]'), 'mover');
 		moverEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
 		flushSync();
@@ -375,7 +375,7 @@ it('exercises P0/P1/P2 interactive behaviors, agent observability and upgraded U
 		flushSync();
 		expect(swipeRow.textContent).toBe('end');
 
-		// 13. P2 Extra headless controls
+		// 13. Extra headless controls
 		const swBtn = must(target.querySelector<HTMLButtonElement>('[data-testid="sw"]'), 'sw');
 		swBtn.click();
 		flushSync();

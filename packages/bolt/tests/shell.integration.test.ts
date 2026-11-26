@@ -156,7 +156,7 @@ const studioState: StudioState = {
 };
 const studioOps: StudioOp[] = [];
 const inspectionScopes: StudioInspectInput[] = [];
-// the host's branding port (L-COL-199): what an administrator wrote
+// the host's branding port: what an administrator wrote
 const branded: { logo: string | null }[] = [];
 const studio: StudioPort = {
 	state: async () => studioState,

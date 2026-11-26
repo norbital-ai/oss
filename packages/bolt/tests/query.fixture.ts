@@ -157,8 +157,8 @@ const arm = (
 });
 const north = eq('region', 'north');
 /**
- * A rep: reads the `default` output of the northern accounts and their orders. Each root's own arms scope its layers
- * (decision 3): `orders.account` repeats the northern scope.
+ * A rep: reads the `default` output of the northern accounts and their orders. Each root's own arms scope its layers:
+ * `orders.account` repeats the northern scope.
  */
 export const rep: Authority = {
 	key: 'rep',

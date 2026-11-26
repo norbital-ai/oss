@@ -1,4 +1,4 @@
-// The engine manifest (W2.F2b): one decoder for `bolt check` and every artifact read refuses what is not a manifest with
+// The engine manifest: one decoder for `bolt check` and every artifact read refuses what is not a manifest with
 // `ManifestInvalid`; the accessors derive, once per manifest, what interiors recomputed and cast.
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from '@effect/vitest';
@@ -85,7 +85,7 @@ describe('decode_manifest', () => {
 				...base,
 				policies: { p: { description: '', grants: { orders: { update: { approval: true } } } } }
 			},
-			// write `where`/`previous` and `via` are gone: a check judges the batch, a layer is its root's
+			// there is no write `where`/`previous` or `via`: a check judges the batch, a layer is its root's
 			{
 				...base,
 				policies: { p: { description: '', grants: { orders: { update: { where: 'read' } } } } }

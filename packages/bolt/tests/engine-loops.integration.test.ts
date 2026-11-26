@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from 'effect';
-// Rule 25a on PGlite: a prune pass that selects rows and deletes none stops `no_progress` and queues nothing.
+// Engine loops on PGlite: a prune pass that selects rows and deletes none stops `no_progress` and queues nothing.
 import { describe, expect, it } from '@effect/vitest';
 import { TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
 import { manifest } from './catalogue-fixture.ts';

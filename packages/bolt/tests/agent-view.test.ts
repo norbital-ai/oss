@@ -1,4 +1,4 @@
-// The agent panel's projections (L-BOLT-436, L-BOLT-546, L-BOLT-547): pure functions of the transcript rows.
+// The agent panel's projections: pure functions of the transcript rows.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { rowsOf, transcriptRow } from '../src/engine/agent/schema.ts';
@@ -43,7 +43,7 @@ const reply = (seq: number, model?: string, tag = 'reply'): AgentRow =>
 		...(model === undefined ? {} : { usage: { input: 1, output: 1, calls: 1, model } })
 	});
 
-describe('the orb (L-BOLT-436)', () => {
+describe('the orb', () => {
 	it('lets the caller override: a turn it just dispatched works, a send it saw fail outranks the status', () => {
 		expect(orbState({ status: 'idle', rows: [reply(1)], pending: true })).toBe('working');
 		expect(orbState({ status: 'running', rows: [], failed: true })).toBe('failed');
@@ -278,7 +278,7 @@ describe('source edits on the panel', () => {
 	});
 });
 
-describe('the context view (L-BOLT-546)', () => {
+describe('the context view', () => {
 	it('puts summarized rows outside, but not the rows the checkpoint kept, input still waiting or anything after it', () => {
 		const rows = [
 			row(1),
@@ -333,7 +333,7 @@ describe('the context view (L-BOLT-546)', () => {
 	});
 });
 
-describe('the model-change divider (L-BOLT-547)', () => {
+describe('the model-change divider', () => {
 	it('uses decoded reply usage and ignores usage carried by a user row', () => {
 		expect([
 			...modelDividers([

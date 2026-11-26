@@ -82,7 +82,7 @@ const mixed = automation({
 			questions: { q: { type: 'yesno', instructions: 'x', criteria: { true: 'a', false: 'b' } } }
 		});
 		yield* ctx.ai.sys_1.decide({
-			// @ts-expect-error — a sys_1 state is text only: no FileRef (P37 (3))
+			// @ts-expect-error — a sys_1 state is text only: no FileRef
 			state: { photo: ref0 },
 			questions: { q: { type: 'noul', instructions: 'x', criteria: { true: 'a', false: 'b' } } }
 		});
@@ -184,7 +184,7 @@ automation({
 automation({
 	...rt.nightly.spec,
 	description: 'x',
-	// @ts-expect-error A8 runAs is gone: a run holds its declared policies
+	// @ts-expect-error A8 there is no runAs: a run holds its declared policies
 	runAs: 'trigger',
 	on: [{ cron: '@daily' }]
 });
@@ -242,7 +242,7 @@ automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
-	// @ts-expect-error A14 a ledger is never a trigger target (X-18)
+	// @ts-expect-error A14 a ledger is never a trigger target
 	on: [{ created: 'sys_run' }]
 });
 automation({

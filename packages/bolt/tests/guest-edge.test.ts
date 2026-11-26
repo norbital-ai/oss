@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The guest edge (D8): generator bodies run through `runBody` over the lifted ctx, in the real isolate runner, over a
+// The guest edge: generator bodies run through `runBody` over the lifted ctx, in the real isolate runner, over a
 // bundle `bolt check` builds. Typed failures settle as an async body's do (refused message and field, guest_error name
 // and message); a concurrent `Effect.all` crosses once; an interrupted sibling never leaves a call unawaited; an unyielded
 // call never crosses; scheduler yields are microtasks; a bundle without generator bodies carries no Effect.

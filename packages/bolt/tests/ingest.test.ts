@@ -1,4 +1,4 @@
-// Plan 12's engine half, pure: the router per mime, windows that never split a table, grep, the images of a window, the
+// Ingest's engine half, pure: the router per mime, windows that never split a table, grep, the images of a window, the
 // index and transcript derived from the HTML, a data ingest's summary and the steering message's counts and map.
 import { describe, expect, it } from '@effect/vitest';
 import {

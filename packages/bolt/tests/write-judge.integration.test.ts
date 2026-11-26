@@ -1,5 +1,5 @@
-// Rule 35 through `act` on PGlite: every supplied column admitted by an arm's `columns` before any guest code, then one
-// policy `check` per admitting arm over the batch of `{ before, set }` (what `previous` and the write `where` judged), a
+// Write judging through `act` on PGlite: every supplied column admitted by an arm's `columns` before any guest code, then one
+// policy `check` per admitting arm over the batch of `{ before, set }`, a
 // denying check refusing the write, and a direct arm committing past a policy whose check would hold it.
 import type { Chain } from '../src/engine/write/sql.ts';
 import { describe, expect, it } from '@effect/vitest';

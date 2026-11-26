@@ -1,6 +1,6 @@
 // `ctx.ai.sys_1.decide` through the engine entry and a built guest: a scripted `ai.sys_1`
 // (no vendor) answers the Desk's routing questions; the answers come back typed, a FileRef in the state is refused
-// `invalid` before any call (text only, P37 (3)), and every call is one `decision.made` (`use: 'author'`). Failures are the
+// `invalid` before any call (text only), and every call is one `decision.made` (`use: 'author'`). Failures are the
 // facility's typed errors.
 import { afterAll, describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Exit, Layer, Schema, Scope, Stream } from 'effect';

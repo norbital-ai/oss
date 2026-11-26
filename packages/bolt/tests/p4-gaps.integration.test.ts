@@ -1,4 +1,4 @@
-// P4 gaps over the host half on PGlite: the in-app agent's `/__bolt` callables (`sys_conversation.start`,
+// The host half on PGlite: the in-app agent's `/__bolt` callables (`sys_conversation.start`,
 // `sys_message.post`, `sys_message.confirm`) with the transcript; web push of inbox notices through `bolt.push`.
 import { describe, expect, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
@@ -18,7 +18,7 @@ const TEAMS = { rep: { policies: ['rep'] } };
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
-		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test
+		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // not a triage test
 		models: {
 			quotes: {
 				description: 'A quote',

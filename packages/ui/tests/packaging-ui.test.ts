@@ -1,4 +1,4 @@
-// Kit gaps found migrating the 0.0.1 templates: Form's read-only mode, a toolbar item's per-selection disabled reason,
+// Kit packaging: Form's read-only mode, a toolbar item's per-selection disabled reason,
 // the record row in a custom field's view, and representations loaded on first use.
 import './dom.ts';
 import assert from 'node:assert/strict';

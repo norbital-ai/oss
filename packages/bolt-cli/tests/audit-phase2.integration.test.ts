@@ -1,4 +1,4 @@
-// Audit Phase 2, the Bolt half of a cutover: a release's migration that fails once the tenant is paused leaves the
+// The Bolt half of a cutover: a release's migration that fails once the tenant is paused leaves the
 // previous schema and data in place, the previous release keeps serving on them, and the corrected file applies later.
 // Pausing admission and flipping releases are the host's (Colony's lifecycle) and are not exercised here.
 import { randomUUID } from 'node:crypto';

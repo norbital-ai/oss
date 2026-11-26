@@ -1,4 +1,4 @@
-// HOST_API conformance (D10a): one black-box slice through HOST_API over `node_ports()` and a `Facilities` record — sign
+// HOST_API conformance: one black-box slice through HOST_API over `node_ports()` and a `Facilities` record — sign
 // in, q, act, live register, a deadline wake, the host clock's crons and fire, close — over one PGlite; the needs
 // check refuses a bundle whose need the host leaves `off`.
 import { cpSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -563,7 +563,7 @@ describe('HOST_API conformance (D10a)', () => {
 				// q
 				const read = { m: 'query', a: [{ customers: {} }] };
 				expect((await post('/__bolt/q', { reads: [read] })).status).toBe(200);
-				// act: a create under the booted contract commits; a retired one is refused release_changed (L-BOLT-171)
+				// act: a create under the booted contract commits; a retired one is refused release_changed
 				const create = { acts: { 'customers.create': [{ name: 'Acme' }] }, issued_at: issuedAt };
 				expect(
 					(

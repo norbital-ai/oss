@@ -1,4 +1,4 @@
-// Reproductions for Bolt audit bugs 20-22: the write-side predicate, filter aggregates and sort keys agree with the read side.
+// The write-side predicate, filter aggregates and sort keys agree with the read side.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Result } from 'effect';
 import { catalog_of, order, own_pred_sql, UNSORTABLE, where, type Pred } from '../src/index.ts';

@@ -5,7 +5,7 @@ import { page } from 'vitest/browser';
 import { liveStream, pageSignals, shareable, sharedSource } from '../src/page/stream.ts';
 import { PATHS } from '../src/protocol/wire.ts';
 
-it.live('native EventSource delivers live frames in Chromium (L-BOLT-1012)', () =>
+it.live('native EventSource delivers live frames in Chromium', () =>
 	Effect.gen(function* () {
 		const frames = yield* liveStream(() => new EventSource(PATHS.live)).pipe(
 			Stream.take(2),

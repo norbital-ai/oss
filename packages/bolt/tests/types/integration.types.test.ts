@@ -156,7 +156,7 @@ Effect.gen(function* () {
 	yield* ctx.request(whatsapp, { method: 'GET', path: 'x', output: { kind: 'json' } });
 });
 
-// @ts-expect-error source connection slots are retired
+// @ts-expect-error there are no source connection slots
 workspace({ tz: 'UTC', locale: 'en', connections: { mail: { integration: 'emial' } } });
 integration('support_mail', {
 	description: 'x',

@@ -1,4 +1,4 @@
-// The one wire shape per kind (D6), both ways: a decimal is its exact text, a date and an instant their ISO text,
+// The one wire shape per kind, both ways: a decimal is its exact text, a date and an instant their ISO text,
 // a period `{ from, to }` / `{ start, end }` of those. An act takes exactly what q, live, the callback's `before` and
 // `ctx.query`, an aggregate and a seed load give back.
 import { describe, expect, it } from '@effect/vitest';
@@ -130,7 +130,7 @@ const createdId = (outcome: Outcome) => {
 	return first.id;
 };
 
-describe('wire codec: one shape per kind, both ways (D6)', () => {
+describe('wire codec: one shape per kind, both ways', () => {
 	it.live('an aggregate keys a date bucket by its ISO day and sums to decimal text', () =>
 		Effect.gen(function* () {
 			const a = yield* shared; // before any act: the seeded row alone

@@ -24,7 +24,7 @@ const inbound = (
 	});
 
 describe('an inbound mail', () => {
-	it.effect('keeps its full text and headers (GAP-C1) and decodes to one thread', () =>
+	it.effect('keeps its full text and headers and decodes to one thread', () =>
 		Effect.gen(function* () {
 			const got = yield* inbound('email', {
 				id: '<r1@x>',

@@ -1,4 +1,4 @@
-// Reproductions for Bolt audit bugs 26, 28, 30, 35 (`stopping`), 38 and 45 (seed chunks): one mechanism each.
+// Engine reproductions, `stopping` and seed chunks among them: one mechanism each.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';

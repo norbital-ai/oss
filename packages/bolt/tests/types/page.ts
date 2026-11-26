@@ -25,7 +25,7 @@ ctx.query({ orders: { where: { nope: { eq: 'draft' } }, limit: 10 } });
 ctx.query({ orders: { order_by: { nope: 'asc' }, limit: 10 } });
 // @ts-expect-error P3 an unknown root
 ctx.query({ orderz: { limit: 10 } });
-// @ts-expect-error P4 the single-model `query(model, args)` form is gone
+// @ts-expect-error P4 there is no single-model `query(model, args)` form
 ctx.query('orders', { limit: 10 });
 ctx.query({ orders: { fields: ['note'], limit: 1 } }).pipe(
 	Effect.map(({ orders }) => {
@@ -72,7 +72,7 @@ ctx
 ctx.query({ orders: { where: { due: { gte: 5 } } } });
 // @ts-expect-error P7 an unknown root
 ctx.query({ nope: {} });
-// @ts-expect-error P8 declared queries are gone
+// @ts-expect-error P8 there are no declared queries
 ctx.query('orders.open_total', { since });
 const live = ctx.query({ customers: {} });
 void live.current;

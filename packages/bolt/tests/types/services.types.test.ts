@@ -11,7 +11,7 @@ import type {
 	PortFailure,
 	Unavailable
 } from '@norbital-ai/host-api';
-// Type corpus for the engine service contracts (K2): each pinned member's parameters and answer, exactly. Never run,
+// Type corpus for the engine service contracts: each pinned member's parameters and answer, exactly. Never run,
 // only checked (`tsgo -p tests/tsconfig.json`): a Shape that drifts from its pin is a type error on its line.
 import type { Effect, Option, Stream } from 'effect';
 import type { Json } from '../../src/decl/values.ts';
@@ -176,7 +176,7 @@ is<
 	>
 >();
 is<Eq<Answer<CallablesShape['acts']>, Effect.Effect<CallResult, EngineError>>>();
-// declared queries are gone: callables only write and start
+// there are no declared queries: callables only write and start
 is<Eq<'query' extends keyof CallablesShape ? true : false, false>>();
 // ── identity ──
 is<Eq<Args<IdentityShape['authenticate']>, [token: string]>>();

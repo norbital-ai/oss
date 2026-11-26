@@ -24,7 +24,7 @@ import { BoltError } from '../../protocol/errors.ts';
 export type Holder = {
 	actor: EngineActor;
 	policies: readonly string[];
-	/** Rule 35: bypasses grants, `moves` and approval flows; preserves checks, edges, `edit` and write callbacks. */
+	/** Bypasses grants, `moves` and approval flows; preserves checks, edges, `edit` and write callbacks. */
 	admin: boolean;
 	/** A platform run: the workspace's own work, unscoped like an admin but never an administrator. */
 	platform?: boolean;
@@ -342,7 +342,7 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 	};
 });
 
-/** Rule 34: a generated write moves a state only along an edge its grant lists (`'all'`: every declared edge). */
+/** A generated write moves a state only along an edge its grant lists (`'all'`: every declared edge). */
 export function admitMove(
 	auth: Authority,
 	model: string,

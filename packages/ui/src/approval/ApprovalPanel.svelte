@@ -295,6 +295,10 @@ reason and confirm.
 			</div>
 		{/if}
 
+		{#if v.stalled}<p class="text-caption text-destructive" role="status" data-view="approval-stalled">
+				{msg(bolt, 'approval.stalled')}
+			</p>{/if}
+
 		{#if v.status === 'ChangesRequested' && v.mine}<p
 				class="text-caption"
 				role="status"

@@ -1,4 +1,4 @@
-// P2/P3 gates end to end on PGlite (decisions 3, 6, 8): authority is per access point. A root's policy alone filters
+// Layer gates end to end on PGlite: authority is per access point. A root's policy alone filters
 // its read layers, and the output it reads fixes their fields; a layer model's own grants are never consulted; a model without `read` is a layer, never
 // a root; a user `where` only narrows. Writes are batches: `columns` are admitted before any guest code, then ONE
 // `check` per verb judges the whole batch tree; `deny` refuses it, `approve` holds it.

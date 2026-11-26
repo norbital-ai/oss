@@ -60,7 +60,7 @@ const fixture = Effect.gen(function* () {
 	const db = yield* TenantDb;
 	yield* db.write({ text: teams_sql(TEAMS), params: [] });
 	const keys = yield* load_keys(db);
-	expect(yield* load_keys(db)).toEqual(keys); // 38a(e): a second cell reads the same secrets
+	expect(yield* load_keys(db)).toEqual(keys); // a second cell reads the same secrets
 	yield* TestClock.setTime(Date.parse('2026-09-25T00:00:00Z'));
 	const outbox: (typeof Mail.Type)[] = [];
 	const mail: TransportPort = {

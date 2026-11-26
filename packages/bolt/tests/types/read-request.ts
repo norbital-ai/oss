@@ -1,4 +1,4 @@
-// Type corpus for nested read requests (P3): roots are models with `read`, deeper keys the layers a root declares, the
+// Type corpus for nested read requests: roots are models with `read`, deeper keys the layers a root declares, the
 // answer typed from the named layers. Each `@ts-expect-error` line is a planted mistake.
 import type { Id, Instant, ReadAnswer } from '../../src/index.ts';
 import type { Decimal } from '@norbital-ai/store';

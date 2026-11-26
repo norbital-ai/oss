@@ -1,5 +1,5 @@
 // The value codec on PGlite: periods written on every path (act, nested relation action, seed restore), and the
-// update callback's `before` handed over in wire form (X-11).
+// update callback's `before` handed over in wire form.
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';

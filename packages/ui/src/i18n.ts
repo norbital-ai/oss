@@ -465,6 +465,7 @@ const VIEW_ZH = {
 	'ui.approval.noDecision': '尚未决定',
 	'ui.approval.changed': '已修改：{fields}',
 	'ui.approval.resubmitOnSave': '保存即重新提交审批',
+	'ui.approval.stalled': '此步骤无人可审批。管理员可为团队添加审批人，或关闭该申请。',
 	'ui.approval.lockedStep': '审批中：仅{step}的审批人可以修改',
 	'ui.approval.move.request': '已申请',
 	'ui.approval.move.approve': '已批准',

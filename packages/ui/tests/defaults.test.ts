@@ -1,4 +1,4 @@
-// The kit's default display (template UI audit, 2026-09-30): labels from the catalog, never a key or an id; dates,
+// The kit's default display: labels from the catalog, never a key or an id; dates,
 // money and enums formatted by kind; row clicks open; empty states; the record sheet titled by its record.
 import { phoneWidth } from './dom.ts';
 import assert from 'node:assert/strict';

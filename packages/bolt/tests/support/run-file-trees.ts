@@ -1,4 +1,4 @@
-// Skill folders for file runs (P24's table): a CommonJS report with siblings and a vendored dayjs-like package, an ES
+// Skill folders for file runs: a CommonJS report with siblings and a vendored dayjs-like package, an ES
 // module with top-level await and an ES-module-only package, and what an author gets wrong.
 import { Effect } from 'effect';
 import { tree_digest } from '@norbital-ai/host-api';

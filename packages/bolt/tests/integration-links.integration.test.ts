@@ -1053,7 +1053,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 				})
 			)
 		);
-		// audit bug 36: a store that keeps failing ends the write after a bounded number of attempts
+		// a store that keeps failing ends the write after a bounded number of attempts
 		it.effect('gives up a credential write the store keeps refusing after five attempts', () =>
 			Effect.scoped(
 				Effect.gen(function* () {

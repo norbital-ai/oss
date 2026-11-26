@@ -1,4 +1,4 @@
-// The resource benchmark's deterministic half (`bench/resources.ts`, RFC v0.0.1 W07): counts and retained bytes, never
+// The resource benchmark's deterministic half (`bench/resources.ts`): counts and retained bytes, never
 // time. Timing is the benchmark's, judged against `bench/budget.json` on its own runner.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';

@@ -1,4 +1,4 @@
-// P38 on PGlite: every run ends (a host call that ignores its signal ends at its wall), a drain interrupts
+// Termination on PGlite: every run ends (a host call that ignores its signal ends at its wall), a drain interrupts
 // what it waits on (aborting the generation disposes a guest stuck on a facility that never answers, and the
 // run is re-queued as a lost lease), and engine loops prove progress (`bolt.embed` stops `noProgress` when its
 // guarded write stores 0 rows; a revision guard writes a row whose `updated_at` has microseconds). The crossing budget
@@ -224,7 +224,7 @@ layer(shared, { excludeTestServices: true })('P38: facility calls in a body', (i
 	);
 });
 
-describe('P38: every run ends, drains interrupt, loops prove progress', () => {
+describe('every run ends, drains interrupt, loops prove progress', () => {
 	it.effect('a host call that ignores its signal still ends at its wall', () =>
 		Effect.gen(function* () {
 			let signal: AbortSignal | undefined;

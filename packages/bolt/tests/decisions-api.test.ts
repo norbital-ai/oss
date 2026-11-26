@@ -1,4 +1,4 @@
-// `decisions_system_1` (P35, P37) against a fake fetch standing in for OpenRouter's Decisions API: the port's request goes
+// `decisions_system_1` against a fake fetch standing in for OpenRouter's Decisions API: the port's request goes
 // out as `{ model, state, questions }` field for field (a text-only state), the answers come back as given with a
 // score's `level` added and `usage.cost` as `cost_usd`; a context refusal is `too_large`; a slow, failing or malformed
 // answer rejects (the client never falls back).

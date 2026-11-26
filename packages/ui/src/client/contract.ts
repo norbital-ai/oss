@@ -182,6 +182,8 @@ export type ApprovalView = {
 	moves: readonly { decision: ApprovalDecision; reason: 'required' | 'optional' }[];
 	mine: boolean;
 	participant: boolean;
+	/** Pending, and no active member but the requester may decide its current step. */
+	stalled: boolean;
 };
 /** A row an open approval request holds carries it as `$approval` (step counts from 0; `steps[step]` decides now). */
 export type RowApproval = {

@@ -1214,7 +1214,7 @@ describe('next guest globals', () => {
 	);
 
 	it.live(
-		'decodes windows-1252 under its WHATWG labels, and still refuses other encodings (L-COL-097)',
+		'decodes windows-1252 under its WHATWG labels, and still refuses other encodings',
 		() =>
 			Effect.gen(function* () {
 				const bytes = [0x43, 0x61, 0x66, 0xe9, 0x20, 0x80, 0x35, 0x20, 0x93, 0x71, 0x94, 0x81];
@@ -1231,7 +1231,7 @@ describe('next guest globals', () => {
 			})
 	);
 
-	it.live('aborts through AbortController as the platform does (L-COL-097)', () =>
+	it.live('aborts through AbortController as the platform does', () =>
 		Effect.gen(function* () {
 			expect(
 				yield* guest(`const c = new AbortController(), log = [];
@@ -1257,7 +1257,7 @@ describe('next guest globals', () => {
 		})
 	);
 
-	it.live('reads a `?bytes` server asset by sha256, and names a missing one (L-COL-099)', () =>
+	it.live('reads a `?bytes` server asset by sha256, and names a missing one', () =>
 		Effect.gen(function* () {
 			const bytes = new Uint8Array([0, 97, 255, 10]),
 				sha = createHash('sha256').update(bytes).digest('hex');

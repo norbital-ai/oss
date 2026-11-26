@@ -769,7 +769,7 @@ describe('engine/live: deltas from the RETURNING image', () => {
 		})
 	);
 
-	// audit bug 46: a view whose narrow read falls back to a whole re-read is one conservative view, not two
+	// a view whose narrow read falls back to a whole re-read is one conservative view, not two
 	it.effect('a by-id read that cannot patch falls back to one re-read, counted once', () =>
 		Effect.gen(function* () {
 			const withCustomer = {

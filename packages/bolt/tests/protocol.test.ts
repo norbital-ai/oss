@@ -13,7 +13,7 @@ const post = (path: string, body: unknown) =>
 		})
 	);
 
-describe('needs_guest (L-COL-107)', () => {
+describe('needs_guest', () => {
 	it.effect('keeps provider callbacks, instance management and files outside guest admission', () =>
 		Effect.gen(function* () {
 			for (const input of [

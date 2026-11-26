@@ -110,7 +110,7 @@ export const write_arm = (columns: WriteArm['columns'], check = false, policy = 
 /** A delete arm of policy `p`. */
 export const delete_arm = (check = false, policy = 'p'): DeleteArm => ({ policy, check });
 /**
- * `model`'s access points under policy `p` (decision 3): its root read in full, and create, update and delete admitting
+ * `model`'s access points under policy `p`: its root read in full, and create, update and delete admitting
  * every column the model declares per write path, with no `check` (an arm without one allows).
  */
 export const grants = (model: string, over: Partial<ModelAuthority> = {}): ModelAuthority => {

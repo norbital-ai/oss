@@ -1,4 +1,4 @@
-// Audit Phase 2: `ctx.browser` driven through the host's browser port, and the run's tab closed after it fails.
+// `ctx.browser` driven through the host's browser port, and the run's tab closed after it fails.
 import { expect, it } from '@effect/vitest';
 import { randomUUID } from 'node:crypto';
 import { Context, Effect, Layer } from 'effect';

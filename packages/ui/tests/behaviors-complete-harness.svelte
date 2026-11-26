@@ -224,7 +224,7 @@
 	let holdCount = $state(0);
 	let repeatCount = $state(0);
 
-	// 12. P2 Canvas & spatial behaviors
+	// 12. Canvas & spatial behaviors
 	let nodePos = $state({ x: 20, y: 30 });
 	const mover = create_move({
 		position: () => nodePos,
@@ -260,7 +260,7 @@
 	const swipe = create_swipe_actions({ on_full_swipe: (k, side) => on_event(`swipe:${k}:${side}`) });
 	let pickedIdx = $state(0);
 
-	// 13. P2 Extra headless controls
+	// 13. Extra headless controls
 	const sw = create_switch({ label: 'Auto-sync', control: { id: 'switch:sync', label: 'Auto-sync' } });
 	const radios = create_radio_group({
 		items: () => ['day', 'week', 'month'],
@@ -477,7 +477,7 @@
 	<button type="button" data-testid="hold-btn" {@attach bind_hold({ delay: 80, on_hold: () => (holdCount += 1) })}>{holdCount}</button>
 	<button type="button" data-testid="repeat-btn" {@attach bind_repeat({ delay: 50, interval: 25, on_step: () => (repeatCount += 1) })}>{repeatCount}</button>
 
-	<!-- P2 Canvas -->
+	<!-- Canvas -->
 	<div data-testid="mover" {@attach mover.handle} {...mover.handle_attrs()}>{nodePos.x},{nodePos.y}</div>
 	<div data-testid="area" {@attach area.surface} {...area.thumb_attrs()}>{area.value.x},{area.value.y}</div>
 	<div data-testid="spans">
@@ -496,7 +496,7 @@
 	<div data-testid="swipe-row" {@attach swipe.row('r1')} {...swipe.row_attrs('r1')}>{swipe.open?.side ?? 'closed'}</div>
 	<div data-testid="scroll-picker" {@attach bind_scroll_picker({ on_select: (i) => (pickedIdx = i) })}>{pickedIdx}</div>
 
-	<!-- P2 Extra headless controls -->
+	<!-- Extra headless controls -->
 	<button data-testid="sw" {...sw.attrs()}>{sw.checked ? 'on' : 'off'}</button>
 	<div data-testid="radios" {...radios.root_attrs()}>
 		{#each ['day', 'week', 'month'] as v (v)}

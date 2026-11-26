@@ -1,4 +1,4 @@
-// The engine's failures (D3): construction never throws, the message rule is the old constructor's, the tags
+// The engine's failures: construction never throws, a message that is not text or is blank becomes the phase sentence, the tags
 // are Errors named for themselves, and `CODE` alone decides what a run retries.
 import { describe, expect, it } from '@effect/vitest';
 import { Schema } from 'effect';

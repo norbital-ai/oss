@@ -387,6 +387,27 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 			expect((yield* auditor()).models['expenses']).toBeUndefined();
 		})
 	);
+	it.effect('a pending step nobody can decide is marked stalled until someone can', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const approvals = yield* Approvals;
+			const lone = '0199a000-0000-7000-8000-000000000008';
+			// the only approver the flow names is deactivated
+			yield* f.t.db.write({
+				text: "INSERT INTO sys_user (id,name,kind,team,active) VALUES ($1,'Away approver','staff','auditors',false)",
+				params: [lone]
+			});
+			const submitted = (yield* f.act('create', [{ name: 'Named approver', amount: 50, manager: lone }])).outcome;
+			if (submitted.kind !== 'pending_approval') throw new Error('Missing approval');
+			const stalled = Effect.gen(function* () {
+				const view = yield* approvals.view(submitted.request_id, f.requester, () => Effect.succeed(true));
+				return Option.getOrThrow(view).stalled;
+			});
+			expect(yield* stalled).toBe(true);
+			yield* f.t.db.write({ text: 'UPDATE sys_user SET active = true WHERE id = $1', params: [lone] });
+			expect(yield* stalled).toBe(false);
+		})
+	);
 	it.effect('rejecting requested changes immediately restores the checkpoint', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture;

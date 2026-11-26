@@ -63,11 +63,11 @@ const unroutable = (address: string) =>
 	});
 
 /**
- * `https.request` as the incident saw it. The pinned `lookup` is called synchronously from inside
+ * `https.request` with a synchronous `lookup`. The pinned `lookup` is called synchronously from inside
  * `request`, exactly as `net.connect` calls it, and an address that cannot be routed fails inside
  * that callback with `error` emitted at once. With a synchronous callback that emission lands
- * before `request` has returned, so before any listener exists: that is the process-level
- * uncaught exception from the 03:00 tick. A callback that answers on a later macrotask lands after
+ * before `request` has returned, so before any listener exists: a process-level
+ * uncaught exception. A callback that answers on a later macrotask lands after
  * the listener the facility attached.
  */
 const makeFakeRequest = (

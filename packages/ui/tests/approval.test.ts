@@ -63,7 +63,8 @@ const request: ApprovalView = {
 	records: [{ model: 'jobs', id: 'j1', op: 'update' }],
 	moves: [],
 	mine: false,
-	participant: true
+	participant: true,
+	stalled: false
 };
 const panel = (
 	requests: readonly ApprovalView[],

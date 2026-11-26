@@ -1,4 +1,4 @@
-// The /q route's read request (P3): one JSON layer map per read, decoded and checked against the declarations before
+// The /q route's read request: one JSON layer map per read, decoded and checked against the declarations before
 // the caller's one batch runs, answered per root.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Exit, Result, Schema } from 'effect';
@@ -107,7 +107,7 @@ describe('native /q read requests', () => {
 				{ accounts: { limit: 10_001 } }, // past the largest list
 				{ nope: {} }, // no model
 				{ accounts: { secret: {} } }, // a path the root does not declare
-				{ 'accounts.orders': {} }, // retired dotted author roots
+				{ 'accounts.orders': {} }, // a dotted author root
 				{ orders: { lines: { order: { account: { orders: { lines: {} } } } } } }, // a sixth level
 				{ accounts: { orders: { after: 'cursor' } } }, // a cursor below a root
 				{ accounts: { orders: { as_of: '2026-09-01T00:00:00.000Z' } } } // as-of below a root
@@ -178,7 +178,7 @@ describe('decode_read_request and plan_read_request', () => {
 			expect(
 				yield* decodeRead(cat, 'history', ['accounts', 'account-a', { at: { revision: 2 } }])
 			).toMatchObject({ at: { _tag: 'Revision', revision: 2 } });
-			// Retired direct points and scalar at values cannot silently bypass the options contract.
+			// Direct points and scalar at values cannot silently bypass the options contract.
 			for (const options of [
 				{ revision: 2 },
 				{ at: 2 },

@@ -1,6 +1,6 @@
-// engine/write and engine/query on PGlite, the P2 review gaps: erase (38e), history (17), import and export
-// (30), relation-action upsert (28), cascades and frozen parents (41), the delete guard (27),
-// telemetry, pipeline order (19), guest failures (42, 72a) and `expired` (31).
+// engine/write and engine/query on PGlite: erase, history, import and export,
+// relation-action upsert, cascades and frozen parents, the delete guard,
+// telemetry, pipeline order, guest failures and `expired`.
 import type { Chain } from '../src/engine/write/sql.ts';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
@@ -273,7 +273,7 @@ describe('engine/write: erase', () => {
 				count.writes = 0;
 				const { outcome, captured } = yield* run({ verb: 'erase', input: { target: id } });
 				expect(ok(outcome).records).toEqual([{ model: 'orders', id, revision: 3 }]);
-				// hook:identity — the removed rows reach live views only; no event trigger fires and no run is queued (38e(d))
+				// the removed rows reach live views only; no event trigger fires and no run is queued
 				// owned children are deleted before the root they point at; order among them is not the contract
 				expect(captured.map((x) => [x.model, x.op]).sort()).toEqual([
 					['lines', 'delete'],

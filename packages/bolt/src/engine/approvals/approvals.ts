@@ -70,6 +70,7 @@ import { EFFECT_DEPTH_MESSAGE, effectRun, enqueue, settleApprovalEffects, writer
 import { syncOutboxPiece } from '../sync/write.ts';
 import type { ApprovalEffectEvent } from '../../protocol/effect-events.ts';
 import { participant, rolesOf, sameFlow, unknownTeam } from './route.ts';
+import { memberTeams } from '../identity/teams.ts';
 import { Checkpoint, StoredSnapshot } from './snapshot.ts';
 import { readGuardBaseline } from './read-guards.ts';
 import { checkpoint } from './lock.ts';
@@ -748,6 +749,26 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			)
 				seen.push(a);
 		}
+		// a pending step no active member but the requester may decide: shown, never refused after the fact
+		const pending = seen.filter((a) => a.state === 'Pending').map((a) => a.id);
+		const stalled = new Set(
+			pending.length === 0
+				? []
+				: (yield* db.rows(Schema.Struct({ id: Schema.String }), {
+						text: `SELECT a.id::text AS id FROM bolt_approvals a
+							WHERE a.id::text IN (SELECT jsonb_array_elements_text($1::jsonb)) AND NOT EXISTS (
+								SELECT 1 FROM sys_user u WHERE u.active AND u.kind <> 'anonymous'
+								AND 'member:' || u.id <> a.requestor AND u.id::text IS DISTINCT FROM a.requestor_user
+								AND (a.route -> 'steps' -> a.step -> 'users' ? u.id::text
+									OR a.route -> 'steps' -> a.step -> 'teams' ?| ${memberTeams(m.workspace, '$2')}))`,
+						params: [
+							JSON.stringify(pending),
+							...(m.workspace.memberships === undefined
+								? []
+								: [new Date(yield* Clock.currentTimeMillis).toISOString()])
+						]
+					})).map((row) => row.id)
+		);
 		const member = 'member:';
 		const ids = [
 			...new Set(
@@ -796,7 +817,8 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			records: a.records.map(({ model, id, op }) => ({ model, id, op })),
 			moves: decisionsFor(a.state, rolesOf(a, auth)),
 			mine: a.requestor === me,
-			participant: participant(a, auth)
+			participant: participant(a, auth),
+			stalled: stalled.has(a.id)
 		}));
 	});
 

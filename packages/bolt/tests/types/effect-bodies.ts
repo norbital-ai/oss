@@ -1,4 +1,4 @@
-// Type corpus for Effect-native bodies (D8): generator bodies over the ctx Effects and their tagged failures. Each
+// Type corpus for Effect-native bodies: generator bodies over the ctx Effects and their tagged failures. Each
 // `@ts-expect-error` line is a planted mistake; a clean tsc proves every valid line compiles.
 import { Context, Effect } from 'effect';
 import { Refusal } from '../../src/decl/errors/refusal.ts';

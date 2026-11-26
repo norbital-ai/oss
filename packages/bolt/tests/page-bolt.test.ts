@@ -567,7 +567,8 @@ describe('acts, starts, uploads and the session', () => {
 				records: [{ model: 'jobs', id: 'j1', op: 'create' }],
 				moves: [{ decision: 'approve', reason: 'optional' }],
 				mine: true,
-				participant: true
+				participant: true,
+				stalled: false
 			};
 			const file = {
 				id: '0199a000-0000-7000-8000-000000000001',

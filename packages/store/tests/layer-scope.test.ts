@@ -1,4 +1,4 @@
-// Read layers in one statement (decision 3): every level is scoped by its PATH under the root and the output the read
+// Read layers in one statement: every level is scoped by its PATH under the root and the output the read
 // names (`Scope.rows(path, output)`), never by the layer model's own name; a model without `read` is only a layer; a
 // relation the root's output does not declare is refused, and a layer exposes only its declared fields.
 import { describe, expect, it } from '@effect/vitest';
