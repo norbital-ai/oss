@@ -218,7 +218,10 @@ type RunCtx<A, Tools extends boolean, To> = Omit<Clock, 'actor'> &
 		ai: Ai<Tools>;
 		geo: Geo;
 	};
-/** What started a model `effect`: a committed write, or an approval request, resubmit or standing decision with its request, records and requester. */
+/**
+ * What started a model `effect`: a committed write, or an approval request, resubmit, step approval (`done: false`;
+ * `approvers` are the next step's) or standing decision with its request, records and requester.
+ */
 export type EffectEvent<M = ModelName> =
 	| { readonly kind: 'write' }
 	| (Omit<ApprovalEffectEvent, 'request' | 'records' | 'requester'> & {

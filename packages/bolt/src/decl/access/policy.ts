@@ -24,7 +24,7 @@ import type {
 	TeamName,
 	WritePath
 } from '../names.ts';
-import type { NonEmpty } from '../values.ts';
+import type { Id, NonEmpty } from '../values.ts';
 import type { GroupName } from '../runtime/names.ts'; // hook:access
 import type { ModelWhere } from '../where.ts';
 
@@ -51,9 +51,18 @@ type EdgeStates<S, Keys extends keyof S & string = keyof S & string> = {
 export type WriteField<C, O extends 'create' | 'update', P = C> = LayerColumn<C, O, P>;
 
 // ── approval flows ──
-/** The named teams that decide a write, in step order. Superseders may decide any step with a reason. */
+/**
+ * Who decides a write, in step order: each step names teams, members (`sys_user` ids the verdict reads at runtime, such
+ * as a record's assigned approver), or both, and any one of them decides it. The requester never decides their own
+ * request. Superseders may decide any step with a reason.
+ */
 export type ApprovalFlow = {
-	readonly steps: NonEmpty<{ readonly name: string; readonly teams: NonEmpty<TeamName> }>;
+	readonly steps: NonEmpty<
+		{ readonly name: string } & (
+			| { readonly teams: NonEmpty<TeamName>; readonly users?: NonEmpty<Id<'sys_user'>> }
+			| { readonly teams?: NonEmpty<TeamName>; readonly users: NonEmpty<Id<'sys_user'>> }
+		)
+	>;
 	readonly superseded_by?: readonly TeamName[];
 };
 const FlowData = Schema.Struct({
@@ -62,8 +71,14 @@ const FlowData = Schema.Struct({
 			name: Schema.String.check(
 				Schema.makeFilter((name) => name.trim() !== '' || 'A step needs a name.')
 			),
-			teams: Schema.NonEmptyArray(Schema.String)
-		})
+			teams: Schema.optionalKey(Schema.NonEmptyArray(Schema.String)),
+			users: Schema.optionalKey(Schema.NonEmptyArray(Schema.String))
+		}).check(
+			Schema.makeFilter(
+				(step) =>
+					step.teams !== undefined || step.users !== undefined || 'A step needs a team or a user.'
+			)
+		)
 	),
 	superseded_by: Schema.optionalKey(Schema.Array(Schema.String))
 });
@@ -111,7 +126,7 @@ export class Verdict {
 			kind: 'approve',
 			flow: {
 				kind: 'steps',
-				steps: decoded.steps.map(({ name, teams }) => ({ name, teams, users: [] })),
+				steps: decoded.steps.map(({ name, teams = [], users = [] }) => ({ name, teams, users })),
 				superseded_by: [...new Set(decoded.superseded_by)]
 			}
 		});

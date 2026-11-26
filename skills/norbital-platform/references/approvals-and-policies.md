@@ -21,8 +21,8 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 
 ## Approval flows & requests
 
-- `ctx.approve({ steps: [{ name, teams: ['<handle>'] }], superseded_by?: ['<handle>'] })`. Branch in code; no runtime route models or second decision engine. Approval is a separate lock, never a business state named `approved`.
-- Flows snapshot on open (releases never rewrite open flows) and re-evaluate on resubmit (changed steps restart at step 1). Steps run in order; any listed team member decides.
+- `ctx.approve({ steps: [{ name, teams?: ['<handle>'], users?: [<sys_user id>] }], superseded_by?: ['<handle>'] })`; a step names teams, users or both (a record's assigned approver: `users: [row.approver_id]`, read by the verdict). Branch in code; no runtime route models or second decision engine. Approval is a separate lock, never a business state named `approved`.
+- Flows snapshot on open (releases never rewrite open flows) and re-evaluate on resubmit (changed steps restart at step 1). Steps run in order; any listed team member or user decides.
 - Held writes return `pending_approval` (`request_id`, `records`). Submitters cannot review their own requests (even if admin or on the team). Resubmitting keeps the request pending even if policy now allows directly.
 
 | State | Decision | Result |

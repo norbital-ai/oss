@@ -116,17 +116,21 @@ const source = `const managerStep = (ids) => ({
 	))]
 });
 const financeStep = { name: 'Finance', teams: ['finance'] };
+// a step's approval handing the request on names the next step's approvers
+const next = (event) => event.kind === 'approval' && !event.done && event.move === 'approve' ? '>' + event.approvers.teams.join(',') : '';
 export default { model: { expenses: { bodies: {
 	create: function* (changes) { return changes.map(({set}) => ({...set,name:set.name.trim()})); },
 	update: function* (changes) { return changes.map(({set,after}) => ({...set,name:after.name.trim()})); },
 	effect: {
-        create: function*(_changes,ctx){ yield* ctx.notify({title:ctx.event.kind+':'+(ctx.event.move ?? 'create'),to:[{user:'${managerId}'}]}); },
-        update: function*(_changes,ctx){ yield* ctx.notify({title:ctx.event.kind+':'+(ctx.event.move ?? 'update'),to:[{user:'${managerId}'}]}); },
+        create: function*(_changes,ctx){ yield* ctx.notify({title:ctx.event.kind+':'+(ctx.event.move ?? 'create')+next(ctx.event),to:[{user:'${managerId}'}]}); },
+        update: function*(_changes,ctx){ yield* ctx.notify({title:ctx.event.kind+':'+(ctx.event.move ?? 'update')+next(ctx.event),to:[{user:'${managerId}'}]}); },
         delete: function*(_changes,ctx){ yield* ctx.notify({title:ctx.event.kind+':'+(ctx.event.move ?? 'delete'),to:[{user:'${managerId}'}]}); }
     }
 } } }, policy: { requester: { grants: { expenses: {
 	create: { verdict: function* (changes, ctx) {
         const rows = changes.map(({after}) => after);
+		if (rows.some((row) => row.name === 'Named approver'))
+			return ctx.approve({ steps: [{ name: 'Named', users: rows.map((row) => row.manager) }] });
 		return ctx.approve({
 			steps: [
 				managerStep(rows.map((row) => row.manager)),
@@ -312,6 +316,27 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				code: 'forbidden'
 			});
 			expect(yield* f.request(submitted.request_id)).toEqual(waiting);
+		})
+	);
+	it.effect('a step naming a user is decided by that member alone, not by a reviewing team', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const submitted = (yield* f.act('create', [
+				{ name: 'Named approver', amount: 50, manager: financeId }
+			])).outcome;
+			if (submitted.kind !== 'pending_approval') throw new Error('Missing approval');
+			expect(yield* f.request(submitted.request_id)).toMatchObject({
+				route: { steps: [{ name: 'Named', teams: [], users: [financeId] }] }
+			});
+			for (const decision of ['approve', 'reject', 'request_changes'] as const)
+				expect(yield* f.decide(submitted.request_id, decision, f.manager, 'Not mine')).toMatchObject({
+					kind: 'refused',
+					code: 'forbidden'
+				});
+			expect(yield* f.decide(submitted.request_id, 'approve', f.finance)).toMatchObject({
+				kind: 'decided',
+				status: 'Approved'
+			});
 		})
 	);
 	it.effect('rejecting requested changes immediately restores the checkpoint', () =>
@@ -748,6 +773,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 						kind: 'decided',
 						status: 'Pending'
 					});
+					expect((yield* f.notices()).map((n) => n.title)).toContain('approval:approve>finance');
 					expect(yield* f.decide(result.outcome.request_id, 'approve', f.finance)).toMatchObject({
 						kind: 'decided',
 						status: 'Approved'
