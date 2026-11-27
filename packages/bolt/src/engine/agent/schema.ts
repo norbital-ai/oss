@@ -297,7 +297,7 @@ export const listed = (
 		: (r['integration'] ?? null) === null &&
 			(r['owner'] === member || (workspace && admin && r['owner'] != null)));
 /** SQL visibility of a public envoy's conversation, using the reader's `c` alias. */
-export const PUBLIC_ENVOY = `EXISTS (SELECT 1 FROM sys_envoy e WHERE e.id::text = c.envoy AND e.active AND e.audience = 'public')`;
+export const PUBLIC_ENVOY = `(EXISTS (SELECT 1 FROM sys_envoy e WHERE e.id::text = c.envoy AND e.active AND e.audience = 'public') OR (c.envoy IS NULL AND EXISTS (SELECT 1 FROM sys_envoy_channel ec JOIN sys_envoy e ON e.id = ec.envoy WHERE ec.integration = c.integration AND ec.active AND e.active AND e.audience = 'public')))`;
 /**
  * Which conversations other than a member's own a reader may see (`c` the `sys_conversation` row; each value a SQL
  * placeholder): an automation's transcript or a system agent's task for an administrator, an envoy's channel thread for staff when the envoy is

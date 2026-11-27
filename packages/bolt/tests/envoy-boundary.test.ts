@@ -70,7 +70,7 @@ layer(TestWorkspace.layer({ manifest }))('envoy native boundaries', (it) => {
 						integration: 'desk', conversation: 'channel', sender: 'sender', sender_name: 23,
 						text: 'Hello', invocation: 'mention', subject: null, authenticated: null,
 						fresh: true, thread: 'channel', kind: 'dm', status: 'idle',
-						definition: 'whatsapp', envoy: '0199a000-0000-7000-8000-0000000000e1', serving: true
+						definition: 'whatsapp', conversation_envoy: '0199a000-0000-7000-8000-0000000000e1', serving: true
 					}],
 					affected: 0
 				}]) } }

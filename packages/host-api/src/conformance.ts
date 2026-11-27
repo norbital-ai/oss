@@ -166,38 +166,36 @@ export const conformance = (input: {
 				const { branch } = await branched();
 				const before = await status(branch);
 				expect(
-					before.instance === INSTANCE && before.active && before.envoy === null && !before.stored,
+					before.instance === INSTANCE &&
+						before.active &&
+						before.envoys.length === 0 &&
+						!before.stored,
 					`the seeded instance reads ${shown(before)}`
 				);
 				const paused = Schema.decodeUnknownSync(InstanceAdmin)(
 					await branch.integrations.configure(
 						INSTANCE,
-						{ active: false, envoy: null, revision: before.revision },
+						{ active: false, revision: before.revision },
 						signal()
 					)
 				);
 				expect(!paused.active && paused.revision > before.revision, `configure answered ${shown(paused)}`);
 				await refused(
 					'a configure under a stale revision',
-					branch.integrations.configure(INSTANCE, { active: true, envoy: null, revision: before.revision }, signal()),
+					branch.integrations.configure(INSTANCE, { active: true, revision: before.revision }, signal()),
 					'conflict'
 				);
 				expect((await status(branch)).revision === paused.revision, 'a refused configure changed the instance');
 			}
 		},
 		{
-			name: 'refuses an envoy no active envoy names as invalid, and a malformed change as invalid_input',
+			name: 'refuses a malformed change as invalid_input',
 			run: async () => {
 				const { branch } = await branched();
 				const { revision } = await status(branch);
 				await refused(
-					'an unknown envoy',
-					branch.integrations.configure(INSTANCE, { active: true, envoy: 'unknown', revision }, signal()),
-					'invalid'
-				);
-				await refused(
 					'a fractional revision',
-					branch.integrations.configure(INSTANCE, { active: true, envoy: null, revision: revision + 0.5 }, signal()),
+					branch.integrations.configure(INSTANCE, { active: true, revision: revision + 0.5 }, signal()),
 					'invalid_input'
 				);
 				expect((await status(branch)).revision === revision, 'a refused configure changed the instance');
@@ -220,7 +218,7 @@ export const conformance = (input: {
 			run: async () => {
 				const { port, branch } = await branched();
 				const { revision } = await status(branch);
-				await branch.integrations.configure(INSTANCE, { active: true, envoy: null, revision }, signal());
+				await branch.integrations.configure(INSTANCE, { active: true, revision }, signal());
 				const failing = await api.branch({ release, database: port, keys: refusing }, signal());
 				const failed = await failing.integrations
 					.restore(INSTANCE, { secret: 'conformance' }, { ...signal(), active: true })

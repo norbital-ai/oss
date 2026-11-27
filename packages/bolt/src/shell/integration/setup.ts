@@ -67,9 +67,15 @@ export type IntegrationSetupLoader = () => Promise<
 /** The compiled registry's entry for a definition's `+integration.svelte`. */
 export type IntegrationSetupEntry = { load: IntegrationSetupLoader };
 
-/** Workspace-owned accounts that are managed separately from an envoy's channel. */
-export const workspaceConnection = (instance: { owner: string | null; envoy: string | null }) =>
-	instance.owner === null && instance.envoy === null;
+/** Workspace-owned accounts shown in Settings → Connections: non-envoy accounts, plus shared channels whose definition is declared as a workspace connection. */
+export const workspaceConnection = (
+	instance: { readonly id: string; readonly owner: string | null; readonly integration: string },
+	envoyChannels: readonly { readonly integration: string }[] = [],
+	declaredIntegrations?: ReadonlySet<string>
+) =>
+	instance.owner === null &&
+	(!envoyChannels.some((ec) => ec.integration === instance.id) ||
+		declaredIntegrations?.has(instance.integration) === true);
 
 /**
  * The OAuth sign-in window, opened by the click that starts a pairing (a popup opened later, once the provider has

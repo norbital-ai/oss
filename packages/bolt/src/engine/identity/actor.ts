@@ -344,7 +344,10 @@ export class Authorities {
 					);
 				const [rows] = yield* db.read([
 					sql(
-						'SELECT revision FROM sys_integration WHERE id = $1 AND envoy = $2 AND active AND owner IS NULL',
+						`SELECT (i.revision + ec.revision)::int AS revision
+						 FROM sys_integration i
+						 JOIN sys_envoy_channel ec ON ec.integration = i.id AND ec.envoy = $2::uuid
+						 WHERE i.id = $1 AND i.active AND i.owner IS NULL AND ec.active`,
 						o.instance,
 						o.envoy
 					)

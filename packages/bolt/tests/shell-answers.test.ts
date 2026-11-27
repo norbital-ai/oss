@@ -208,13 +208,14 @@ const settings = {
 			active: true
 		}
 	],
+	envoy_channels: [],
 	instances: [
 		{
 			id: 'n1',
 			name: 'Mail',
 			integration: 'mail',
 			owner: null,
-			envoy: null,
+			listen: null,
 			active: true,
 			status: { state: 'ready' },
 			configuration: { from: 'a@example.test' },
@@ -247,6 +248,7 @@ const settings = {
 			name: 'mail',
 			driver: 'email',
 			description: 'Mail',
+			declared: true,
 			conversation: true,
 			personal: false,
 			sends: true,

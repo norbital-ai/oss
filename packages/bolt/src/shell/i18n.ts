@@ -1189,7 +1189,71 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Use existing': '使用现有连接',
 	'Existing channel': '现有渠道',
 	'New channel': '新建渠道',
-	'Existing workspace connection': '现有工作区连接'
+	'Existing workspace connection': '现有工作区连接',
+	'Share channel': '共享渠道',
+	Shared: '共享',
+	channels: '个渠道',
+	Pair: '配对',
+	'Select a provider to configure credentials or pair an account.':
+		'选择一个服务商以配置凭据或配对账号。',
+	'Continue below to sign in and authorize this account.':
+		'请在下方继续登录并授权此账号。',
+	'Listening scope': '监听范围',
+	'Listening scope saved': '监听范围已保存',
+	'Save scope': '保存范围',
+	Reset: '重置',
+	'Channels & scope': '渠道与范围',
+	'Add channel': '添加渠道',
+	'Delete envoy': '删除使者',
+	'This removes the envoy and detaches it from its channels.':
+		'这会删除该使者并将其从渠道中解绑。',
+	'Remove channel {name}?': '移除渠道 {name}？',
+	'This envoy will stop answering on this channel. Other envoys and stored messages stay intact.':
+		'此使者将不再在此渠道上应答。其他使者和已存储的消息将保持不变。',
+	'Attach an existing channel to share it across envoys, or add a new provider.':
+		'绑定现有渠道以在多个使者间共享，或添加新的服务商。',
+	'Channels this envoy answers on, and which DMs or groups it listens to on each.':
+		'此使者应答的渠道，以及它在每个渠道上监听的私信或群组。',
+	'Shared with {names}': '与 {names} 共享',
+	'Used by {names}': '由 {names} 使用',
+	'Shared with envoys: {names}': '与使者共享：{names}',
+	Selected: '指定',
+	Senders: '发件人',
+	Groups: '群组',
+	'Select teams': '选择团队',
+	'Select members': '选择成员',
+	'Addresses & domains': '地址与域名',
+	'Handles & parties': '账号与联系人',
+	'Choose which email senders or domains are handled here.':
+		'选择在此处理的邮件发件人或域名。',
+	'Limit which workspace members or handles can DM this envoy.':
+		'限制哪些工作区成员或账号可以私信此使者。',
+	'Choose which direct chats are handled here.': '选择在此处理的私聊对话。',
+	'Choose which groups or channels are listened to on this connection.':
+		'选择在此连接上监听的群组或频道。',
+	'Also set to All DMs on: {names}': '以下使者也设置为全部私信：{names}',
+	'Also set to All groups on: {names}': '以下使者也设置为全部群组：{names}',
+	'Recent chats on this channel': '此渠道的最近对话',
+	'Filter groups…': '筛选群组…',
+	'Loading groups…': '正在加载群组…',
+	'No groups found yet. Pair the channel, send a message in a group, or add a group ID below.':
+		'尚未发现群组。请先配对渠道、在群组中发送消息，或在下方手动添加群组 ID。',
+	'Add group ID manually…': '手动添加群组 ID…',
+	'Group trigger on this channel': '此渠道的群组触发方式',
+	'Inherit envoy default': '继承使者默认设置',
+	'Mention or reply': '提及或回复',
+	'All messages': '所有消息',
+	'name@company.com or @company.com': 'name@company.com 或 @company.com',
+	'+65 9123 4567': '+65 9123 4567',
+	'@username': '@username',
+	'Handle or user ID': '账号或用户 ID',
+	'No DMs': '无私信',
+	'Selected DMs': '指定私信',
+	'No groups': '无群组',
+	'1 group': '1 个群组',
+	'Selected groups': '指定群组',
+	'Saving…': '正在保存…',
+	Add: '添加'
 };
 
 /** The framework copy of a locale (none for English: the key is the text). */

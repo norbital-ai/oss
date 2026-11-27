@@ -8,7 +8,6 @@
 	import {
 		Badge,
 		Button,
-		Combobox,
 		confirm_action,
 		EmptyState,
 		Field,
@@ -28,6 +27,8 @@
 	import { Cluster, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import IntegrationCard from '../../page/IntegrationCard.svelte';
 	import ConfigurationFields from './ConfigurationFields.svelte';
+	import ListeningScopeEditor from './ListeningScopeEditor.svelte';
+	import { listeningScopeOf } from '../../engine/integrations/scope.ts';
 	import { humanise_word } from '../i18n.ts';
 	import {
 		driverIcon,
@@ -79,15 +80,35 @@
 			: '—';
 	const definition = (name: Value | undefined): Definition | undefined =>
 		settings.integrations.find((d) => d.name === name);
-	const envoyNameOf = (id: string | null) =>
-		id === null ? null : (settings.envoys.find((e) => e.id === id)?.name ?? null);
-	/** Workspace-owned accounts (`owner === null`), including envoy-backed channels (badged with their envoy). */
-	const workspaceInstances = $derived(settings.instances.filter((i) => i.owner === null));
-	/** Workspace-capable definitions (`scope !== 'personal'`), custom integrations first, then built-ins. */
+	const declaredIntegrations = $derived(
+		new Set(settings.integrations.filter((d) => d.declared).map((d) => d.name))
+	);
+	const boundEnvoysOf = (instanceId: string) =>
+		settings.envoy_channels
+			.filter((ec) => ec.integration === instanceId)
+			.map((ec) => settings.envoys.find((e) => e.id === ec.envoy))
+			.filter((e): e is NonNullable<typeof e> => e !== undefined);
+	/** Programmatic workspace connections (`owner === null`, excluding envoy-only channels). */
+	const workspaceInstances = $derived(
+		settings.instances.filter((i) =>
+			workspaceConnection(i, settings.envoy_channels, declaredIntegrations)
+		)
+	);
+	/** Predeclared workspace definitions (custom `src/integration/*` + `workspace({ connections })`), custom first. */
 	const workspaceDefinitions = $derived(
 		settings.integrations
-			.filter((d) => d.scope !== 'personal')
+			.filter((d) => d.declared)
 			.toSorted((a, b) => Number(b.custom === true) - Number(a.custom === true) || a.name.localeCompare(b.name))
+	);
+	const memberChoices = $derived(
+		settings.members
+			.filter((m): m is typeof m & { id: string } => typeof m['id'] === 'string')
+			.map((m) => ({
+				id: m['id'],
+				name: typeof m['name'] === 'string' ? m['name'] : null,
+				email: typeof m['email'] === 'string' ? m['email'] : null,
+				phone: typeof m['phone'] === 'string' ? m['phone'] : null
+			}))
 	);
 	const installedDefinitions = $derived(new Set(workspaceInstances.map((i) => i.integration)));
 	const uninstalledDefinitions = $derived(
@@ -230,9 +251,12 @@
 		)
 			return;
 		const record = intent.request.record;
+		const declared = new Set(current.integrations.filter((d) => d.declared).map((d) => d.name));
 		if (
 			current.instances.some(
-				(instance) => instance.id === record && workspaceConnection(instance) === connections
+				(instance) =>
+					instance.id === record &&
+					workspaceConnection(instance, current.envoy_channels, declared) === connections
 			)
 		) {
 			configured = intent.key;
@@ -432,11 +456,14 @@
 							{#each workspaceInstances as instance (instance.id)}
 								{@const def = definition(instance.integration)}
 								{@const offer = offerOf(instance.integration)}
-								{@const envoyName = envoyNameOf(instance.envoy)}
+								{@const sharedEnvoys = boundEnvoysOf(instance.id)}
 								{#snippet envoyMeta()}
 									<Cluster gap="xs">
 										<Badge variant="outline">
-											{envoyName === null ? t('Envoy') : `${t('Envoy')} · ${envoyName}`}
+											{t('Shared with {names}').replace(
+												'{names}',
+												sharedEnvoys.map((e) => e.name).join(', ')
+											)}
 										</Badge>
 									</Cluster>
 								{/snippet}
@@ -449,7 +476,7 @@
 									instance={{ id: instance.id, status: instance.status, active: instance.active }}
 									client={(id) => api.integration(id)}
 									setup={integration_setups?.[instance.integration]}
-									meta={instance.envoy !== null ? envoyMeta : undefined}
+									meta={sharedEnvoys.length > 0 ? envoyMeta : undefined}
 									on_manage={() => (open = instance.id)}
 									on_resume={() => resumeInstance(instance)}
 									on_delete={() => deleteInstanceDirect(instance)}
@@ -495,6 +522,24 @@
 			{/if}
 		</Stack>
 
+		{#snippet newConnectionFooter()}
+			{#if new_definition === undefined && workspaceDefinitions.length > 0}
+				<div class="ml-auto flex items-center gap-2">
+					<Button variant="ghost" onclick={() => (creating = false)}>{t('Cancel')}</Button>
+					<Button
+						disabled={chosenNewDef === undefined}
+						onclick={() => {
+							if (chosenNewDef !== undefined) {
+								creating_definition = chosenNewDef;
+								create_error = null;
+							}
+						}}
+					>
+						{t('Continue')}
+					</Button>
+				</div>
+			{/if}
+		{/snippet}
 		<Sheet
 			open={creating}
 			on_open_change={(next) => {
@@ -507,9 +552,12 @@
 			}}
 			title={t('New connection')}
 			memory="settings-new-connection"
+			footer={new_definition === undefined && workspaceDefinitions.length > 0
+				? newConnectionFooter
+				: undefined}
 		>
-			<div data-connection-create>
-				<Stack gap="md">
+			<div class="flex min-h-0 flex-1 flex-col" data-connection-create>
+				<Stack gap="md" class="min-h-0 flex-1">
 					{#if new_definition === undefined}
 						<p class="text-meta">
 							{t('Choose an integration, name the account, then pair its provider.')}
@@ -549,21 +597,6 @@
 								</button>
 							{/each}
 						</Grid>
-						{#if workspaceDefinitions.length > 0}
-							<Cluster gap="sm" justify="end" class="border-t border-border pt-3">
-								<Button
-									disabled={chosenNewDef === undefined}
-									onclick={() => {
-										if (chosenNewDef !== undefined) {
-											creating_definition = chosenNewDef;
-											create_error = null;
-										}
-									}}
-								>
-									{t('Continue')}
-								</Button>
-							</Cluster>
-						{/if}
 					{:else}
 						{@const creating_fields = new_definition.configuration}
 						<Inline gap="sm" align="center" justify="between">
@@ -655,7 +688,8 @@
 {#if current !== undefined}
 	{@const i = current}
 	{@const d = definition(i.integration)}
-	{@const channel = settings.envoys.some((e) => e.id === i.envoy)}
+	{@const boundEnvoys = boundEnvoysOf(i.id)}
+	{@const channel = boundEnvoys.length > 0}
 	{@const details_fields = [
 		{ label: t('Integration'), value: i.integration === i.name ? undefined : i.integration },
 		{ label: t('Driver'), value: channel ? driverLabel(d?.driver ?? '') : undefined },
@@ -866,21 +900,6 @@
 					</div>
 				{/snippet}
 				{#snippet settingsTab()}
-					{#snippet envoyEditor({ value, on_change, id }: FieldEditor)}
-						<Combobox
-							{id}
-							clearable
-							placeholder={t('No envoy answers here')}
-							aria-label={t('Envoy')}
-							value={typeof value === 'string' ? value : null}
-							options={settings.envoys.map((e) => ({
-								value: e.id,
-								label: e.name,
-								description: t(e.audience === 'public' ? 'Public' : 'Private')
-							}))}
-							{on_change}
-						/>
-					{/snippet}
 					{#snippet configurationEditor(field: FieldEditor)}
 						<ConfigurationFields
 							{ctx}
@@ -891,28 +910,51 @@
 							translate={(key) => bolt.t(key)}
 						/>
 					{/snippet}
-					<Form
-						{ctx}
-						of="sys_integration"
-						mode="update"
-						id={i.id}
-						submit={t('Save')}
-						on_outcome={() => fork(reload())}
-					>
-						<Field {ctx} name="name" label={t('Name')} />
-						<Field {ctx} name="active" label={t('Active')} />
-						{#if d?.conversation === true && i.owner === null}
-							<Field {ctx} name="envoy" label={t('Envoy')} editor={envoyEditor} />
+					{#snippet listenEditor(field: FieldEditor)}
+						<ListeningScopeEditor
+							driver={d?.driver ?? i.integration}
+							instance={i.id}
+							client={api.integration(i.id)}
+							value={listeningScopeOf(field.value)}
+							on_change={(next) => field.on_change(next)}
+							teams={settings.teams}
+							members={memberChoices}
+							disabled={field.disabled}
+							{t}
+						/>
+					{/snippet}
+					<Stack gap="md">
+						{#if boundEnvoys.length > 0}
+							<p class="text-meta">
+								{t('Shared with envoys: {names}').replace(
+									'{names}',
+									boundEnvoys.map((e) => e.name).join(', ')
+								)}
+							</p>
 						{/if}
-						{#if Object.keys(d?.configuration ?? {}).length > 0}
-							<Field
-								{ctx}
-								name="configuration"
-								label={t('Configuration')}
-								editor={configurationEditor}
-							/>
-						{/if}
-					</Form>
+						<Form
+							{ctx}
+							of="sys_integration"
+							mode="update"
+							id={i.id}
+							submit={t('Save')}
+							on_outcome={() => fork(reload())}
+						>
+							<Field {ctx} name="name" label={t('Name')} />
+							<Field {ctx} name="active" label={t('Active')} />
+							{#if Object.keys(d?.configuration ?? {}).length > 0}
+								<Field
+									{ctx}
+									name="configuration"
+									label={t('Configuration')}
+									editor={configurationEditor}
+								/>
+							{/if}
+							{#if d?.conversation === true}
+								<Field {ctx} name="listen" label={t('Listening scope')} editor={listenEditor} />
+							{/if}
+						</Form>
+					</Stack>
 				{/snippet}
 				{#snippet messagesTab()}
 					<div class="flex flex-col gap-2 text-sm" data-instance-messages>

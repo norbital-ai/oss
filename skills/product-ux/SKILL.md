@@ -9,28 +9,23 @@ Every concern has one home, every concept one name. Mechanics: `authoring-tenant
 
 ## Structure
 
-1. Organize apps by workflow (operations vs configuration), never one page per model. Operational apps open on live records and actions, never landing cards.
-2. A record's tabs partition its concerns: every field, figure and list lives in exactly one tab, the one whose concern it serves; the record's own tab holds its identity and the fields no other tab owns.
-3. Derived figures (totals, KPIs, charts, balances) live in the tab of the concern they measure, beside the records they summarize, never on the record's own tab.
-4. Owned child lists live in their parent's hub, one tab each; a record filed under a child appears only inside that child.
-5. A setting has one scope: the narrowest where its value really varies (workspace, team, member, record), never two. A rule every record shares lives in the configuration app, not on each record.
-6. One concern per view: at most one `Table` or `Board` per page or tab; distinct lists get distinct tabs.
+1. **Workflow over schema.** Organize apps, pages and tabs around how users work, never around models, backend modules or schema reachability. Operational apps open on live records and actions, never landing cards.
+2. **One home per concern.** A record's tabs partition its concerns: every field, figure, chart and list lives in the single tab it serves, and the record's own tab holds identity plus fields no other tab owns. Mount owned children inside their parent and shared/polymorphic records only where users act on them — never duplicate a roll-up elsewhere.
+3. **One scope per setting.** Place a setting at the narrowest scope where its value actually varies (workspace, team, member or record), never two.
+4. **Causal order.** In multi-stage or automated workflows, let users review and adjust generated findings or reference proposals in place before committing downstream outputs, and keep each stage repeatable when inputs change.
 
 ## Names
 
-7. Label tabs, sections, fields and actions in the user's words; never a bare abbreviation, code, enum value or internal term (explain an unavoidable domain term in `help` or the toolbar's `description`).
-8. One concept, one name; two concepts, two names; never two fields encoding one fact.
+5. **User language.** Label every view, section, field and action in plain words the user speaks — never bare codes, abbreviations, enum values or internal terms. Explain unavoidable domain terms in help or descriptions.
+6. **One concept, one name.** Use one name for one concept and distinct names for distinct concepts; never encode the same fact in two fields.
 
-## Views
+## Composition
 
-9. Primitives own titles, hints, actions, search, filters, empty states, scroll and Save (`toolbar`, `Section`, `Field`, `AppShell`/`RecordShell`); never add headings, hints or action bars outside them.
-10. One scroll owner per region and axis: `AppShell` owns chrome; `Table`/`Board` fill their parent and scroll inside; `Tabs` panels never scroll.
-11. **Linked views share one selection.** Selecting a row of a list paired with a picture of the same records (map, model, plan, calendar, chart) focuses the picture on it alone, framed; selecting again or clearing restores the whole; selecting in the picture selects the row. Opening the record is a row action.
-12. Forms: compact `Grid` (`minimum="compact"`) in titled `Section`s with a `lucide:*` `icon`; scalars before `wide` fields; no one-scalar sections; `<Field>` kept for redacted fields; the scoped parent ref hidden; no server-derived inputs.
-13. Match the data's shape: `Timeline` for dated series, board/table switchers for stages, domain pickers (`TimeInput`, `TimeRangeInput`), bounded charts (~16–20rem) answering a stated decision, KPI strips of 4–5 non-empty figures.
-14. Keep navigation flat: `Tabs` switch views (never `Combobox` or `<select>`); `AppShell.actions` holds only a scope every tab shares.
-15. Surface state and the next action directly (`StateBadge`, at most one `Button variant="brand"` per view), never buried in `⚡`. Lucide icons, visible labels, parent-owned sizing.
-16. **A view keeps its shape.** State, progress and errors show in place on what they concern (badge, tone, icon, a reserved status line, a control's pending state); never insert or remove a banner or block that moves content.
-17. **One path per action.** One control per action on a view; a second path only on another view where the person already works on that thing (a price in a pricing table and on its product), and rarely.
-18. **Headless behaviors & agent readiness:** compose custom widgets from `@norbital-ai/ui/behaviors` (`references/behaviors-and-composition.md`). Never hand-roll keyboard, focus, roving, outside-click, drag, resize, menus, grids, inline edit, pagination, clipboard, debounce or `localStorage`. Register custom stateful widgets with `register_control` so Norbius can drive them via `page`.
-19. Simplest layout wins. Artwork needs real sources and alt text. Verify render, scroll, images and console in preview.
+7. **Primitives own their chrome.** Let native shells, toolbars, sections and fields own titles, hints, search, filters, empty states, scroll and Save; never add parallel headings, action bars or duplicate footers.
+8. **One view, one scroll.** Keep one primary data view (`Table` or `Board`) per page or tab, one scroll owner per axis, and flat navigation — cap horizontal tabs at two levels, use collapsible sections for sibling groups inside a view, and reserve inline toggles for lightweight filters.
+9. **Linked views share selection.** When a list pairs with a spatial or visual representation of the same records (map, model, schedule, chart), selecting in either focuses and frames that item in both; clearing restores the whole. Opening the record stays an explicit action.
+10. **Match control weight to data.** Choose the simplest control that fits the data's shape — domain pickers for structured values, compact multi-column forms with scalars before wide inputs, plain text for short notes and rich editors only for long-form documents, timelines for dated series, and bounded charts answering concrete decisions.
+11. **Stable views, clear state.** Surface state, progress and the primary next action directly in place (badges, inline run status, one primary CTA per view). Never shift layout by inserting or removing transient blocks; open secondary forms in sheets.
+12. **One path per action.** Give each action one control per view; repeat it elsewhere only where the user already works on that same object.
+13. **Composable behaviors, agent-ready.** Compose custom interactive widgets from `@norbital-ai/ui/behaviors` rather than hand-rolling interaction primitives, and register stateful controls with `register_control` so Norbius can drive them.
+14. **Simplest layout wins.** Use real assets with alt text and verify layout, scroll, media and console in preview across widths and themes.

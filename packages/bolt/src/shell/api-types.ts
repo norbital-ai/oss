@@ -5,6 +5,7 @@
 import { Schema, type Effect } from 'effect';
 import type { FileRef } from '@norbital-ai/store/kind';
 import { IntegrationScope, type Attachment } from '../decl/runtime/integration.ts';
+import { ListeningScope } from '../engine/integrations/scope.ts';
 import { SyncDeadLetter, SyncHealth } from '../engine/sync/health-schema.ts';
 import type { Json } from '../decl/values.ts';
 import {
@@ -342,6 +343,19 @@ export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 			})
 		)
 	),
+	envoy_channels: Schema.mutable(
+		Schema.Array(
+			Schema.Struct({
+				id: Schema.String,
+				envoy: Schema.String,
+				integration: Schema.String,
+				scope: Schema.NullOr(ListeningScope),
+				group_messages: Schema.NullOr(Schema.Literals(['disabled', 'mention_or_reply', 'all'])),
+				active: Schema.Boolean,
+				revision: Schema.Number
+			})
+		)
+	),
 	instances: Schema.mutable(
 		Schema.Array(
 			Schema.Struct({
@@ -349,8 +363,8 @@ export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 				name: Schema.String,
 				integration: Schema.String,
 				owner: NullableString,
-				envoy: NullableString,
 				active: Schema.Boolean,
+				listen: Schema.NullOr(ListeningScope),
 				status: Schema.Json,
 				configuration: Schema.Json,
 				revision: Schema.Number,
@@ -384,6 +398,7 @@ export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 				description: Schema.String,
 				scope: Schema.optionalKey(IntegrationScope),
 				custom: Schema.optionalKey(Schema.Boolean),
+				declared: Schema.Boolean,
 				conversation: Schema.Boolean,
 				personal: Schema.Boolean,
 				sends: Schema.Boolean,

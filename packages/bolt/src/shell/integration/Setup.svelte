@@ -7,6 +7,7 @@
 -->
 <script lang="ts">
 	import { Effect } from 'effect';
+	import type { Snippet } from 'svelte';
 	import { watch } from '@norbital-ai/ui/behaviors';
 	import { Icon, Spinner } from '@norbital-ai/ui';
 	import { AccretionDisc } from '@norbital-ai/ui/brand';
@@ -15,6 +16,7 @@
 	import Connected from './Connected.svelte';
 	import Pair from './Pair.svelte';
 	import {
+		driverIcon,
 		driverLabel,
 		providerOf,
 		sayOf,
@@ -35,12 +37,20 @@
 		t,
 		locale,
 		setup,
-		controls = true
+		controls = true,
+		on_footer
 	}: IntegrationSetupProps & {
 		/** The definition's own setup component, from the compiled registry. */
 		setup?: IntegrationSetupEntry | undefined;
 		controls?: boolean | undefined;
+		/** When hosted inside a Sheet, receives pairing actions to pin in the Sheet's footer. */
+		on_footer?: ((footer: Snippet | null) => void) | undefined;
 	} = $props();
+
+	const formatDetail = (detail: string): string => {
+		const trimmed = detail.trim();
+		return trimmed === '' ? '' : trimmed.replace(/^[a-z]/, (ch) => ch.toUpperCase());
+	};
 
 	// the component is a module, so the same chunk is fetched once however often this is re-derived
 	const chunk = $derived(setup?.load() ?? null);
@@ -96,13 +106,14 @@
 {/if}
 
 {#snippet standard()}
-	<Stack gap="md">
-		{#if controls}<Inline gap="md" data-connection-progress={connecting ? '' : undefined}>
+	<Stack gap="md" class="min-h-0 flex-1">
+		{#if controls}
+			<Inline gap="md" data-connection-progress={connecting ? '' : undefined}>
 				{#if connecting}
 					<span class="relative shrink-0" aria-hidden="true">
 						<AccretionDisc size={80} class="text-muted-foreground" />
 						<span class="absolute inset-0 grid place-items-center">
-							<Icon name="concept:integrations" class="size-5" />
+							<Icon name={provider?.icon ?? driverIcon(status?.driver ?? '')} class="size-5" />
 						</span>
 					</span>
 				{/if}
@@ -123,18 +134,42 @@
 						{statusLabel(status, t)}
 					</p>
 					{#if connecting && status?.detail !== undefined}<p class="text-meta wrap-anywhere">
-							{status.detail}
+							{formatDetail(status.detail)}
 						</p>{/if}
 				</Stack>
-			</Inline>{/if}
+			</Inline>
+		{:else if connecting && status?.state === 'connecting'}
+			<div
+				class="flex flex-1 flex-col items-center justify-center gap-4 py-12 text-center"
+				data-connection-progress
+			>
+				<span class="relative shrink-0" aria-hidden="true">
+					<AccretionDisc size={96} class="text-muted-foreground" />
+					<span class="absolute inset-0 grid place-items-center">
+						<Icon name={provider?.icon ?? driverIcon(status.driver)} class="size-6" />
+					</span>
+				</span>
+				<Stack gap="xs" align="center" role="status" aria-live="polite" aria-atomic="true">
+					<p class="text-sm font-medium text-foreground" data-connection-state={status.state}>
+						{statusLabel(status, t)}
+					</p>
+					<p class="text-meta">
+						{provider === undefined ? driverLabel(status.driver) : say(provider.name ?? provider.label)}
+					</p>
+					{#if status.detail !== undefined && status.detail.trim() !== ''}
+						<p class="max-w-sm text-meta wrap-anywhere">{formatDetail(status.detail)}</p>
+					{/if}
+				</Stack>
+			</div>
+		{/if}
 		{#if error !== null}<p role="alert" class="text-sm text-destructive" data-connection-error>
 				{error}
 			</p>{/if}
-		{#if (!connecting || !controls) && status?.detail !== undefined}<p
+		{#if !connecting && status?.detail !== undefined && status.detail.trim() !== ''}<p
 				class="text-meta"
 				aria-live="polite"
 			>
-				{status.detail}
+				{formatDetail(status.detail)}
 			</p>{/if}
 		{#if status?.state === 'error' && status.error !== undefined}<p
 				role="alert"
@@ -155,7 +190,7 @@
 				{locale}
 				{controls}
 			/>
-		{:else}
+		{:else if !(status?.state === 'connecting' && !controls)}
 			<Pair
 				{status}
 				{error}
@@ -166,6 +201,7 @@
 				{t}
 				{locale}
 				{controls}
+				{on_footer}
 			/>
 		{/if}
 	</Stack>

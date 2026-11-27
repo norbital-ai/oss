@@ -221,7 +221,7 @@ export type InstanceStatus = typeof InstanceStatus.Type;
 export const InstanceAdmin = Schema.Struct({
 	instance: Schema.String,
 	active: Schema.Boolean,
-	envoy: Schema.NullOr(Schema.String),
+	envoys: Schema.Array(Schema.String),
 	/** Its link's last durable state; `null` before any. */
 	state: Schema.NullOr(InstanceState),
 	/** A credential is stored. */

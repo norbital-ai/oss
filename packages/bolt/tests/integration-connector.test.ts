@@ -88,6 +88,7 @@ function show(props: {
 		import_start: () => Effect.sync(() => status(instance)),
 		test: () => Effect.sync(() => status(instance)),
 		discover: () => Effect.succeed([]),
+		threads: () => Effect.succeed({ groups: [], dms: [] }),
 		watch: () => Stream.never
 	});
 	const target = document.body.appendChild(document.createElement('div'));

@@ -5,7 +5,7 @@ import type { Row } from '../../src/engine/system/rows.ts';
 
 /** Explicit native test rows, never a public seed pack; omitted status stays unpaired. */
 export type RuntimeAccount = Pick<Row<'sys_integration'>, 'id' | 'integration'> &
-	Partial<Pick<Row<'sys_integration'>, 'name' | 'owner' | 'envoy' | 'active' | 'configuration' | 'status'>>;
+	Partial<Pick<Row<'sys_integration'>, 'name' | 'owner' | 'active' | 'listen' | 'configuration' | 'status'>>;
 
 export const seed_accounts = Effect.fn('Test.seed_accounts')(function* (
 	db: TenantDbShape,
@@ -13,10 +13,18 @@ export const seed_accounts = Effect.fn('Test.seed_accounts')(function* (
 ) {
 	for (const account of accounts)
 		yield* db.write({
-			text: `INSERT INTO sys_integration (id,integration,name,owner,envoy,active,configuration,status)
-				VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)`,
-			params: [account.id, account.integration, account.name ?? account.id, account.owner ?? null,
-				account.envoy ?? null, account.active ?? true, account.configuration ?? {}, account.status ?? null]
+			text: `INSERT INTO sys_integration (id,integration,name,owner,active,listen,configuration,status)
+				VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb)`,
+			params: [
+				account.id,
+				account.integration,
+				account.name ?? account.id,
+				account.owner ?? null,
+				account.active ?? true,
+				account.listen ?? null,
+				account.configuration ?? {},
+				account.status ?? null
+			]
 		});
 });
 

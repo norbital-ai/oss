@@ -181,19 +181,14 @@ approval control and repeat no declared default.
 			? v.record
 			: undefined;
 	});
-	const row = $derived(
-		!updating
-			? Effect.succeed(null)
-			: record !== undefined
-				? Effect.succeed(record)
-				: shown !== undefined
-					? Effect.succeed(shown)
-					: id === undefined
-						? Effect.succeed(undefined)
-						: bolt.query(by_id(model, id)).pipe(
-								Effect.map((answer): Row | null => first_of(answer, model)),
-								Effect.catch(() => Effect.succeed(null))
-							)
+	const directRow = $derived(!updating ? null : record !== undefined ? record : shown);
+	const fetchedRow = $derived(
+		directRow !== undefined || id === undefined
+			? null
+			: bolt.query(by_id(model, id)).pipe(
+					Effect.map((answer): Row | null => first_of(answer, model)),
+					Effect.catch(() => Effect.succeed(null))
+				)
 	);
 	const parents = $derived.by(() => {
 		if (typeof of !== 'string' || resolved !== 'create' || exposure === undefined) return [];
@@ -217,22 +212,65 @@ approval control and repeat no declared default.
 		});
 	});
 	const prefill = $derived(
-		Effect.forEach(
-			parents,
-			(parent) =>
-				bolt.query(by_id(parent.of, parent.id, parent.fields)).pipe(
-					Effect.map((answer) => first_of(answer, parent.of)),
-					Effect.map((record) =>
-						Object.fromEntries(
-							parent.fields.map((field): [string, Value] => [field, record?.[field] ?? null])
-						)
-					),
-					Effect.catch(() => Effect.succeed({}))
-				),
-			{ concurrency: 'unbounded' }
-		).pipe(Effect.map((rows) => Object.fromEntries(rows.flatMap((row) => Object.entries(row)))))
+		parents.length === 0
+			? null
+			: Effect.forEach(
+					parents,
+					(parent) =>
+						bolt.query(by_id(parent.of, parent.id, parent.fields)).pipe(
+							Effect.map((answer) => first_of(answer, parent.of)),
+							Effect.map((record) =>
+								Object.fromEntries(
+									parent.fields.map((field): [string, Value] => [field, record?.[field] ?? null])
+								)
+							),
+							Effect.catch(() => Effect.succeed({}))
+						),
+					{ concurrency: 'unbounded' }
+				).pipe(Effect.map((rows) => Object.fromEntries(rows.flatMap((row) => Object.entries(row)))))
 	);
 </script>
+
+{#snippet bodyWith(stored: Row | null, inherited: Row)}
+	{#if spec !== null}
+		{#key `${spec.callable}:${id ?? ''}`}
+			<FormBody {ctx}
+				{spec}
+				record={stored}
+				values={{ ...inherited, ...seeded }}
+				model_fields={exposure?.fields ?? {}}
+				{act}
+				{fields}
+				{sections}
+				{submit}
+				readonly={readOnly}
+				{disabled}
+				{on_outcome}
+				{on_reset}
+				{confirm}
+				{validate}
+				{children}
+				{editors}
+				{viewers}
+				{actions}
+				{acts}
+				{size}
+			/>
+		{/key}
+	{/if}
+{/snippet}
+
+{#snippet withPrefill(stored: Row | null)}
+	{#if prefill === null}
+		{@render bodyWith(stored, {})}
+	{:else}
+		<ReadOnce effect={prefill} pending={loading}>
+			{#snippet ready(inherited)}
+				{@render bodyWith(stored, inherited)}
+			{/snippet}
+		</ReadOnce>
+	{/if}
+{/snippet}
 
 {#snippet loading()}
 	<!-- the form's shape while its row loads : labels, fields and the submit -->
@@ -251,42 +289,21 @@ approval control and repeat no declared default.
 
 {#if spec === null}
 	<Alert variant="secondary">{t('noAccess')}</Alert>
+{:else if directRow !== undefined}
+	{#if updating && directRow === null}
+		<Alert variant="secondary">{t('not_found')}</Alert>
+	{:else}
+		{@render withPrefill(directRow)}
+	{/if}
+{:else if fetchedRow === null}
+	{@render loading()}
 {:else}
-	<ReadOnce effect={row} pending={loading}>
+	<ReadOnce effect={fetchedRow} pending={loading}>
 		{#snippet ready(stored)}
-			{#if stored === undefined}
-				{@render loading()}
-			{:else if updating && stored === null}
+			{#if updating && stored === null}
 				<Alert variant="secondary">{t('not_found')}</Alert>
 			{:else}
-				<ReadOnce effect={prefill} pending={loading}>
-					{#snippet ready(inherited)}
-						{#key `${spec.callable}:${id ?? ''}`}
-							<FormBody {ctx}
-								{spec}
-								record={stored}
-								values={{ ...inherited, ...seeded }}
-								model_fields={exposure?.fields ?? {}}
-								{act}
-								{fields}
-								{sections}
-								{submit}
-								readonly={readOnly}
-								{disabled}
-								{on_outcome}
-								{on_reset}
-								{confirm}
-								{validate}
-								{children}
-								{editors}
-								{viewers}
-								{actions}
-								{acts}
-								{size}
-							/>
-						{/key}
-					{/snippet}
-				</ReadOnce>
+				{@render withPrefill(stored)}
 			{/if}
 		{/snippet}
 	</ReadOnce>

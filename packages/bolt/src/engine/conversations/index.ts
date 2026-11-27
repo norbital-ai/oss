@@ -32,6 +32,15 @@ import { LIMITS } from '../contracts.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { AgentEngine } from '../agent/index.ts';
 import { conversationOf, definitionOf } from '../integrations/instances.ts';
+import {
+	decodeListeningScope,
+	emailRecipientsOf,
+	matchesListeningScope,
+	scopeNeedsDirectory,
+	type ListeningScope
+} from '../integrations/scope.ts';
+import type { HandleKind } from '../../decl/runtime/integration.ts';
+import { directoryMatchesForHandles } from '../envoys/senders.ts';
 import { notice_sends, prepareNoticeFiles } from '../notifications/notify.ts';
 import { NOTICE_DELIVER } from '../notifications/queue.ts';
 import { inboxPiece } from '../sync/hint.ts';
@@ -72,8 +81,10 @@ type Instance = {
 	integration: string;
 	owner: string | null;
 	kind: 'chat' | 'email';
+	handle: HandleKind | null;
 	import_start: ImportStart | null;
 	importStartRaw: Json;
+	listen: ListeningScope | null;
 };
 /** An admitted row (`role` set) keeps its transcript content; only unadmitted history is rewritten by an edit or a revoke. */
 const KEEP = (col: string) =>
@@ -123,10 +134,11 @@ export function conversations(cfg: ConversationsConfig) {
 			Schema.Struct({
 				integration: Schema.String,
 				owner: Schema.NullOr(Schema.String),
-				import_start: Schema.NullOr(Schema.Json)
+				import_start: Schema.NullOr(Schema.Json),
+				listen: Schema.NullOr(Schema.Json)
 			}),
 			{
-				text: 'SELECT integration, owner, import_start FROM sys_integration WHERE id = $1',
+				text: 'SELECT integration, owner, import_start, listen FROM sys_integration WHERE id = $1',
 				params: [id]
 			}
 		);
@@ -144,13 +156,16 @@ export function conversations(cfg: ConversationsConfig) {
 				BoltError.make('invalid_input', 'admission', 'The integration import start is invalid.')
 			)
 		);
+		const listen = Option.getOrElse(decodeListeningScope(row.listen), () => null);
 		return {
 			id,
 			integration: row.integration,
 			owner: row.owner,
 			kind: conv.kind,
+			handle: conv.handle,
 			import_start,
-			importStartRaw: row.import_start
+			importStartRaw: row.import_start,
+			listen
 		};
 	});
 	const files = Effect.fn('Agents.files')(function* (
@@ -226,7 +241,12 @@ export function conversations(cfg: ConversationsConfig) {
 					select: `SELECT '${ADMIT}'::text AS automation, ${c.p({ message: id, mentions: admit.mentions })}::jsonb AS input,
                 ${c.p(now)}::timestamptz AS due_at, ${c.p(JSON.stringify([ADMIT, id]))}::text AS key, 'provider'::text AS cause, 0 AS depth
                 WHERE EXISTS (SELECT 1 FROM ${msg} WHERE inserted)
-                AND EXISTS (SELECT 1 FROM sys_integration i WHERE i.id = ${c.p(inst.id)} AND i.active AND i.envoy IS NOT NULL AND i.owner IS NULL)`
+                AND EXISTS (
+					SELECT 1 FROM sys_integration i
+					JOIN sys_envoy_channel ec ON ec.integration = i.id AND ec.active
+					JOIN sys_envoy e ON e.id = ec.envoy AND e.active
+					WHERE i.id = ${c.p(inst.id)} AND i.active AND i.owner IS NULL
+				)`
 				},
 				{ conflict: 'keep' }
 			);
@@ -296,6 +316,57 @@ export function conversations(cfg: ConversationsConfig) {
 				)
 			};
 		const inbound = normalized;
+		const seenThread = inst.kind === 'email' ? inbound.sender : inbound.thread;
+		const seenKind = inbound.group ? 'group' : 'dm';
+		const seenTitle = inbound.group ? inbound.title : inbound.sender_name;
+		if (!inbound.deleted && inst.listen !== null) {
+			const personalOutbound =
+				inst.owner !== null && Predicate.isObject(message) && message['direction'] === 'outbound';
+			const peerHandles = inbound.group
+				? []
+				: personalOutbound
+					? inst.kind === 'email'
+						? emailRecipientsOf(inbound.email)
+						: [inbound.thread]
+					: [inbound.sender];
+			const directory =
+				!inbound.group && scopeNeedsDirectory(inst.listen)
+					? yield* directoryMatchesForHandles(db, m.workspace, inst.handle, peerHandles, now)
+					: { members: [], teams: [] };
+			const allowed = matchesListeningScope(inst.listen, {
+				group: inbound.group,
+				thread: inbound.thread,
+				handles: peerHandles,
+				handleKind: inst.handle,
+				members: directory.members,
+				teams: directory.teams
+			});
+			if (!allowed.matched) {
+				// Record lightweight thread metadata even for filtered traffic so scope pickers list real group/DM names without storing content.
+				if (inbound.thread !== '')
+					yield* db
+						.write(
+							sql(
+								`INSERT INTO bolt_seen_thread (instance, thread, kind, title, sender, sender_name, last_at)
+								 VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)
+								 ON CONFLICT (instance, thread) DO UPDATE SET
+								 title = coalesce(excluded.title, bolt_seen_thread.title),
+								 sender = coalesce(nullif(excluded.sender, ''), bolt_seen_thread.sender),
+								 sender_name = coalesce(excluded.sender_name, bolt_seen_thread.sender_name),
+								 last_at = greatest(bolt_seen_thread.last_at, excluded.last_at)`,
+								inst.id,
+								seenThread,
+								seenKind,
+								seenTitle,
+								inbound.sender,
+								inbound.sender_name,
+								inbound.sent_at
+							)
+						)
+						.pipe(Effect.catch(() => Effect.void));
+				return null;
+			}
+		}
 		if (!permitsImport(inst.import_start, inbound.source_at ?? undefined)) {
 			if (!inbound.deleted || inbound.source_at !== null) return null;
 			const previous = yield* db.one(Schema.Struct({ source_at: Schema.NullOr(Schema.String) }), {
@@ -360,9 +431,22 @@ export function conversations(cfg: ConversationsConfig) {
 					if (row.next_due !== null) nextDueAt = row.next_due;
 					return null;
 				}
+				if (!inbound.deleted && inbound.thread !== '') {
+					c.cte(
+						'seen_thread',
+						`INSERT INTO bolt_seen_thread (instance, thread, kind, title, sender, sender_name, last_at)
+						 SELECT ${c.p(inst.id)}, ${c.p(seenThread)}, ${c.p(seenKind)}, ${c.p(seenTitle)}, ${c.p(inbound.sender)}, ${c.p(inbound.sender_name)}, ${c.p(inbound.sent_at)}::timestamptz
+						 WHERE EXISTS (SELECT 1 FROM source)
+						 ON CONFLICT (instance, thread) DO UPDATE SET
+						 title = coalesce(excluded.title, bolt_seen_thread.title),
+						 sender = coalesce(nullif(excluded.sender, ''), bolt_seen_thread.sender),
+						 sender_name = coalesce(excluded.sender_name, bolt_seen_thread.sender_name),
+						 last_at = greatest(bolt_seen_thread.last_at, excluded.last_at)`
+					);
+				}
 				c.cte('previous', `SELECT version FROM sys_message WHERE id = ${c.p(id)}`);
 				// a group's name follows the provider's latest (a renamed group), never erased by a message that does not carry it;
-				// `envoy` is the instance's at this message (display: admission reads the instance as it is then)
+				// `envoy` is stamped when the instance has one sole active envoy binding (shared channels resolve per message on admission)
 				// a received file is one of the conversation's inputs, naming its message, once: a redelivery or an edit adds none
 				const inputs = stored.map((ref) =>
 					Predicate.isObject(ref) ? { ...ref, message: id } : ref
@@ -370,13 +454,14 @@ export function conversations(cfg: ConversationsConfig) {
 				capturePiece(c,
 					'conv',
 					'sys_conversation',
-					`INSERT INTO sys_conversation (id, integration, thread, kind, envoy, title, participants, inputs) SELECT ${c.p(conv)}, ${c.p(inst.id)}, ${c.p(inbound.thread)},
-			${c.p(inbound.group ? 'group' : 'dm')}, (SELECT i.envoy FROM sys_integration i WHERE i.id = ${c.p(inst.id)} AND i.owner IS NULL), ${c.p(inbound.title)},
+					`INSERT INTO sys_conversation (id, integration, thread, kind, title, envoy, participants, inputs) SELECT ${c.p(conv)}, ${c.p(inst.id)}, ${c.p(inbound.thread)},
+			${c.p(inbound.group ? 'group' : 'dm')}, ${c.p(inbound.title)},
+			(SELECT CASE WHEN count(*) = 1 THEN min(ec.envoy::text) END FROM sys_envoy_channel ec JOIN sys_envoy e ON e.id = ec.envoy WHERE ec.integration = ${c.p(inst.id)} AND ec.active AND e.active),
 			${c.p(personal ? (inbound.participants ?? null) : null)}::jsonb, ${c.p(inputs)}::jsonb WHERE EXISTS (SELECT 1 FROM source) ON CONFLICT (id) DO UPDATE SET
-			envoy = excluded.envoy, title = coalesce(excluded.title, sys_conversation.title), participants = coalesce(excluded.participants, sys_conversation.participants),
+			title = coalesce(excluded.title, sys_conversation.title), participants = coalesce(excluded.participants, sys_conversation.participants),
 			inputs = sys_conversation.inputs || (SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM jsonb_array_elements(excluded.inputs) e
 				WHERE NOT sys_conversation.inputs @> jsonb_build_array(jsonb_build_object('message', e->'message')))
-			WHERE sys_conversation.envoy IS DISTINCT FROM excluded.envoy OR (excluded.title IS NOT NULL AND sys_conversation.title IS DISTINCT FROM excluded.title)
+			WHERE (excluded.title IS NOT NULL AND sys_conversation.title IS DISTINCT FROM excluded.title)
 			OR (excluded.participants IS NOT NULL AND sys_conversation.participants IS DISTINCT FROM excluded.participants) OR excluded.inputs <> '[]'::jsonb`,
 					{ returning: 'id, inputs' }
 				);

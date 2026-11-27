@@ -518,7 +518,7 @@ describe('HOST_API conformance (D10a)', () => {
 					expect(
 						await branch.integrations.configure(
 							'erp1',
-							{ active: false, envoy: null, revision: status.revision },
+							{ active: false, revision: status.revision },
 							{ signal }
 						)
 					).toMatchObject({ active: false, revision: status.revision + 1 });

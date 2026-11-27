@@ -352,7 +352,37 @@ export function slack(): ProviderDef {
 							Effect.succeed({ messages: [], complete: false })
 						)
 					);
-				})
+				}),
+				discover: () =>
+					Effect.gen(function* () {
+						if (cred === null) return [];
+						const Channels = Schema.Struct({
+							channels: Schema.optionalKey(
+								Schema.Array(
+									Schema.Struct({
+										id: Schema.String,
+										name: Schema.optionalKey(Schema.String)
+									})
+								)
+							)
+						});
+						const page = yield* call(
+							Channels,
+							cred.botToken,
+							'conversations.list',
+							new URLSearchParams({
+								types: 'public_channel,private_channel',
+								exclude_archived: 'true',
+								limit: '200'
+							})
+						).pipe(
+							Effect.catchTag('ProviderRefused', () => Effect.succeed({ channels: [] }))
+						);
+						return (page.channels ?? []).map((ch) => ({
+							id: ch.id,
+							label: ch.name !== undefined && ch.name !== '' ? `#${ch.name}` : ch.id
+						}));
+					})
 			};
 		})
 	};

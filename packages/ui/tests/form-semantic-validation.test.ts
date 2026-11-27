@@ -216,3 +216,45 @@ it.live('submit sends nothing while an issue exists; unregister removes the rule
 		assert.deepEqual(acts, [[{ title: 'bad' }]]);
 	})
 );
+
+it.live('untouched create fields hide initial semantic lint until touched or submitted', () =>
+	Effect.gen(function* () {
+		const acts: Json[] = [];
+		const { bolt } = yield* browser(() =>
+			viewFixture({
+				catalog,
+				act: (body) => {
+					const { input } = single_act(body);
+					acts.push(input);
+					return committed(body);
+				}
+			})
+		);
+		const form = new FormState(
+			specOf('jobs', catalog.jobs, 'create'),
+			null,
+			{ title: 'draft' },
+			bolt.act,
+			text
+		);
+		form.add_validation(() =>
+			form.get('title') === 'draft' ? [{ field: 'title', message: 'Title cannot be draft' }] : []
+		);
+		// Initial mount: semantic_errors tracks the invariant, but field_errors stays quiet until touched or submitted
+		assert.equal(form.semantic_errors.length, 1);
+		assert.equal(form.field_errors.size, 0);
+		assert.equal(form.can_save, true);
+		// Clicking submit marks submitted, surfaces the error, and refuses to send
+		assert.equal(yield* form.submit(), null);
+		assert.equal(form.submitted, true);
+		assert.equal(form.field_errors.get('title'), 'Title cannot be draft');
+		assert.equal(form.can_save, false);
+		assert.deepEqual(acts, []);
+		// Fixing the field clears the error and allows commit
+		form.set('title', 'Ready');
+		assert.equal(form.field_errors.size, 0);
+		assert.equal(form.can_save, true);
+		assert.equal((yield* form.submit())?.kind, 'committed');
+		assert.deepEqual(acts, [[{ title: 'Ready' }]]);
+	})
+);

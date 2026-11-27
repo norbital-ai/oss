@@ -14,6 +14,7 @@ import {
 	parse_rate,
 	DRIVERS,
 	allows_personal,
+	allows_workspace,
 	driver_of,
 	SYSTEM
 } from '@norbital-ai/bolt/tooling';
@@ -727,6 +728,16 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 	}
 	for (const p of Object.keys(m.workspace.limits ?? {}))
 		if (m.policies[p] === undefined) at('access/limit', 'workspace', '', `limits names '${p}', which is not a policy`);
+	for (const integration of m.workspace.connections ?? []) {
+		const def = definition(m, integration);
+		if (def === undefined || !allows_workspace(def))
+			at(
+				'access/workspace-connection',
+				'workspace',
+				'',
+				`'${integration}' is not a workspace-capable integration`
+			);
+	}
 }
 
 function visitorRules({ m, at }: RuleContext): void {

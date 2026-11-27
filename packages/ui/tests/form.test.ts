@@ -662,3 +662,40 @@ it.live('a draft survives a reload keyed to the form, and each changed field say
 		localStorage.clear();
 	})
 );
+
+it.live('refresh with merge updates untouched server-derived fields in edit mode without clobbering active edits or regressing revision', () =>
+	Effect.gen(function* () {
+		const { bolt } = yield* browser(() => viewFixture());
+		const spec = specOf('quotes', exposure, 'update', 'q1');
+		const form = new FormState(
+			spec,
+			{ id: 'q1', revision: 4, title: 'Original', note: 'Old note', total: { amount: '10', currency: 'SGD' } },
+			{},
+			bolt.act,
+			text
+		);
+		assert.equal(form.mode, 'edit');
+		form.set('title', 'Typing...');
+		// Stale revision (< 4) is ignored
+		form.refresh({ id: 'q1', revision: 3, title: 'Stale', note: 'Stale note' }, true);
+		assert.equal(form.revision, 4);
+		assert.equal(form.get('note'), 'Old note');
+		assert.equal(form.get('title'), 'Typing...');
+		// Same revision arriving with server-derived field updates untouched `note` while keeping dirty `title`
+		form.refresh({ id: 'q1', revision: 4, title: 'Original', note: 'Server note' }, true);
+		assert.equal(form.get('note'), 'Server note');
+		assert.equal(form.get('title'), 'Typing...');
+		assert.equal(form.dirty, true);
+		// Newer external revision while dirty preserves `#revision` for conflict detection
+		form.refresh({ id: 'q1', revision: 5, title: 'Someone else', note: 'Other note' }, true);
+		assert.equal(form.revision, 4);
+		assert.equal(form.get('title'), 'Typing...');
+		// Once clean, newer external revision merges live
+		form.reset();
+		form.refresh({ id: 'q1', revision: 5, title: 'Someone else', note: 'Other note' }, true);
+		assert.equal(form.revision, 5);
+		assert.equal(form.get('title'), 'Someone else');
+		assert.equal(form.get('note'), 'Other note');
+		assert.equal(form.dirty, false);
+	})
+);

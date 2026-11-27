@@ -137,10 +137,18 @@
 	const storedStatus = $derived(decodeStoredStatus(instance?.status));
 
 	let panel = $state<'pair' | 'manage' | null>(null);
+	let setupFooter = $state<Snippet | null>(null);
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let pairedNow = $state(false);
 	let disconnectedLocally = $state(false);
+
+	watch(
+		() => panel,
+		(next) => {
+			if (next === null) setupFooter = null;
+		}
+	);
 
 	watch(
 		() => id,
@@ -519,6 +527,52 @@
 	</Surface>
 
 	{#if presentation === 'sheet' && source !== null}
+		{@const hasCardActions =
+			!readonly &&
+			(snapshot.phase === 'connecting' ||
+				snapshot.phase === 'connected' ||
+				on_delete !== undefined)}
+		{@const hasFooter = panel !== null && (hasCardActions || setupFooter !== null)}
+		{#snippet sheetFooter()}
+			<Cluster gap="sm" align="center">
+				{#if !readonly}
+					{#if snapshot.phase === 'connecting'}
+						<Button
+							variant="outline"
+							disabled={working}
+							data-cancel-setup
+							onclick={() => unpairConnection(false, displayName, source)}
+						>
+							{t('Cancel pairing')}
+						</Button>
+					{:else if snapshot.phase === 'connected'}
+						<Button
+							variant="ghost"
+							class="text-destructive"
+							disabled={working}
+							data-disconnect
+							onclick={() => unpairConnection(true, displayName, source)}
+						>
+							{t('Disconnect')}
+						</Button>
+					{/if}
+					{#if on_delete !== undefined}
+						<Button
+							variant="ghost"
+							class="text-destructive"
+							disabled={working}
+							data-uninstall
+							onclick={() => uninstallConnection(displayName)}
+						>
+							{t('Uninstall')}
+						</Button>
+					{/if}
+				{/if}
+			</Cluster>
+			{#if setupFooter !== null}
+				{@render setupFooter()}
+			{/if}
+		{/snippet}
 		<Sheet
 			open={panel !== null}
 			on_open_change={(open) => {
@@ -526,6 +580,7 @@
 			}}
 			title={displayName}
 			memory={`integration-${driver}`}
+			footer={hasFooter ? sheetFooter : undefined}
 		>
 			{#snippet header()}
 				<Inline gap="sm" align="center" class="min-w-0">
@@ -538,57 +593,25 @@
 			{/snippet}
 
 			{#if panel !== null}
-				<Stack gap="lg" class="min-w-0" data-connector-panel={panel}>
+				<Stack gap="lg" class="min-h-0 min-w-0 flex-1" data-connector-panel={panel}>
 					{#if snapshot.phase === 'connected' && snapshot.account !== null && snapshot.account !== ''}
 						<p class="text-sm text-muted-foreground">
 							{t('Connected as {as}').replace('{as}', snapshot.account)}
 						</p>
 					{/if}
 
-					<Setup {...source} {setup} error={error ?? source.error} controls={false} />
+					<Setup
+						{...source}
+						{setup}
+						error={error ?? source.error}
+						controls={false}
+						on_footer={(snippet) => (setupFooter = snippet)}
+					/>
 
 					{#if manage !== undefined}
 						<div class="border-t border-border pt-4">
 							{@render manage({ close: closePanel })}
 						</div>
-					{/if}
-
-					{#if !readonly && (snapshot.phase === 'connecting' || snapshot.phase === 'connected' || on_delete !== undefined)}
-						<Cluster gap="sm" justify="between" align="center" class="border-t border-border pt-4">
-							<div>
-								{#if snapshot.phase === 'connecting'}
-									<Button
-										variant="outline"
-										disabled={working}
-										data-cancel-setup
-										onclick={() => unpairConnection(false, displayName, source)}
-									>
-										{t('Cancel pairing')}
-									</Button>
-								{:else if snapshot.phase === 'connected'}
-									<Button
-										variant="ghost"
-										class="text-destructive"
-										disabled={working}
-										data-disconnect
-										onclick={() => unpairConnection(true, displayName, source)}
-									>
-										{t('Disconnect')}
-									</Button>
-								{/if}
-							</div>
-							{#if on_delete !== undefined}
-								<Button
-									variant="ghost"
-									class="text-destructive"
-									disabled={working}
-									data-uninstall
-									onclick={() => uninstallConnection(displayName)}
-								>
-									{t('Uninstall')}
-								</Button>
-							{/if}
-						</Cluster>
 					{/if}
 				</Stack>
 			{/if}

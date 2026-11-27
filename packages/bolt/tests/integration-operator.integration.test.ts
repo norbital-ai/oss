@@ -50,7 +50,6 @@ const manifest = {
 } satisfies EngineManifest;
 const Row = Schema.Struct({
 	active: Schema.Boolean,
-	envoy: Schema.NullOr(Schema.String),
 	revision: Schema.Number,
 	epoch: Schema.NullOr(Schema.String),
 	status: Schema.NullOr(Schema.Json)
@@ -94,7 +93,7 @@ const ignored: BranchPublication = () => {};
 const row = (instance: string) =>
 	Effect.flatMap(Fixture, ({ t }) =>
 		t.db.one(Row, {
-			text: 'SELECT active, envoy, revision, epoch, status FROM sys_integration WHERE id = $1',
+			text: 'SELECT active, revision, epoch, status FROM sys_integration WHERE id = $1',
 			params: [instance]
 		})
 	).pipe(Effect.map(Option.getOrThrow));
@@ -117,7 +116,7 @@ layer(fixture, { excludeTestServices: true })('operator instance operations', (i
 		})
 	);
 	describe('configure', () => {
-		it.effect('deploys an envoy under the revision its status read, publishes the change, and refuses a stale one', () =>
+		it.effect('pauses an instance under the revision its status read, publishes the change, and refuses a stale one', () =>
 			Effect.gen(function* () {
 				const { t } = yield* Fixture;
 				const { seen, publish } = recorder();
@@ -125,7 +124,7 @@ layer(fixture, { excludeTestServices: true })('operator instance operations', (i
 				expect(status).toEqual({
 					instance: 'wa',
 					active: true,
-					envoy: null,
+					envoys: [],
 					state: null,
 					stored: false,
 					revision: 1
@@ -135,10 +134,10 @@ layer(fixture, { excludeTestServices: true })('operator instance operations', (i
 						t.db,
 						manifest,
 						'wa',
-						{ active: false, envoy: DESK, revision: status.revision },
+						{ active: false, revision: status.revision },
 						publish
 					)
-				).toEqual({ ...status, active: false, envoy: DESK, revision: 2 });
+				).toEqual({ ...status, active: false, revision: 2 });
 				// the committed images, on the epoch the statement read: what a generation's open pages patch from
 				expect(seen).toEqual([
 					{
@@ -149,40 +148,38 @@ layer(fixture, { excludeTestServices: true })('operator instance operations', (i
 								id: 'wa',
 								op: 'update',
 								revision: 2,
-								old: expect.objectContaining({ active: true, envoy: null }),
-								new: expect.objectContaining({ active: false, envoy: DESK })
+								old: expect.objectContaining({ active: true }),
+								new: expect.objectContaining({ active: false })
 							})
 						]
 					}
 				]);
 				const stale = yield* Effect.flip(
-					configure_instance(t.db, manifest, 'wa', { active: true, envoy: null, revision: 1 }, publish)
+					configure_instance(t.db, manifest, 'wa', { active: true, revision: 1 }, publish)
 				);
 				expect(stale).toMatchObject({ _tag: 'BoltError', code: 'conflict' });
 				expect(seen.flatMap((publication) => publication.captured)).toHaveLength(1);
-				expect(yield* row('wa')).toMatchObject({ active: false, envoy: DESK, revision: 2 });
+				expect(yield* row('wa')).toMatchObject({ active: false, revision: 2 });
 			})
 		);
-		it.effect('refuses an envoy the definition, the envoy or the instance does not allow', () =>
+		it.effect('reports bound active envoys and refuses configuring a missing instance', () =>
 			Effect.gen(function* () {
 				const { t } = yield* Fixture;
-				for (const [instance, envoy] of [
-					['erp1', DESK],
-					['paused', RETIRED],
-					['paused', '0c000000-0000-4000-8000-00000000000f']
-				] as const)
-					expect(
-						yield* Effect.flip(
-							configure_instance(t.db, manifest, instance, { active: true, envoy, revision: 1 }, ignored)
-						)
-					).toMatchObject({ _tag: 'BoltError', code: 'invalid' });
+				yield* t.db.write({
+					text: `INSERT INTO sys_envoy_channel (id, envoy, integration, active) VALUES (gen_random_uuid(), $1::uuid, 'paused', true)`,
+					params: [DESK]
+				});
+				expect(yield* instance_admin(t.db, 'paused')).toMatchObject({
+					instance: 'paused',
+					envoys: [DESK]
+				});
 				expect(
 					yield* Effect.flip(
-						configure_instance(t.db, manifest, 'none', { active: true, envoy: null, revision: 1 }, ignored)
+						configure_instance(t.db, manifest, 'none', { active: true, revision: 1 }, ignored)
 					)
 				).toMatchObject({ _tag: 'BoltError', code: 'not_found' });
-				expect(yield* row('erp1')).toMatchObject({ envoy: null, revision: 1 });
-				expect(yield* row('paused')).toMatchObject({ envoy: null, revision: 1 });
+				expect(yield* row('erp1')).toMatchObject({ active: true, revision: 1 });
+				expect(yield* row('paused')).toMatchObject({ active: true, revision: 1 });
 			})
 		);
 	});

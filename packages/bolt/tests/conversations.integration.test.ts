@@ -1195,10 +1195,6 @@ describe('repair (a webhook is a hint)', () => {
 						t = f.t,
 						thread = 'R3@s.whatsapp.net',
 						since = ago(f, 7 * DAY);
-					yield* t.db.write({
-						text: `UPDATE sys_integration SET envoy = 'desk' WHERE id = 'envoy_wa'`,
-						params: []
-					});
 					yield* t.receive('envoy_wa', seen(thread, 'R3-known', ago(f, 3 * HOUR)));
 					yield* t.receive('envoy_wa', seen(thread, 'R3-dropped', ago(f, 3 * HOUR)));
 					const before = (yield* admissions(f)).map((r) => r['message']);

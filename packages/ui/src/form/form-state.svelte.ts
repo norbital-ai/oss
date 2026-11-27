@@ -131,15 +131,21 @@ export class FormState {
 	#validators = new Set<() => Effect.Effect<boolean>>();
 	#confirms = new Set<() => Effect.Effect<boolean>>();
 	#rules = $state.raw<readonly (() => readonly SemanticIssue[])[]>([]);
+	/** `true` once submit/validate has run, so untouched create fields stay clean until interacted with or submitted. */
+	submitted = $state(false);
+	#touched = $state.raw<ReadonlySet<string>>(new Set());
 	/** Every registered rule's current issues; kept apart from `errors` so fixing a value clears its issue at once. */
 	readonly semantic_errors: readonly SemanticIssue[] = $derived(
 		this.#rules.flatMap((rule) => rule())
 	);
+	readonly #visible_semantic_errors: readonly SemanticIssue[] = $derived(
+		this.semantic_errors.filter((issue) => this.submitted || this.#touched.has(issue.field))
+	);
 	/** Explicit check/refusal errors take precedence over semantic issues on the same field. */
 	readonly field_errors: ReadonlyMap<string, string> = $derived.by(() => {
-		if (this.semantic_errors.length === 0) return this.errors;
+		if (this.#visible_semantic_errors.length === 0) return this.errors;
 		const all = new Map(this.errors);
-		for (const issue of this.semantic_errors)
+		for (const issue of this.#visible_semantic_errors)
 			if (!all.has(issue.field)) all.set(issue.field, issue.message);
 		return all;
 	});
@@ -260,13 +266,38 @@ export class FormState {
 		}
 	}
 
-	/** A view refreshes from the current row; editing keeps its original revision and draft. */
-	refresh(record: Row): void {
+	/**
+	 * A view refreshes from the current row; editing keeps its original revision and draft unless `merge` is set
+	 * (auto-save), which advances untouched fields and `#around` from newer/current revisions without clobbering edits.
+	 */
+	refresh(record: Row, merge = false): void {
+		const incomingRev = typeof record['revision'] === 'number' ? record['revision'] : undefined;
+		if (
+			merge &&
+			this.mode === 'edit' &&
+			incomingRev !== undefined &&
+			this.#revision !== undefined &&
+			incomingRev < this.#revision
+		)
+			return;
 		this.#around = record;
-		if (this.mode !== 'view') return;
-		this.base = startValues(this.spec, record);
-		this.values = { ...this.base };
-		this.#revision = typeof record['revision'] === 'number' ? record['revision'] : undefined;
+		if (this.mode === 'view') {
+			this.base = startValues(this.spec, record);
+			this.values = { ...this.base };
+			this.#revision = incomingRev;
+			return;
+		}
+		if (!merge || this.mode !== 'edit' || this.pending) return;
+		if (this.dirty && incomingRev !== undefined && this.#revision !== undefined && incomingRev !== this.#revision)
+			return;
+		const nextBase = startValues(this.spec, record);
+		const edited = changed(this.base, this.values);
+		const nextValues: Record<string, Value> = { ...nextBase };
+		for (const [field, value] of Object.entries(edited)) nextValues[field] = value;
+		this.base = nextBase;
+		this.values = nextValues;
+		this.#revision = incomingRev;
+		this.#persist();
 	}
 	/** A custom create body's presets fill untouched defaults once. */
 	prefill(values: Row): void {
@@ -314,10 +345,13 @@ export class FormState {
 			this.capabilities?.update.proposal === true
 		);
 	}
-	/** Permission plus validity: Save stays disabled while any error or broken invariant remains. */
+	/** Permission plus validity: Save stays disabled while any error or visible broken invariant remains. */
 	get can_save(): boolean {
 		return (
-			this.can_submit && !this.pending && this.errors.size === 0 && this.semantic_errors.length === 0
+			this.can_submit &&
+			!this.pending &&
+			this.errors.size === 0 &&
+			this.#visible_semantic_errors.length === 0
 		);
 	}
 	/** Registers a synchronous invariant rule, re-evaluated reactively; returns its unregister. */
@@ -383,6 +417,7 @@ export class FormState {
 		)
 			return;
 		this.values[name] = value;
+		if (!this.#touched.has(name)) this.#touched = new Set([...this.#touched, name]);
 		// a field's own problem clears as it is edited; the rest stay until the next submit
 		if (this.errors.size > 0)
 			this.errors = new Map(
@@ -452,6 +487,7 @@ export class FormState {
 		this.#persist();
 	}
 	validate(): boolean {
+		this.submitted = true;
 		this.errors = check(this.spec, this.values);
 		return this.errors.size === 0 && this.semantic_errors.length === 0;
 	}
@@ -576,6 +612,8 @@ export class FormState {
 		this.#key = crypto.randomUUID();
 		this.values = { ...this.base };
 		this.errors = new Map();
+		this.submitted = false;
+		this.#touched = new Set();
 		this.notice = null;
 		this.run = null;
 		this.#startAttempt = undefined;

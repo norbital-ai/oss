@@ -22,6 +22,8 @@ and goes full screen from its header.
 		header?: Snippet;
 		/** Header content beside the close button (record actions). */
 		actions?: Snippet;
+		/** Pinned bottom action bar below the scrollable body. */
+		footer?: Snippet | undefined;
 		/** The body, scrolled below the header. */
 		children: Snippet;
 		/** Classes on the panel. */
@@ -63,6 +65,7 @@ and goes full screen from its header.
 		title,
 		header,
 		actions,
+		footer,
 		children,
 		class: className,
 		memory
@@ -357,8 +360,8 @@ and goes full screen from its header.
 					class="text-micro text-muted-foreground truncate leading-4"
 					data-sheet-eyebrow>{eyebrow}</span
 				>{/if}
-			<div class="flex flex-wrap items-center gap-x-2">
-				<div class="min-w-0 flex-1">
+			<div class="flex flex-nowrap items-center gap-x-2">
+				<div class="min-w-0 flex-1 overflow-hidden">
 					{#if header}{@render header()}{:else if claimed}{@render claimed()}{:else if title}<h2
 							class="text-heading truncate"
 						>
@@ -418,13 +421,21 @@ and goes full screen from its header.
 		</header>
 		<div
 			class={cn(
-				'min-h-0 flex-1 overscroll-contain p-4',
+				'flex min-h-0 flex-1 flex-col overscroll-contain p-4',
 				claimed ? 'overflow-hidden' : 'overflow-auto'
 			)}
 			data-sheet-body
 		>
 			{@render children()}
 		</div>
+		{#if footer}
+			<footer
+				class="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t px-4 py-3"
+				data-sheet-footer
+			>
+				{@render footer()}
+			</footer>
+		{/if}
 	</div>
 {/if}
 

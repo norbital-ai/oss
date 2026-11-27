@@ -37,6 +37,9 @@
 		ui: {
 			bolt: view,
 			kinds: {
+				get catalog() {
+					return bolt.catalog;
+				},
 				get locale() {
 					return workspace.locale;
 				},

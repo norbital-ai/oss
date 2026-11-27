@@ -73,6 +73,7 @@ shown in place. The value in and out is Markdown, so `ReadonlyMarkdown` shows it
 	let focused = $state(false);
 	let uploading = $state(0);
 	let picker = $state<HTMLInputElement | null>(null);
+	let rootEl = $state<HTMLElement | null>(null);
 	let bubbleEl = $state<HTMLElement | null>(null);
 	let linkEditing = $state(false);
 	let linkDraft = $state('');
@@ -500,7 +501,12 @@ shown in place. The value in and out is Markdown, so `ReadonlyMarkdown` shows it
 			const rect = bubbleAnchor;
 			return rect === null ? null : { getBoundingClientRect: () => rect };
 		},
-		side: 'top',
+		side: () =>
+			bubbleAnchor !== null &&
+			rootEl !== null &&
+			bubbleAnchor.top - rootEl.getBoundingClientRect().top < 44
+				? 'bottom'
+				: 'top',
 		align: 'center',
 		side_offset: 8,
 		padding: 8,
@@ -539,6 +545,7 @@ shown in place. The value in and out is Markdown, so `ReadonlyMarkdown` shows it
 	<ReadonlyMarkdown {value} class={className} />
 {:else}
 	<div
+		bind:this={rootEl}
 		class={cn(
 			'flex min-h-48 min-w-0 flex-1 flex-col bg-transparent',
 			invalid && 'rounded-control ring-2 ring-destructive/40',

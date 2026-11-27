@@ -521,14 +521,16 @@ describe('engine/access: Authority', () => {
 				expect(sys.create).toEqual([
 					{
 						policy: '$personal_connections',
-						columns: { sys_integration: ['integration', 'name', 'owner', 'configuration'] },
+						columns: { sys_integration: ['integration', 'name', 'owner', 'configuration', 'listen'] },
 						check: false
 					}
 				]);
 				expect(sys.update).toEqual([
 					{
 						policy: '$personal_connections',
-						columns: { sys_integration: ['name', 'active', 'configuration', 'import_start'] },
+						columns: {
+							sys_integration: ['name', 'active', 'configuration', 'import_start', 'listen']
+						},
 						check: false
 					}
 				]);

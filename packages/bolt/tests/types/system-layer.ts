@@ -28,7 +28,7 @@ void member;
 void inTree;
 void notTeam;
 
-// an instance is created naming its definition (and its member, when personal, or the envoy it carries); the host's
+// an instance is created naming its definition (and its member, when personal, or its listening scope); the host's
 // fence is no column of it
 is<
 	Eq<
@@ -37,7 +37,7 @@ is<
 			readonly integration: string;
 			readonly name: string;
 			readonly owner?: Id<'sys_user'> | null;
-			readonly envoy?: string | null;
+			readonly listen?: Json;
 			readonly configuration?: Json;
 		}
 	>
@@ -48,8 +48,8 @@ is<
 		Flat<UpdateInput<'sys_integration'>>,
 		{
 			readonly name?: string;
-			readonly envoy?: string | null;
 			readonly active?: boolean;
+			readonly listen?: Json;
 			readonly configuration?: Json;
 			readonly import_start?: Json;
 		}

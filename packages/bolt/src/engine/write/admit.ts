@@ -150,8 +150,7 @@ export function admit(
 					return (
 						values['owner'] === actor.id &&
 						typeof values['integration'] === 'string' &&
-						auth.capabilities.personal_connections.includes(values['integration']) &&
-						(values['envoy'] === undefined || values['envoy'] === null)
+						auth.capabilities.personal_connections.includes(values['integration'])
 					);
 				});
 			if (!personalOk) {

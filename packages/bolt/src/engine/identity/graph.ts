@@ -66,6 +66,19 @@ export function closure(graph: TeamGraph, root: string): string[] {
 			if (team.parent === out[i] && !out.includes(id)) out.push(id);
 	return out;
 }
+/** A team's id and each ancestor's id, nearest first. */
+export function ancestors(graph: TeamGraph, root: string): string[] {
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (let id: string | null = root; id !== null && !seen.has(id); ) {
+		seen.add(id);
+		const team: Team | undefined = graph.teams[id];
+		if (team === undefined) break;
+		out.push(id);
+		id = team.parent;
+	}
+	return out;
+}
 /** A team's name and each ancestor's, nearest first. */
 export function path(graph: TeamGraph, root: string): string[] {
 	const out: string[] = [],

@@ -242,12 +242,90 @@ layer(TestWorkspace.layer({ manifest }))('personal connections and integration s
 					)
 				).toMatchObject({ _tag: 'ActRefused' });
 
-				// Bob CAN update and delete his own row
+				// Bob CAN update his own account's name, active, and listening scope (`listen`), and delete it
 				expect(
 					(
 						yield* bobCaller.act({
 							'sys_integration.update': [
-								{ target: { id: integrationId(waId) }, set: { name: 'Bob Phone', active: false } }
+								{
+									target: { id: integrationId(waId) },
+									set: {
+										name: 'Bob Phone',
+										listen: {
+											dm: { mode: 'selected', handles: ['+65 9000 0010'] },
+											groups: { mode: 'selected', threads: [{ id: 'proj-grp@g.us', label: 'Project A' }] }
+										}
+									}
+								}
+							]
+						})
+					).kind
+				).toBe('committed');
+
+				// Ingest filter: allowed DM & allowed group are stored; unrelated chats are skipped yet recorded in bolt_seen_thread
+				yield* t.receive(waId, [
+					{
+						id: 'm-dm-ok',
+						thread: '6590000010@s.whatsapp.net',
+						from: { handle: '6590000010@s.whatsapp.net', name: 'Client VIP' },
+						text: 'Allowed DM',
+						attachments: [],
+						sent_at: t.clock.now()
+					},
+					{
+						id: 'm-dm-skip',
+						thread: '6599999999@s.whatsapp.net',
+						from: { handle: '6599999999@s.whatsapp.net', name: 'Personal Friend' },
+						text: 'Ignore me',
+						attachments: [],
+						sent_at: t.clock.now()
+					},
+					{
+						id: 'm-grp-ok',
+						thread: 'proj-grp@g.us',
+						group: true,
+						title: 'Project A',
+						from: { handle: '6591111111@s.whatsapp.net', name: 'Teammate' },
+						text: 'Allowed group',
+						attachments: [],
+						sent_at: t.clock.now()
+					},
+					{
+						id: 'm-grp-skip',
+						thread: 'family-grp@g.us',
+						group: true,
+						title: 'Family Chat',
+						from: { handle: '6592222222@s.whatsapp.net', name: 'Family' },
+						text: 'Private family',
+						attachments: [],
+						sent_at: t.clock.now()
+					}
+				]);
+				const storedTexts = (
+					yield* t.db.rows(Schema.Struct({ text: Schema.NullOr(Schema.String) }), {
+						text: 'SELECT text FROM sys_message WHERE integration = $1 ORDER BY text',
+						params: [waId]
+					})
+				).map((r) => r.text);
+				expect(storedTexts).toEqual(['Allowed DM', 'Allowed group']);
+				const seenThreads = (
+					yield* t.db.rows(Schema.Struct({ thread: Schema.String, kind: Schema.String }), {
+						text: 'SELECT thread, kind FROM bolt_seen_thread WHERE instance = $1 ORDER BY thread',
+						params: [waId]
+					})
+				).map((r) => `${r.kind}:${r.thread}`);
+				expect(seenThreads).toEqual([
+					'dm:6590000010@s.whatsapp.net',
+					'dm:6599999999@s.whatsapp.net',
+					'group:family-grp@g.us',
+					'group:proj-grp@g.us'
+				]);
+
+				expect(
+					(
+						yield* bobCaller.act({
+							'sys_integration.update': [
+								{ target: { id: integrationId(waId) }, set: { active: false } }
 							]
 						})
 					).kind

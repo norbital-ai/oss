@@ -580,7 +580,6 @@ const activate = Effect.fn('bolt.hostApi.activate')(function* (ports: HostPorts)
 /** What a host's operator sends `WorkspaceBranch.integrations`, decoded once here. */
 const ConfigureChange = Schema.Struct({
 	active: Schema.Boolean,
-	envoy: Schema.NullOr(Schema.String),
 	revision: Schema.Int
 });
 const RestoreInput = Schema.Struct({

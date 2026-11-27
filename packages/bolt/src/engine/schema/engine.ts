@@ -191,6 +191,15 @@ const REGISTRY = (): readonly Private[] => [
 		]
 	},
 	{
+		name: 'bolt_seen_thread',
+		rank: 'table',
+		why: "lightweight group and DM thread metadata observed on a conversation instance, kept even when filtered by `listen` so scope pickers list real names without storing message content",
+		sql: [
+			`create table if not exists bolt_seen_thread (instance text not null references sys_integration (id) on delete cascade, thread text not null, kind text not null check (kind in ('dm', 'group')), title text, sender text, sender_name text, last_at timestamptz not null, primary key (instance, thread))`,
+			'create index if not exists bolt_seen_thread__recent on bolt_seen_thread (instance, kind, last_at desc)'
+		]
+	},
+	{
 		name: 'bolt_approvals',
 		source: true,
 		tables: ['bolt_approvals', 'bolt_approval_effect'],

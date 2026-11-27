@@ -21,13 +21,14 @@ const settings: Settings = {
 	keys: [],
 	policies: [],
 	envoys: [],
+	envoy_channels: [],
 	instances: [
 		{
 			id: 'erp',
 			name: 'Fixture ERP',
 			integration: 'erp',
 			owner: null,
-			envoy: null,
+			listen: null,
 			active: true,
 			status: { state: 'unpaired' },
 			configuration: {},
@@ -51,6 +52,7 @@ const settings: Settings = {
 			name: 'erp',
 			driver: 'http',
 			description: 'Fixture ERP',
+			declared: true,
 			conversation: false,
 			personal: false,
 			sends: false,
@@ -821,6 +823,18 @@ it('envoys render as plugin cards with the shared FSM and channel-card creation 
 							dm: { kind: 'enum', values: ['union', 'envoy'] },
 							triage: { kind: 'bool' },
 							active: { kind: 'bool' }
+						},
+						create: {
+							columns: [
+								'name',
+								'audience',
+								'task',
+								'policies',
+								'group_messages',
+								'delegation',
+								'dm',
+								'triage'
+							]
 						}
 					}
 				}
@@ -849,6 +863,29 @@ it('envoys render as plugin cards with the shared FSM and channel-card creation 
 						triage: false,
 						dm: 'union' as const,
 						active: true
+					},
+					{
+						id: 'envoy-2',
+						name: 'Analyst',
+						audience: 'private' as const,
+						task: 'Answer report questions',
+						policies: ['site_intake'],
+						group_messages: 'mention_or_reply' as const,
+						delegation: 'disabled' as const,
+						triage: false,
+						dm: 'union' as const,
+						active: true
+					}
+				],
+				envoy_channels: [
+					{
+						id: 'ec-analyst',
+						envoy: 'envoy-2',
+						integration: 'wa-analyst',
+						scope: null,
+						group_messages: null,
+						active: true,
+						revision: 1
 					}
 				],
 				integrations: [
@@ -859,8 +896,22 @@ it('envoys render as plugin cards with the shared FSM and channel-card creation 
 						description: 'WhatsApp channel',
 						scope: 'both' as const,
 						custom: false,
+						declared: true,
 						conversation: true,
 						personal: true,
+						sends: true,
+						syncs: false,
+						configuration: {}
+					},
+					{
+						name: 'discord',
+						driver: 'discord',
+						description: 'Undeclared Discord',
+						scope: 'workspace' as const,
+						custom: false,
+						declared: false,
+						conversation: true,
+						personal: false,
 						sends: true,
 						syncs: false,
 						configuration: {}
@@ -873,9 +924,29 @@ it('envoys render as plugin cards with the shared FSM and channel-card creation 
 						name: 'Main WhatsApp',
 						integration: 'whatsapp',
 						owner: null,
-						envoy: null,
+						listen: null,
 						active: true,
 						status: { state: 'connected', account: '+6590001111' },
+						configuration: {},
+						revision: 1,
+						delivery: {
+							sent: 0,
+							pending: 0,
+							retrying: 0,
+							failed: 0,
+							skipped: 0,
+							nextRetry: null,
+							lastError: null
+						}
+					},
+					{
+						id: 'wa-analyst',
+						name: 'Analyst Discord',
+						integration: 'discord',
+						owner: null,
+						listen: null,
+						active: true,
+						status: { state: 'connected', account: 'analyst#0001' },
 						configuration: {},
 						revision: 1,
 						delivery: {
@@ -898,6 +969,7 @@ it('envoys render as plugin cards with the shared FSM and channel-card creation 
 					description: 'WhatsApp channel',
 					scope: 'both' as const,
 					custom: false,
+					declared: true,
 					conversation: true,
 					personal: [],
 					workspace: [
@@ -913,6 +985,16 @@ it('envoys render as plugin cards with the shared FSM and channel-card creation 
 			]),
 		integration: (instance: string) => ({
 			...nativeApi.integration(instance),
+			status: () =>
+				Effect.succeed({
+					instance,
+					integration: instance === 'wa-analyst' ? 'discord' : 'whatsapp',
+					driver: instance === 'wa-analyst' ? 'discord' : 'whatsapp',
+					state: 'connected' as const,
+					account: instance === 'wa-analyst' ? 'analyst#0001' : '+6590001111',
+					stored: true,
+					providers: []
+				}),
 			watch: () => Stream.never
 		})
 	};
@@ -932,13 +1014,21 @@ it('envoys render as plugin cards with the shared FSM and channel-card creation 
 		await page.getByRole('tab', { name: 'Connections', exact: true }).click();
 		await expect.element(page.getByText('Installed', { exact: true })).toBeVisible();
 		await expect.element(page.getByText('Main WhatsApp', { exact: true })).toBeVisible();
+		// Undeclared built-ins and envoy-only channels must NOT appear under Connections
+		await expect.element(page.getByText('Undeclared Discord')).not.toBeInTheDocument();
+		await expect.element(page.getByText('Analyst Discord')).not.toBeInTheDocument();
 
 		await page.getByRole('tab', { name: 'Envoys', exact: true }).click();
 		await expect.element(page.getByText('Site Desk', { exact: true })).toBeVisible();
+		await expect.element(page.getByText('Analyst', { exact: true })).toBeVisible();
 		await expect.element(page.getByText('Not yet installed', { exact: true })).toBeVisible();
 		await expect.element(page.getByRole('button', { name: 'Install', exact: true })).toBeVisible();
 		await page.getByRole('button', { name: 'New envoy', exact: true }).click();
 		await expect.element(page.getByText('Choose a channel', { exact: true })).toBeVisible();
+		// Opening New envoy must NOT eagerly show red policy lint before touch or submit
+		await expect
+			.element(page.getByText('An envoy with no policy answers nobody.'))
+			.not.toBeInTheDocument();
 		await expect.element(page.getByRole('radiogroup')).toBeVisible();
 		await expect.element(page.getByRole('radio', { name: /Main WhatsApp/ })).toBeVisible();
 		await expect.element(page.getByRole('radio', { name: /WhatsApp/ }).first()).toBeVisible();

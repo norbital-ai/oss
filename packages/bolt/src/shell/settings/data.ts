@@ -1,6 +1,6 @@
 // Administrator settings reads and decoded identity/secret operations.
 import { sql } from '../../engine/db/sql.ts';
-import { Effect, Schema } from 'effect';
+import { Effect, Option, Schema } from 'effect';
 import type { EngineError } from '../../engine/errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { SecretsShape } from '../../engine/secrets.ts';
@@ -9,10 +9,12 @@ import type { Authority } from '../../engine/contracts.ts';
 import type { Json } from '../../decl/values.ts';
 import {
 	allows_personal,
+	allows_workspace,
 	driver_name,
 	scope_of,
 	type IntegrationScope
 } from '../../decl/runtime/integration.ts';
+import { decodeListeningScope, type ListeningScope } from '../../engine/integrations/scope.ts';
 import type { Fields } from '@norbital-ai/store/kind';
 import { SYSTEM } from '../../system/index.ts';
 import { conversational } from '../../engine/integrations/instances.ts';
@@ -40,10 +42,19 @@ const InstanceRow = Schema.Struct({
 	name: Schema.String,
 	integration: Schema.String,
 	owner: nullableText,
-	envoy: nullableText,
 	active: Schema.Boolean,
+	listen: Schema.NullOr(Schema.Json),
 	status: Schema.Json,
 	configuration: Schema.Json,
+	revision: Schema.Number
+});
+const EnvoyChannelRow = Schema.Struct({
+	id: Schema.String,
+	envoy: Schema.String,
+	integration: Schema.String,
+	scope: Schema.NullOr(Schema.Json),
+	group_messages: Schema.NullOr(Schema.Literals(['disabled', 'mention_or_reply', 'all'])),
+	active: Schema.Boolean,
 	revision: Schema.Number
 });
 const EnvoyRow = Schema.Struct({
@@ -83,6 +94,16 @@ export type Settings = {
 		dm: 'union' | 'envoy';
 		active: boolean;
 	}[];
+	/** Envoy-to-channel bindings (many-to-many with per-binding listening scope). */
+	envoy_channels: {
+		id: string;
+		envoy: string;
+		integration: string;
+		scope: ListeningScope | null;
+		group_messages: 'disabled' | 'mention_or_reply' | 'all' | null;
+		active: boolean;
+		revision: number;
+	}[];
 	/**
 	 * Every durable runtime integration account: `status` is the host's last transition, `delivery` its last day of outbound deliveries.
 	 */
@@ -91,8 +112,8 @@ export type Settings = {
 		name: string;
 		integration: string;
 		owner: string | null;
-		envoy: string | null;
 		active: boolean;
+		listen: ListeningScope | null;
 		status: Json;
 		configuration: Json;
 		/** The row's revision as read: a delete is guarded by it. */
@@ -113,6 +134,8 @@ export type Settings = {
 		description: string;
 		scope?: IntegrationScope;
 		custom?: boolean;
+		/** `true` when this workspace explicitly uses it as a workspace connection (custom `src/integration/*` or listed in `workspace.connections`). */
+		declared: boolean;
 		conversation: boolean;
 		personal: boolean;
 		sends: boolean;
@@ -149,8 +172,8 @@ export const settings = Effect.fn('shell.settings')(function* (
 ) {
 	const now = yield* h.now;
 	yield* requireAdmin(auth);
-	const [users, invitations, keys, audit, deliveries, signup, instances, envoys, retention] = yield* h.db.read(
-		[
+	const [users, invitations, keys, audit, deliveries, signup, instances, envoys, envoyChannels, retention] =
+		yield* h.db.read([
 			// administrators first, then staff, then external members; by name, else address. Anonymous visitors are no members.
 			sql(`SELECT u.id, u.email, u.phone, u.telegram, u.slack, u.discord, u.name, u.kind, u.active, u.admin, u.team, u.last_seen::text AS last_seen
 			FROM sys_user u WHERE u.kind <> 'anonymous' ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, u.phone, '')), u.id`),
@@ -174,14 +197,16 @@ export const settings = Effect.fn('shell.settings')(function* (
 			),
 			sql(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
 			sql(
-				'SELECT id, name, integration, owner, envoy, active, status, configuration, revision::int AS revision FROM sys_integration ORDER BY name, id'
+				'SELECT id, name, integration, owner, active, listen, status, configuration, revision::int AS revision FROM sys_integration ORDER BY name, id'
 			),
 			sql(
-				'SELECT id, name, audience, task, policies, group_messages, delegation, triage, dm, active FROM sys_envoy ORDER BY name, id'
+				'SELECT id::text AS id, name, audience, task, policies, group_messages, delegation, triage, dm, active FROM sys_envoy ORDER BY name, id'
+			),
+			sql(
+				'SELECT id::text AS id, envoy::text AS envoy, integration, scope, group_messages, active, revision::int AS revision FROM sys_envoy_channel ORDER BY id'
 			),
 			sql(`SELECT coalesce((SELECT value FROM sys_config WHERE key = '${RETENTION_KEY}'), '{}') AS value`)
-		]
-	);
+		]);
 	const idle: Delivery = {
 		sent: 0,
 		pending: 0,
@@ -207,6 +232,8 @@ export const settings = Effect.fn('shell.settings')(function* (
 	);
 	const status = secrets === undefined ? null : yield* secrets.status('workspace');
 	const runtimeEnvoys = yield* decode(EnvoyRow, envoys?.rows ?? []);
+	const runtimeChannels = yield* decode(EnvoyChannelRow, envoyChannels?.rows ?? []);
+	const declaredWorkspace = new Set(m.workspace.connections ?? []);
 	const graph = yield* teamGraph(h.db);
 	return {
 		members: yield* decode(Member, users?.rows ?? []),
@@ -236,8 +263,18 @@ export const settings = Effect.fn('shell.settings')(function* (
 			dm: e.dm === 'envoy' ? ('envoy' as const) : ('union' as const),
 			active: e.active
 		})),
+		envoy_channels: runtimeChannels.map((c) => ({
+			id: c.id,
+			envoy: c.envoy,
+			integration: c.integration,
+			scope: Option.getOrElse(decodeListeningScope(c.scope), () => null),
+			group_messages: c.group_messages,
+			active: c.active,
+			revision: c.revision
+		})),
 		instances: (yield* decode(InstanceRow, instances?.rows ?? [])).map((i) => ({
 			...i,
+			listen: Option.getOrElse(decodeListeningScope(i.listen), () => null),
 			configuration: i.configuration ?? {},
 			delivery: delivery.get(i.id) ?? idle
 		})),
@@ -268,6 +305,9 @@ export const settings = Effect.fn('shell.settings')(function* (
 				description: d.description,
 				scope: scope_of(d),
 				custom: Object.hasOwn(m.integrations, name),
+				declared:
+					allows_workspace(d) &&
+					(Object.hasOwn(m.integrations, name) || declaredWorkspace.has(name)),
 				conversation: conversational(d),
 				personal: allows_personal(d),
 				sends:

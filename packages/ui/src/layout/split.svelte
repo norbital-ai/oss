@@ -85,6 +85,7 @@ The Split measures its own width, so one in a narrow cell collapses even on a wi
 	)}
 	style:min-height={size === 'fill' ? min_height : undefined}
 	data-layout="split"
+	data-size={size}
 	data-collapse={collapse}
 	data-collapse-at={collapse_at}
 	{...restProps}
@@ -150,6 +151,13 @@ The Split measures its own width, so one in a narrow cell collapses even on a wi
 	.split {
 		container-type: inline-size;
 	}
+	.split[data-size='fill']:not([data-collapse='switch']) {
+		grid-template-rows: minmax(0, 1fr);
+	}
+	.split[data-size='fill'] > .split__pane {
+		display: flex;
+		flex-direction: column;
+	}
 	.split[data-collapse='switch'] {
 		grid-template-rows: auto minmax(0, 1fr);
 	}
@@ -157,6 +165,11 @@ The Split measures its own width, so one in a narrow cell collapses even on a wi
 		grid-row: 1 / -1;
 	}
 	@container (max-width: 39.999rem) {
+		.split[data-collapse-at='narrow'][data-collapse='stack'][data-size='fill'] {
+			height: auto;
+			flex: none;
+			grid-template-rows: auto;
+		}
 		.split[data-collapse-at='narrow']:not([data-collapse='none']) > .split__pane {
 			grid-column: 1 / -1;
 		}
@@ -171,6 +184,11 @@ The Split measures its own width, so one in a narrow cell collapses even on a wi
 		}
 	}
 	@container (max-width: 29.999rem) {
+		.split[data-collapse-at='compact'][data-collapse='stack'][data-size='fill'] {
+			height: auto;
+			flex: none;
+			grid-template-rows: auto;
+		}
 		.split[data-collapse-at='compact']:not([data-collapse='none']) > .split__pane {
 			grid-column: 1 / -1;
 		}

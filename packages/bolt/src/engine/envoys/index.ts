@@ -11,7 +11,7 @@
 // sender header (a steer: the running turn takes it at its next step); its turn holds the authority `identity/actor.ts`
 // compiles — a group's the envoy's policies alone, a linked member's DM theirs joined (`dm: 'union'`) or bound (`'envoy'`).
 import { sql } from '../db/sql.ts';
-import { Clock, Context, Effect, FiberSet, Layer, Schema } from 'effect';
+import { Clock, Context, Effect, FiberSet, Layer, Option, Schema } from 'effect';
 import { driver_name, type HandleKind } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { charges_for, RateWindows } from '../access/rate.ts';
@@ -37,11 +37,17 @@ import type { EngineError } from '../errors.ts';
 import { TurnHandlers } from '../agent/turns.ts';
 import { Authorities } from '../identity/actor.ts';
 import { conversationOf, definitionOf } from '../integrations/instances.ts';
+import {
+	decodeListeningScope,
+	resolveEnvoyBinding,
+	type EnvoyBindingCandidate
+} from '../integrations/scope.ts';
 import { envoySpec, type EnvoySpec } from './spec.ts';
 import { DELIVER, EPOCH } from '../integrations/outbound.ts';
 import { Chain } from '../write/sql.ts';
+import { capturePiece } from '../db/captured.ts';
 import { enqueue, next_due } from '../runs/queue.ts';
-import { canonicalHandle, memberByHandle } from './senders.ts';
+import { canonicalHandle, directoryMatchesForHandles, memberByHandle } from './senders.ts';
 import { Logs } from '../ports.ts';
 export type EnvoysConfig = {
 	engine: Pick<AgentEngine, 'manifest' | 'db' | 'live'>;
@@ -103,8 +109,15 @@ const AdmissionRow = Schema.Struct({
 	kind: Schema.NullOr(Schema.String),
 	status: Schema.String,
 	definition: Schema.String,
-	envoy: Schema.NullOr(Schema.String),
+	conversation_envoy: Schema.NullOr(Schema.String),
 	serving: Schema.Boolean
+});
+const BindingRow = Schema.Struct({
+	id: Schema.String,
+	envoy: Schema.String,
+	audience: Schema.Literals(['private', 'public']),
+	scope: Schema.NullOr(Schema.Json),
+	group_messages: Schema.NullOr(Schema.Literals(['disabled', 'mention_or_reply', 'all']))
 });
 const ShippingRow = Schema.Struct({
 	integration: Schema.String,
@@ -191,7 +204,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		const [res] = yield* db.read([
 			sql(
 				`SELECT m.integration, m.conversation, m.sender, m.sender_name, coalesce(m.text, '') AS text, m.invocation, m.email->>'subject' AS subject, m.email->>'authenticated' AS authenticated,
-				m.addressed IS NULL AND m.role IS NULL AND m.deleted_at IS NULL AS fresh, c.thread, c.kind, c.status, i.integration AS definition, i.envoy, i.active AND i.owner IS NULL AS serving
+				m.addressed IS NULL AND m.role IS NULL AND m.deleted_at IS NULL AS fresh, c.thread, c.kind, c.status, c.envoy AS conversation_envoy, i.integration AS definition, i.active AND i.owner IS NULL AS serving
 			FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation JOIN sys_integration i ON i.id = m.integration WHERE m.id = $1`,
 				id
 			)
@@ -203,22 +216,59 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		const r = yield* Schema.decodeUnknownEffect(AdmissionRow)(raw).pipe(
 			Effect.mapError((error) => BoltError.make('corrupt', 'decode', error.message, error))
 		);
-		// decided once: a retried run finds the row marked; a paused or redeployed instance answers nothing
-		if (
-			!r.fresh ||
-			!r.serving ||
-			r.envoy === null
-		)
-			return { admission: 'ignored' };
-		const envoy = r.envoy,
-			spec = yield* envoySpec(db, envoy);
+		// decided once: a retried run finds the row marked; a paused or personal instance answers nothing
+		if (!r.fresh || !r.serving) return { admission: 'ignored' };
 		const name = r.definition,
 			def = definitionOf(m, name),
 			conv = def === undefined ? undefined : conversationOf(def);
-		if (spec === undefined || def === undefined || conv === undefined) {
-			// fail closed: an instance deployed to an envoy this release no longer declares answers nobody
+		if (def === undefined || conv === undefined) return { admission: 'ignored' };
+		if (r.thread === null)
+			return yield* BoltError.make('corrupt', 'admission', 'The incoming conversation has no provider thread.');
+		const bindingRows = yield* db.rows(
+			BindingRow,
+			sql(
+				`SELECT ec.id::text AS id, ec.envoy::text AS envoy, e.audience, ec.scope, ec.group_messages
+				 FROM sys_envoy_channel ec
+				 JOIN sys_envoy e ON e.id = ec.envoy
+				 WHERE ec.integration = $1 AND ec.active AND e.active AND cardinality(e.policies) > 0
+				 ORDER BY ec.id`,
+				r.integration
+			)
+		);
+		if (bindingRows.length === 0) return { admission: 'ignored' };
+		const group = r.kind === 'group';
+		const email = conv.kind === 'email';
+		const proven = !email || r.authenticated === 'true';
+		const sender = r.sender ?? '';
+		const now = yield* clock;
+		const directory =
+			!group && proven && sender !== ''
+				? yield* directoryMatchesForHandles(db, m.workspace, conv.handle, [sender], now)
+				: { members: [], teams: [] };
+		const candidates: EnvoyBindingCandidate[] = bindingRows.map((row) => ({
+			id: row.id,
+			envoy: row.envoy,
+			audience: row.audience,
+			scope: Option.getOrElse(decodeListeningScope(row.scope), () => null),
+			group_messages: row.group_messages
+		}));
+		const matched = resolveEnvoyBinding(candidates, {
+			group,
+			thread: r.thread,
+			handles: sender === '' ? [] : [sender],
+			handleKind: conv.handle,
+			members: directory.members,
+			teams: directory.teams
+		});
+		if (matched === undefined) {
+			yield* mark(id, 'addressed = false');
+			return { admission: 'ambient' };
+		}
+		const envoy = matched.envoy;
+		const baseSpec = yield* envoySpec(db, envoy);
+		if (baseSpec === undefined) {
 			yield* logs.write({
-				at: yield* clock,
+				at: now,
 				severity: 'warn',
 				event: 'envoy.unknown',
 				invocation: id,
@@ -229,21 +279,33 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 			});
 			return { admission: 'ignored' };
 		}
-		if (r.thread === null)
-			return yield* BoltError.make('corrupt', 'admission', 'The incoming conversation has no provider thread.');
+		const spec: EnvoySpec =
+			matched.group_messages === null
+				? baseSpec
+				: { ...baseSpec, group_messages: matched.group_messages };
+		if (r.conversation_envoy !== envoy) {
+			const stamp = new Chain();
+			capturePiece(
+				stamp,
+				'conv_envoy',
+				'sys_conversation',
+				`UPDATE sys_conversation SET envoy = ${stamp.p(envoy)} WHERE id = ${stamp.p(r.conversation)} AND envoy IS DISTINCT FROM ${stamp.p(envoy)}`
+			);
+			yield* nativeCommit(db.write, cfg.engine.live.publish, stamp, CapturedResult);
+		}
 		return {
 			admission: yield* decide(envoy, spec, {
 				row: id,
 				instance: r.integration,
 				conversation: r.conversation,
 				thread: r.thread,
-				group: r.kind === 'group',
-				email: conv.kind === 'email',
-				proven: conv.kind !== 'email' || r.authenticated === 'true',
+				group,
+				email,
+				proven,
 				status: r.status,
 				handle: conv.handle,
 				label: driver_name(def),
-				sender: r.sender ?? '',
+				sender,
 				sender_name: r.sender_name,
 				text: r.text,
 				invocation: r.invocation ?? 'direct',

@@ -239,7 +239,9 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				: yield* Effect.map(
 						x.engine.db.read([
 							{
-								text: 'SELECT id, name, integration, envoy FROM sys_integration ORDER BY name',
+								text: `SELECT i.id, i.name, i.integration,
+									coalesce((SELECT array_agg(ec.envoy::text ORDER BY ec.envoy) FROM sys_envoy_channel ec WHERE ec.integration = i.id AND ec.active), ARRAY[]::text[]) AS envoys
+									FROM sys_integration i ORDER BY i.name`,
 								params: []
 							},
 							{
@@ -520,7 +522,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				(i.envoy === undefined || i.integration === undefined
 					? undefined
 					: (yield* e.db.rows(InstanceRow, {
-							text: 'SELECT id FROM sys_integration WHERE envoy = $1 AND integration = $2 ORDER BY id LIMIT 1',
+							text: 'SELECT i.id FROM sys_envoy_channel ec JOIN sys_integration i ON i.id = ec.integration WHERE ec.envoy::text = $1 AND i.integration = $2 AND ec.active ORDER BY i.id LIMIT 1',
 							params: [i.envoy, i.integration]
 						}))[0]?.id);
 			if (existing !== undefined) {
@@ -550,7 +552,6 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 								integration: i.integration,
 								name: i.name ?? i.integration,
 								...(i.owner === 'me' ? { owner: me } : {}),
-								...(i.envoy === undefined ? {} : { envoy: i.envoy }),
 								...(i.configuration === undefined ? {} : { configuration: i.configuration })
 							}
 						]
@@ -562,9 +563,23 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				isObj(answer) && answer['kind'] === 'committed' && isList(answer['records'])
 					? answer['records'].find((r) => isObj(r) && r['model'] === 'sys_integration')
 					: undefined;
-			return isObj(made) && typeof made['id'] === 'string'
-				? held(made['id'], i.integration)
-				: ok(answer);
+			if (isObj(made) && typeof made['id'] === 'string') {
+				if (i.envoy !== undefined) {
+					const bindAnswer = yield* perform(
+						x,
+						'act',
+						{
+							acts: {
+								'sys_envoy_channel.create': [{ envoy: i.envoy, integration: made['id'] }]
+							}
+						},
+						`${id}:bind`
+					);
+					if (!isObj(bindAnswer) || bindAnswer['kind'] !== 'committed') return ok(bindAnswer);
+				}
+				return held(made['id'], i.integration);
+			}
+			return ok(answer);
 		});
 
 	if (agent && sync_controls.length > 0)

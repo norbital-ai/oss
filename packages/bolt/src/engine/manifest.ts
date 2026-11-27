@@ -169,6 +169,8 @@ const Workspace = Schema.Struct({
 		model: Schema.String,
 		bundles: Schema.optionalKey(Schema.Struct({ assignments: Schema.String, levels: Schema.String }))
 	})),
+	/** Built-in workspace integrations declared for Settings → Integrations → Connections. */
+	connections: Schema.optionalKey(Schema.Array(Schema.String)),
 	/** Rate limits by policy: what a caller holding that policy may send. */
 	limits: Schema.optionalKey(Schema.Record(Schema.String, PolicyLimits))
 });

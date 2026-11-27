@@ -8,6 +8,8 @@
 		readonly independent_form: boolean;
 		readonly form_actions: boolean;
 		readonly lock: string | undefined;
+		readonly auto_save: boolean | number | undefined;
+		readonly custom_header: boolean;
 		on_native_action(): void;
 		on_form_action(): void;
 	};
@@ -21,6 +23,8 @@
 		independent_form?: boolean;
 		form_actions?: boolean;
 		lock?: string;
+		auto_save?: boolean | number;
+		custom_header?: boolean;
 		on_native_action?: () => void;
 		on_form_action?: () => void;
 		on_done?: (outcome: Outcome) => void;
@@ -45,6 +49,8 @@
 		independent_form = false,
 		form_actions = false,
 		lock,
+		auto_save,
+		custom_header = false,
 		on_native_action,
 		on_form_action,
 		on_done
@@ -68,6 +74,12 @@
 		},
 		get lock() {
 			return lock;
+		},
+		get auto_save() {
+			return auto_save;
+		},
+		get custom_header() {
+			return custom_header;
 		},
 		on_native_action: () => on_native_action?.(),
 		on_form_action: () => on_form_action?.()

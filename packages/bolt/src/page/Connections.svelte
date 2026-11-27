@@ -1,20 +1,22 @@
 <!--
 	@component Reusable plugin-style connection grid driven by Bolt's shared connection FSM.
 	Supports `scope="personal"` (member-owned accounts, defaulting to `ctx.personal_connections`) and
-	`scope="workspace"` (all `owner = null` accounts, including envoy-backed ones badged with their envoy).
+	`scope="workspace"` (declared workspace accounts, `owner = null`).
 	Handles querying `sys_integration`, `integration_offers()`, install/uninstall/resume, and inline `configuration`
-	editing inside each card's Manage Sheet.
+	and conversation `listen` (listening scope) editing inside each card's Manage Sheet.
 -->
 <script lang="ts">
 	import { Effect, Schema } from 'effect';
 	import type { Snippet } from 'svelte';
 	import { observe_once } from '@norbital-ai/ui/effect';
-	import { Alert, Badge, EmptyState, Field, Form, Spinner, type UiContext } from '@norbital-ai/ui';
-	import { Cluster, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Alert, EmptyState, Field, Form, Spinner, type UiContext } from '@norbital-ai/ui';
+	import { Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import type { PersonalIntegrationName, WorkspaceIntegrationName } from '../decl/names.ts';
+	import { listeningScopeOf } from '../engine/integrations/scope.ts';
 	import type { ShellBolt } from '../shell/runtime.ts';
 	import IntegrationCard from './IntegrationCard.svelte';
 	import ConfigurationFields from '../shell/integration/ConfigurationFields.svelte';
+	import ListeningScopeEditor from '../shell/integration/ListeningScopeEditor.svelte';
 	import { SHELL_ZH, humanise_word } from '../shell/i18n.ts';
 	import { driverIcon, driverLabel } from '../shell/integration/setup.ts';
 
@@ -42,8 +44,6 @@
 					>
 			  >
 			| undefined;
-		/** Optional map of envoy id → display name for workspace cards attached to an envoy. */
-		envoys?: Readonly<Record<string, string>> | undefined;
 		/** Optional extra settings rendered inside a connection's Manage Sheet (`close` closes the card Sheet before opening another). */
 		manage?:
 			| Snippet<[{ integration: string; instance: string; close: () => void }]>
@@ -65,7 +65,7 @@
 		| (BaseProps & {
 				/** `'workspace'`: shared workspace accounts (`owner = null`). */
 				scope: 'workspace';
-				/** Explicit workspace definitions to offer; defaults to installed rows + custom workspace defs. */
+				/** Explicit workspace definitions to offer; defaults to declared workspace definitions and installed rows. */
 				integrations?: readonly WorkspaceIntegrationName[] | undefined;
 		  });
 
@@ -74,7 +74,6 @@
 		scope = 'personal',
 		integrations,
 		labels,
-		envoys,
 		manage,
 		translate,
 		empty_title,
@@ -92,6 +91,8 @@
 	const canCreate = $derived(ctx.catalog?.['sys_integration']?.create !== undefined);
 	const canUpdate = $derived(ctx.catalog?.['sys_integration']?.update !== undefined);
 	const canDelete = $derived(ctx.catalog?.['sys_integration']?.delete !== undefined);
+	const canReadTeams = $derived(ctx.catalog?.['sys_team'] !== undefined);
+	const canReadMembers = $derived(ctx.catalog?.['sys_user'] !== undefined);
 
 	const offers = observe_once(() => ctx.integration_offers());
 	const offerOf = (integration: string) =>
@@ -106,11 +107,48 @@
 							scope === 'personal' && me !== null
 								? { owner: { eq: me } }
 								: { owner: { is_null: true } },
-						fields: ['name', 'integration', 'owner', 'envoy', 'active', 'status', 'revision'],
+						fields: ['name', 'integration', 'owner', 'active', 'status', 'listen', 'revision'],
 						order_by: 'name',
 						limit: 100
 					}
 				})
+	);
+
+	const directoryQuery = $derived(
+		ctx.ui.bolt === undefined || (!canReadTeams && !canReadMembers)
+			? null
+			: ctx.ui.bolt.query({
+					...(canReadTeams
+						? { sys_team: { fields: ['name'], order_by: 'name', limit: 200 } }
+						: {}),
+					...(canReadMembers
+						? {
+								sys_user: {
+									where: { active: { eq: true } },
+									fields: ['name', 'email', 'phone'],
+									order_by: 'name',
+									limit: 500
+								}
+							}
+						: {})
+				})
+	);
+
+	const TeamRowSchema = Schema.Struct({ id: Schema.String, name: Schema.String });
+	const MemberRowSchema = Schema.Struct({
+		id: Schema.String,
+		name: Schema.NullOr(Schema.String),
+		email: Schema.NullOr(Schema.String),
+		phone: Schema.NullOr(Schema.String)
+	});
+	const isTeamRow = Schema.is(TeamRowSchema);
+	const isMemberRow = Schema.is(MemberRowSchema);
+
+	const teamOptions = $derived(
+		(directoryQuery?.current?.['sys_team']?.rows ?? []).filter(isTeamRow)
+	);
+	const memberOptions = $derived(
+		(directoryQuery?.current?.['sys_user']?.rows ?? []).filter(isMemberRow)
 	);
 
 	const AccountRowSchema = Schema.Struct({
@@ -118,9 +156,9 @@
 		name: Schema.String,
 		integration: Schema.String,
 		owner: Schema.NullOr(Schema.String),
-		envoy: Schema.NullOr(Schema.String),
 		active: Schema.Boolean,
 		status: Schema.NullOr(Schema.Json),
+		listen: Schema.NullOr(Schema.Json),
 		revision: Schema.Number
 	});
 	type AccountRow = typeof AccountRowSchema.Type;
@@ -146,7 +184,7 @@
 					...new Set([
 						...rows.map((row) => row.integration),
 						...(offers.current ?? [])
-							.filter((offer) => offer.custom === true && offer.scope !== 'personal')
+							.filter((offer) => offer.declared === true)
 							.map((offer) => offer.integration)
 					])
 				]
@@ -241,26 +279,47 @@
 {#snippet configAndManage(account: AccountRow, close: () => void)}
 	{@const offer = offerOf(account.integration)}
 	{@const configFields = offer?.configuration ?? {}}
-	{@const hasConfig = Object.keys(configFields).length > 0 && canUpdate && (scope === 'personal' || admin)}
+	{@const canEdit = canUpdate && (scope === 'personal' || admin)}
+	{@const hasConfig = Object.keys(configFields).length > 0 && canEdit}
+	{@const hasListen = offer?.conversation === true && canEdit}
 	<Stack gap="md">
-		{#if hasConfig}
-			<Form {ctx} of="sys_integration" mode="update" id={account.id} submit={t('Save')}>
-				<Field {ctx} name="configuration" label={t('Configuration')}>
-					{#snippet editor(field)}
-						<ConfigurationFields
-							{ctx}
-							integration={account.integration}
-							fields={configFields}
-							{field}
-							{t}
-							translate={translate ?? t}
-						/>
-					{/snippet}
-				</Field>
+		{#if hasConfig || hasListen}
+			<Form {ctx} of="sys_integration" mode="update" id={account.id} size="content" submit={t('Save')}>
+				{#if hasConfig}
+					<Field {ctx} name="configuration" label={t('Configuration')}>
+						{#snippet editor(field)}
+							<ConfigurationFields
+								{ctx}
+								integration={account.integration}
+								fields={configFields}
+								{field}
+								{t}
+								translate={translate ?? t}
+							/>
+						{/snippet}
+					</Field>
+				{/if}
+				{#if hasListen}
+					<Field {ctx} name="listen" label={t('Listening scope')}>
+						{#snippet editor(field)}
+							<ListeningScopeEditor
+								driver={offer?.driver ?? account.integration}
+								instance={account.id}
+								client={ctx.integration(account.id)}
+								value={listeningScopeOf(field.value)}
+								on_change={(next) => field.on_change(next)}
+								teams={teamOptions}
+								members={memberOptions}
+								disabled={field.disabled}
+								{t}
+							/>
+						{/snippet}
+					</Field>
+				{/if}
 			</Form>
 		{/if}
 		{#if manage !== undefined}
-			<div class={hasConfig ? 'border-t border-border pt-4' : undefined}>
+			<div class={hasConfig || hasListen ? 'border-t border-border pt-4' : undefined}>
 				{@render manage({ integration: account.integration, instance: account.id, close })}
 			</div>
 		{/if}
@@ -297,6 +356,7 @@
 					{@const account = rows.find((row) => row.integration === kind) ?? null}
 					{@const offer = offerOf(kind)}
 					{@const hasConfig = Object.keys(offer?.configuration ?? {}).length > 0 && canUpdate}
+					{@const hasListen = offer?.conversation === true && canUpdate}
 					{#snippet personalManage({ close }: { close: () => void })}
 						{#if account !== null}
 							{@render configAndManage(account, close)}
@@ -317,7 +377,9 @@
 						create={me !== null && canCreate ? () => install(kind, me) : undefined}
 						on_delete={account !== null && canDelete ? () => uninstall(account) : undefined}
 						on_resume={account !== null && canUpdate ? () => resume(account) : undefined}
-						manage={account !== null && (hasConfig || manage !== undefined) ? personalManage : undefined}
+						manage={account !== null && (hasConfig || hasListen || manage !== undefined)
+							? personalManage
+							: undefined}
 						readonly={me === null || (!canCreate && !canUpdate)}
 						locale={ctx.locale}
 						{t}
@@ -338,16 +400,9 @@
 				{@const existing = rows.filter((row) => row.integration === kind)}
 				{@const offer = offerOf(kind)}
 				{@const hasConfig = Object.keys(offer?.configuration ?? {}).length > 0 && admin && canUpdate}
+				{@const hasListen = offer?.conversation === true && admin && canUpdate}
 				{#if existing.length > 0}
 					{#each existing as account (account.id)}
-						{@const envoyName = account.envoy === null ? null : (envoys?.[account.envoy] ?? null)}
-						{#snippet workspaceMeta()}
-							<Cluster gap="xs">
-								<Badge variant="outline">
-									{envoyName === null ? t('Envoy') : `${t('Envoy')} · ${envoyName}`}
-								</Badge>
-							</Cluster>
-						{/snippet}
 						{#snippet workspaceManage({ close }: { close: () => void })}
 							{@render configAndManage(account, close)}
 						{/snippet}
@@ -363,8 +418,7 @@
 							setup={setupEntryOf(kind)}
 							on_delete={admin && canDelete ? () => uninstall(account) : undefined}
 							on_resume={admin && canUpdate ? () => resume(account) : undefined}
-							meta={account.envoy !== null ? workspaceMeta : undefined}
-							manage={hasConfig || manage !== undefined ? workspaceManage : undefined}
+							manage={hasConfig || hasListen || manage !== undefined ? workspaceManage : undefined}
 							readonly={!admin}
 							locale={ctx.locale}
 							{t}

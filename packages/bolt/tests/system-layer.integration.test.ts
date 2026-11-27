@@ -250,7 +250,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 	);
 
 	it.effect(
-		"deploys a runtime envoy only on a workspace conversation instance; preserves definition and owner; deletes ordinary runtime accounts",
+		"binds a runtime envoy only on a workspace conversation instance via sys_envoy_channel; validates listen scope; preserves definition and owner; deletes ordinary runtime accounts",
 		() =>
 			Effect.gen(function* () {
 				const { read, run, created } = yield* SystemFixture;
@@ -265,31 +265,65 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					owner: ada
 				});
 				expect(
-					yield* run({ verb: 'update', input: [{ target: { id: erp }, set: { envoy: deskEnvoy } }] })
+					yield* run({
+						model: 'sys_envoy_channel',
+						verb: 'create',
+						input: [{ envoy: deskEnvoy, integration: erp }]
+					})
 				).toMatchObject({
 					kind: 'refused',
-					field: 'envoy',
+					field: 'integration',
 					message: expect.stringMatching(/conversation/)
 				});
 				expect(
-					yield* run({ verb: 'update', input: [{ target: { id: personal }, set: { envoy: deskEnvoy } }] })
+					yield* run({
+						model: 'sys_envoy_channel',
+						verb: 'create',
+						input: [{ envoy: deskEnvoy, integration: personal }]
+					})
 				).toMatchObject({
 					kind: 'refused',
-					field: 'envoy',
+					field: 'integration',
 					message: expect.stringMatching(/personal/)
 				});
 				expect(
-					yield* run({ verb: 'update', input: [{ target: { id: 'desk' }, set: { envoy: 'nope' } }] })
+					yield* run({
+						model: 'sys_envoy_channel',
+						verb: 'create',
+						input: [{ envoy: '0199a000-0000-7000-8000-0000000000ff', integration: 'desk' }]
+					})
 				).toMatchObject({ kind: 'refused', field: 'envoy' });
 				expect(
-					yield* run({ verb: 'update', input: [{ target: { id: 'desk' }, set: { envoy: deskEnvoy } }] })
+					yield* run({
+						model: 'sys_envoy_channel',
+						verb: 'create',
+						input: [
+							{
+								envoy: deskEnvoy,
+								integration: 'desk',
+								scope: { dm: { mode: 'selected', handles: ['+65 9000 0001'] }, groups: { mode: 'off' } }
+							}
+						]
+					})
 				).toMatchObject({ kind: 'committed' });
 				expect(
 					yield* read(
-						Schema.Struct({ envoy: Schema.NullOr(Schema.String) }),
-						`select envoy from sys_integration where id = 'desk'`
+						Schema.Struct({ envoy: Schema.String, integration: Schema.String }),
+						`select envoy::text as envoy, integration from sys_envoy_channel where integration = 'desk'`
 					)
-				).toEqual([{ envoy: deskEnvoy }]);
+				).toEqual([{ envoy: deskEnvoy, integration: 'desk' }]);
+				expect(
+					yield* run({
+						verb: 'update',
+						input: [{ target: { id: erp }, set: { listen: { dm: { mode: 'off' } } } }]
+					})
+				).toMatchObject({ kind: 'refused', field: 'listen' });
+				expect(
+					yield* run({
+						verb: 'update',
+						input: [{ target: { id: personal }, set: { listen: { groups: { mode: 'off' } } } }]
+					})
+				).toMatchObject({ kind: 'committed' });
 
 				expect(
 					yield* run({

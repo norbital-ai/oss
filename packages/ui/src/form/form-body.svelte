@@ -222,9 +222,12 @@
 		<div role="status" aria-busy="true"><Spinner /></div>
 	{:else}
 		<!-- the gutter is kept: a section opening past the fold never narrows the body under a classic scrollbar -->
-		<div class="min-h-0 flex-1 overflow-auto pb-4 [scrollbar-gutter:stable]" data-form-body>
+		<div
+			class="min-h-0 flex-1 overflow-auto pb-4 [scrollbar-gutter:stable] has-[>[data-form-content]>[data-layout=split][data-size=fill]]:pb-0"
+			data-form-body
+		>
 			<!-- a column the body's height bounds: open sections share it and scroll inside themselves -->
-			<div class="flex h-full flex-col gap-4">
+			<div class="flex h-full min-h-0 flex-col gap-4" data-form-content>
 				{#if form.capabilities === null}<Alert variant="secondary">{t('not_found')}</Alert>{/if}
 				{#if children}
 					{@render children(form)}

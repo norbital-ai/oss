@@ -4486,10 +4486,9 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 		x.engine.db.rows(
 			Schema.Struct({
 				integration: Schema.String,
-				owner: Schema.NullOr(Schema.String),
-				envoy: Schema.NullOr(Schema.String)
+				owner: Schema.NullOr(Schema.String)
 			}),
-			{ text: 'SELECT integration, owner, envoy FROM sys_integration WHERE id = $1', params: [id] }
+			{ text: 'SELECT integration, owner FROM sys_integration WHERE id = $1', params: [id] }
 		);
 	const user = (x: ToolContext, id: string, email: string, admin = false) =>
 		x.engine.db.write({
@@ -4509,7 +4508,7 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 				const held = Schema.decodeUnknownSync(Held)(answer);
 				expect(held.input.integration).toBe('github');
 				expect(yield* row(x, held.input.instance)).toEqual([
-					{ integration: 'github', owner: null, envoy: null }
+					{ integration: 'github', owner: null }
 				]);
 				expect(JSON.stringify(answer)).not.toMatch(/credential|token|secret/i);
 				// a channel sender never gets the tool; nor does a turn with no card to show
@@ -4550,7 +4549,7 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 						})
 					);
 					expect(yield* row(x, held.input.instance)).toEqual([
-						{ integration: 'crm', owner: null, envoy: null }
+						{ integration: 'crm', owner: null }
 					]);
 					expect(yield* result(x, 'describe_workspace', {})).toEqual({
 					result: expect.stringContaining('crm "The CRM account."')
@@ -4568,7 +4567,7 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 			yield* user(x, una, 'una@example.test', true);
 			const held = Schema.decodeUnknownSync(Held)(yield* result(x, 'connect', { integration: 'email', owner: 'me' }));
 			expect(yield* row(x, held.input.instance)).toEqual([
-				{ integration: 'email', owner: una, envoy: null }
+				{ integration: 'email', owner: una }
 			]);
 			// there is no way to name someone else as the owner
 			expect(
@@ -4612,7 +4611,11 @@ describe('connect: the agent makes the connection, the person pairs it on a card
 				text: "INSERT INTO sys_envoy (id, name) VALUES ($1, 'Desk') ON CONFLICT DO NOTHING",
 				params: [envoy]
 			});
-			yield* seed_accounts(x.engine.db, [{ id: 'connect-desk', integration: 'whatsapp', envoy }]);
+			yield* seed_accounts(x.engine.db, [{ id: 'connect-desk', integration: 'whatsapp' }]);
+			yield* x.engine.db.write({
+				text: "INSERT INTO sys_envoy_channel (id, envoy, integration) VALUES (gen_random_uuid(), $1::uuid, 'connect-desk')",
+				params: [envoy]
+			});
 			expect(yield* result(x, 'connect', { integration: 'whatsapp', envoy })).toEqual({
 				confirm: true,
 				input: { instance: 'connect-desk', integration: 'whatsapp' }

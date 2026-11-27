@@ -645,8 +645,8 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 	'old', ${storedImageSql(cat, tables, 'o')}, 'new', ${storedImageSql(cat, tables, 'n')}, 'cause', cause) AS v FROM allp
 	UNION ALL SELECT 1, e.ord, e.v::json FROM jsonb_array_elements(${captureRows(c)}) WITH ORDINALITY AS e(v, ord)) x) AS captured, ${next_due(c)} AS next_due,
 	(SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM allp WHERE c = 'sys_integration'
-	AND (o IS NULL OR n IS NULL OR (o->'configuration', o->'active', o->'integration', o->'envoy', o->'import_start')
-	IS DISTINCT FROM (n->'configuration', n->'active', n->'integration', n->'envoy', n->'import_start'))) AS changed_instances, ${x.readGuards === undefined ? 'false' : GATED} AS read_guards_applied${x.approvalDecision !== undefined ? ', (SELECT count(*) FROM up)::int AS approval_decided' : ''}${
+	AND (o IS NULL OR n IS NULL OR (o->'configuration', o->'active', o->'integration', o->'import_start')
+	IS DISTINCT FROM (n->'configuration', n->'active', n->'integration', n->'import_start'))) AS changed_instances, ${x.readGuards === undefined ? 'false' : GATED} AS read_guards_applied${x.approvalDecision !== undefined ? ', (SELECT count(*) FROM up)::int AS approval_decided' : ''}${
 			audit === undefined
 				? ''
 				: `, json_build_object('at', ${now}::text, 'committed_at', ${c.shared('audit_at', audit.event.at)}::timestamptz::text, 'records', ${historied.length === 0 ? "'[]'::json" : `(SELECT coalesce(json_agg(json_build_object('model', x.c, 'id', x.id, 'revision', x.revision, 'op', x.op, 'cause', x.cause,

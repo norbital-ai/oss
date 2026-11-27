@@ -96,6 +96,35 @@ export function integration_client(instance: string, options: Options = {}) {
 					)
 				)
 			),
+		threads: () =>
+			call('GET', 'threads').pipe(
+				Effect.flatMap((value) =>
+					Schema.decodeUnknownEffect(
+						Schema.Struct({
+							groups: Schema.Array(
+								Schema.Struct({
+									id: Schema.String,
+									label: Schema.String,
+									last_at: Schema.optionalKey(Schema.String)
+								})
+							),
+							dms: Schema.Array(
+								Schema.Struct({
+									id: Schema.String,
+									handle: Schema.String,
+									label: Schema.String,
+									last_at: Schema.optionalKey(Schema.String)
+								})
+							)
+						})
+					)(value).pipe(
+						Effect.mapError(
+							() =>
+								new ProtocolFailed({ message: 'The host returned invalid integration threads.' })
+						)
+					)
+				)
+			),
 		watch: (): Stream.Stream<InstanceStatus, ProtocolFailed> =>
 			Stream.callback((queue) =>
 				Effect.acquireRelease(

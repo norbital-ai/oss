@@ -5,7 +5,10 @@
 import { Effect, Schema } from 'effect';
 import { sql } from '../db/sql.ts';
 import type { HandleKind } from '../../decl/runtime/integration.ts';
+import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
+import { ancestors, teamGraph } from '../identity/graph.ts';
+import { memberTeams } from '../identity/teams.ts';
 /**
  * The comparable form of one address of handle kind `kind`. A WhatsApp JID addresses a device (`6589548277:14@s.whatsapp.net`
  * is companion device 14), so the device suffix goes before the digits are taken; a leading `@` is a sigil, not a
@@ -41,4 +44,48 @@ export const memberByHandle = Effect.fn('Agents.memberByHandle')(function* (
 		sql(`SELECT u.id FROM sys_user u WHERE u.active AND ${CANONICAL[kind]} = $1 LIMIT 2`, canonical)
 	);
 	return rows.length === 1 ? (rows[0]?.id ?? null) : null;
+});
+
+export type DirectoryMatches = {
+	readonly members: readonly string[];
+	readonly teams: readonly string[];
+};
+export const EMPTY_DIRECTORY_MATCHES: DirectoryMatches = { members: [], teams: [] };
+
+/** Resolves all matched active members and their ancestor team ids for one or more peer handles (for listening-scope matching). */
+export const directoryMatchesForHandles = Effect.fn('Agents.directoryMatchesForHandles')(function* (
+	db: TenantDb,
+	workspace: Pick<EngineManifest['workspace'], 'memberships' | 'tz'>,
+	kind: HandleKind | null,
+	handles: readonly string[],
+	now: string
+) {
+	if (kind === null || handles.length === 0) return EMPTY_DIRECTORY_MATCHES;
+	const canonicals = [...new Set(handles.map((h) => canonicalHandle(kind, h)).filter((h) => h !== ''))];
+	if (canonicals.length === 0) return EMPTY_DIRECTORY_MATCHES;
+	const rows = yield* db.rows(
+		Schema.Struct({
+			id: Schema.String,
+			key: Schema.String,
+			teams: Schema.Array(Schema.String)
+		}),
+		sql(
+			`SELECT u.id, ${CANONICAL[kind]} AS key, ${memberTeams(workspace, '$2')} AS teams
+			 FROM sys_user u
+			 WHERE u.active AND ${CANONICAL[kind]} IN (SELECT jsonb_array_elements_text($1::jsonb))`,
+			JSON.stringify(canonicals),
+			...(workspace.memberships === undefined ? [] : [now])
+		)
+	);
+	// Ambiguous handles (2+ active members sharing one handle) match nobody, matching `memberByHandle`.
+	const counts = new Map<string, number>();
+	for (const row of rows) counts.set(row.key, (counts.get(row.key) ?? 0) + 1);
+	const matched = rows.filter((row) => counts.get(row.key) === 1);
+	if (matched.length === 0) return EMPTY_DIRECTORY_MATCHES;
+	const graph = yield* teamGraph(db);
+	const members = [...new Set(matched.map((row) => row.id))];
+	const teams = [
+		...new Set(matched.flatMap((row) => row.teams.flatMap((team) => ancestors(graph, team))))
+	];
+	return { members, teams };
 });

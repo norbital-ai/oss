@@ -2,7 +2,7 @@
 // The path supplies an app or group's name and the compiler checks its child declarations.
 import { Schema } from 'effect';
 import type { Checked, Exact } from '../fields.ts';
-import type { AppName, ModelName, PolicyName } from '../names.ts';
+import type { AppName, ModelName, PolicyName, WorkspaceIntegrationName } from '../names.ts';
 import type { CurrencyCode, IanaZone, IconName, NonEmpty, Rate } from '../values.ts';
 import type { ChildName, GroupName, PageName } from './names.ts';
 import type { ConvertTarget } from './facilities.ts';
@@ -88,6 +88,8 @@ type WorkspaceBase = {
 	 * changes on the next request. Bundles optionally join assignments (member, role, until) to levels (role, team).
 	 */
 	memberships?: Memberships<string>;
+	/** Built-in workspace integrations offered under Settings → Integrations → Connections (custom `src/integration/*` are listed automatically). */
+	connections?: readonly string[];
 	/** Rate limits per policy, applied to every caller holding it. */
 	limits?: { readonly [policy: string]: { readonly [key: string]: unknown } };
 };
@@ -144,6 +146,8 @@ type WorkspaceFor = {
 	/** Self sign-up by a proven email or mobile number; the build checks `party.match` names text fields. */
 	signup?: SignupFor;
 	memberships?: Memberships<ModelName>;
+	/** Built-in workspace integrations offered under Settings → Integrations → Connections (custom `src/integration/*` are listed automatically). */
+	connections?: readonly WorkspaceIntegrationName[];
 	/**
 	 * Rate limits per policy: what a caller holding that policy may send. Undeclared keys take the defaults (`LimitKey`).
 	 * @example limits: { field_ops_contractor: { act: '600/min', read: '600/min', agent: '100/h' } }

@@ -58,6 +58,7 @@ export type WaSocket = {
 	presenceSubscribe?(jid: string): Promise<void>;
 	requestPairingCode(phone: string): Promise<string>;
 	groupMetadata?(jid: string): Promise<GroupMetadata>;
+	groupFetchAllParticipating?(): Promise<Record<string, GroupMetadata>>;
 	logout(): Promise<void>;
 	end(error: Error | undefined): void | Promise<void>;
 };
@@ -1241,6 +1242,30 @@ const link = Effect.fn('WhatsApp.open')(function* (ctx: DriverOpen, options: Bai
 				yield* hostCall('WhatsApp typing', () =>
 					presence.call(socket, on ? 'composing' : 'paused', jidOf(to))
 				);
+			}),
+		discover: () =>
+			Effect.gen(function* () {
+				const socket = current?.socket;
+				const fetchAll = socket?.groupFetchAllParticipating;
+				if (
+					socket === undefined ||
+					fetchAll === undefined ||
+					(phase._tag !== 'Connected' && phase._tag !== 'CatchingUp')
+				)
+					return [];
+				const emptyGroups: Record<string, GroupMetadata> = {};
+				const map = yield* hostCall('list WhatsApp groups', () => fetchAll.call(socket)).pipe(
+					Effect.catch(() => Effect.succeed(emptyGroups))
+				);
+				return Object.entries(map)
+					.map(([id, meta]) => ({
+						id,
+						label:
+							typeof meta?.subject === 'string' && meta.subject.trim() !== ''
+								? meta.subject.trim()
+								: id
+					}))
+					.sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
 			})
 	};
 });

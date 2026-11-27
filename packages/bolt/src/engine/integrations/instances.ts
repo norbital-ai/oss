@@ -49,6 +49,7 @@ import type { Item } from '../write/flatten.ts';
 import { Chain } from '../write/sql.ts';
 import { validate_database_request, validate_database_result } from './database.ts';
 import type { Credentials } from './credentials.ts';
+import { decodeListeningScopeStrict } from './scope.ts';
 
 /** A definition by name: the workspace's, else one of bolt's conversation definitions. */
 export const definitionOf = (m: EngineManifest, name: string): IntegrationSpec | undefined =>
@@ -98,8 +99,7 @@ export function decodeConfiguration(
 export function instanceTransform(
 	m: EngineManifest,
 	items: readonly Item[],
-	stored: (id: string) => RowData | undefined,
-	runtimeEnvoys: ReadonlySet<string> = new Set()
+	stored: (id: string) => RowData | undefined
 ): readonly Item[] | Refused {
 	const out: Item[] = [];
 	for (const it of items) {
@@ -143,31 +143,90 @@ export function instanceTransform(
 					);
 			}
 		}
-		const envoy = values['envoy'] ?? null;
-		if (envoy !== null) {
-			if (typeof envoy !== 'string' || !runtimeEnvoys.has(envoy))
-				return refuse(c.path, 'envoy', `No envoy '${String(envoy)}' exists.`);
-			if (!conversational(def))
+		let normalizedListen: Json | undefined;
+		if (values['listen'] !== undefined) {
+			if (values['listen'] !== null && !conversational(def))
 				return refuse(
 					c.path,
-					'envoy',
-					`An envoy answers only on a conversation integration; '${name}' is not one.`
+					'listen',
+					`A listening scope applies only to a conversation integration; '${name}' is not one.`
 				);
-			if (owner !== null) return refuse(c.path, 'envoy', 'A personal instance takes no envoy.');
+			const checked = decodeListeningScopeStrict(values['listen']);
+			if ('problem' in checked) return refuse(c.path, 'listen', checked.problem);
+			normalizedListen = checked.value;
 		}
-		if (values['configuration'] === undefined && pre !== undefined) {
+		const hasConfig = !(values['configuration'] === undefined && pre !== undefined);
+		let normalizedConfig: Json | undefined;
+		if (hasConfig) {
+			const decoded = decodeConfiguration(def, values['configuration'] ?? {});
+			if ('problem' in decoded) return refuse(c.path, 'configuration', decoded.problem);
+			normalizedConfig = decoded.value;
+		}
+		if (!hasConfig && normalizedListen === undefined) {
 			out.push(it);
 			continue;
 		}
-		const decoded = decodeConfiguration(def, values['configuration'] ?? {});
-		if ('problem' in decoded) return refuse(c.path, 'configuration', decoded.problem);
+		const patch: RowData = {
+			...(normalizedConfig === undefined ? {} : { configuration: normalizedConfig }),
+			...(normalizedListen === undefined ? {} : { listen: normalizedListen })
+		};
 		out.push({
 			...it,
 			change:
 				c.op === 'update'
-					? { ...c, set: { ...c.set, configuration: decoded.value } }
-					: { ...c, values: { ...c.values, configuration: decoded.value } }
+					? { ...c, set: { ...c.set, ...patch } }
+					: { ...c, values: { ...c.values, ...patch } }
 		});
+	}
+	return out;
+}
+
+/** Validates `sys_envoy_channel` creates and updates: active envoy, workspace conversation channel, and valid scope. */
+export function envoyChannelTransform(
+	m: EngineManifest,
+	items: readonly Item[],
+	envoys: ReadonlySet<string>,
+	instances: ReadonlyMap<string, { readonly integration: string; readonly owner: string | null }>
+): readonly Item[] | Refused {
+	const out: Item[] = [];
+	for (const it of items) {
+		const c = it.change;
+		if (c.model !== 'sys_envoy_channel' || c.op === 'delete') {
+			out.push(it);
+			continue;
+		}
+		const values = c.op === 'update' ? c.set : c.values;
+		if (c.op !== 'update') {
+			const envoy = values['envoy'];
+			if (typeof envoy !== 'string' || !envoys.has(envoy))
+				return refuse(c.path, 'envoy', `No active envoy '${String(envoy ?? '')}' exists.`);
+			const integration = values['integration'];
+			const inst = typeof integration === 'string' ? instances.get(integration) : undefined;
+			if (inst === undefined)
+				return refuse(c.path, 'integration', `No integration instance '${String(integration ?? '')}' exists.`);
+			if (inst.owner !== null)
+				return refuse(c.path, 'integration', 'A personal instance takes no envoy.');
+			const def = definitionOf(m, inst.integration);
+			if (def === undefined || !conversational(def))
+				return refuse(
+					c.path,
+					'integration',
+					`An envoy answers only on a conversation integration; '${inst.integration}' is not one.`
+				);
+		}
+		if (values['scope'] !== undefined) {
+			const checked = decodeListeningScopeStrict(values['scope']);
+			if ('problem' in checked) return refuse(c.path, 'scope', checked.problem);
+			out.push({
+				...it,
+				change:
+					c.op === 'update'
+						? { ...c, set: { ...c.set, scope: checked.value } }
+						: { ...c, values: { ...c.values, scope: checked.value } }
+			});
+			continue;
+		}
+		out.push(it);
 	}
 	return out;
 }
@@ -211,10 +270,10 @@ export const instancesOf = (
 const missing = (instance: string) =>
 	BoltError.make('not_found', 'facility', `no integration instance '${instance}'`);
 /** An instance as an operator observes it: never its account, pairing or credential values. */
-const ADMIN = `active, envoy, status ->> 'state' AS state, EXISTS (SELECT 1 FROM bolt_credential c WHERE c.instance = sys_integration.id) AS stored, revision`;
+const ADMIN = `active, coalesce((SELECT array_agg(ec.envoy::text ORDER BY ec.envoy) FROM sys_envoy_channel ec WHERE ec.integration = sys_integration.id AND ec.active), ARRAY[]::text[]) AS envoys, status ->> 'state' AS state, EXISTS (SELECT 1 FROM bolt_credential c WHERE c.instance = sys_integration.id) AS stored, revision`;
 const Admin = Schema.Struct({
 	active: Schema.Boolean,
-	envoy: Schema.NullOr(Schema.String),
+	envoys: Schema.Array(Schema.String),
 	state: Schema.NullOr(InstanceState).pipe(Schema.catchDecoding(() => Effect.succeedSome(null))),
 	stored: Schema.Boolean,
 	revision: Schema.Number
@@ -248,32 +307,22 @@ export const instance_admin = Effect.fn('Integrations.instance_admin')(function*
 	return { instance, ...found.value };
 });
 /**
- * `WorkspaceBranch.integrations.configure`: one statement fenced by `revision` that keeps the transform's envoy rules
- * (an active envoy, on a workspace instance of a conversation definition); a miss is read again only to say why.
+ * `WorkspaceBranch.integrations.configure`: one statement fenced by `revision` that pauses or resumes an instance.
  */
 export const configure_instance = Effect.fn('Integrations.configure_instance')(function* (
 	db: TenantDbShape,
-	m: EngineManifest,
+	_m: EngineManifest,
 	instance: string,
-	change: { readonly active: boolean; readonly envoy: string | null; readonly revision: number },
+	change: { readonly active: boolean; readonly revision: number },
 	publish: BranchPublication
 ) {
-	const conversations = [...new Set([...Object.keys(SYSTEM.integrations), ...Object.keys(m.integrations)])].filter(
-		(name) => {
-			const definition = definitionOf(m, name);
-			return definition !== undefined && conversational(definition);
-		}
-	);
-	const c = new Chain(),
-		deployed = c.p(change.envoy);
+	const c = new Chain();
 	const moved = capturePiece(
 		c,
 		'moved',
 		'sys_integration',
-		`UPDATE sys_integration SET active = ${c.p(change.active)}, envoy = ${deployed}, revision = revision + 1
-			WHERE id = ${c.p(instance)} AND revision = ${c.p(change.revision)}
-			AND (${deployed}::text IS NULL OR (owner IS NULL AND integration IN (SELECT jsonb_array_elements_text(${c.p(conversations)}::jsonb))
-			AND EXISTS (SELECT 1 FROM sys_envoy e WHERE e.id::text = ${deployed} AND e.active)))`,
+		`UPDATE sys_integration SET active = ${c.p(change.active)}, revision = revision + 1
+			WHERE id = ${c.p(instance)} AND revision = ${c.p(change.revision)}`,
 		{ returning: ADMIN }
 	);
 	const { admin } = yield* branchCommit(
@@ -284,36 +333,15 @@ export const configure_instance = Effect.fn('Integrations.configure_instance')(f
 		`(SELECT to_jsonb(x) - '__bolt_capture' FROM ${moved} x) AS admin`
 	);
 	if (admin !== null) return { instance, ...admin };
-	const held = yield* db.one(
-		Schema.Struct({
-			revision: Schema.Number,
-			owner: Schema.NullOr(Schema.String),
-			integration: Schema.String,
-			envoy: Schema.Boolean
-		}),
-		{
-			text: 'SELECT revision, owner, integration, EXISTS (SELECT 1 FROM sys_envoy e WHERE e.id::text = $2 AND e.active) AS envoy FROM sys_integration WHERE id = $1',
-			params: [instance, change.envoy]
-		}
-	);
+	const held = yield* db.one(Schema.Struct({ revision: Schema.Number }), {
+		text: 'SELECT revision FROM sys_integration WHERE id = $1',
+		params: [instance]
+	});
 	if (Option.isNone(held)) return yield* missing(instance);
-	const { revision, owner, integration, envoy } = held.value;
-	const conversation = conversations.includes(integration);
-	// a valid change that still missed raced another write
-	if (revision !== change.revision || change.envoy === null || (owner === null && conversation && envoy))
-		return yield* BoltError.make(
-			'conflict',
-			'commit',
-			`'${instance}' changed since revision ${change.revision}: read its status again`
-		);
 	return yield* BoltError.make(
-		'invalid',
-		'admission',
-		owner !== null
-			? 'A personal instance takes no envoy.'
-			: !conversation
-				? `An envoy answers only on a conversation integration; '${integration}' is not one.`
-				: `No active envoy '${change.envoy}' exists.`
+		'conflict',
+		'commit',
+		`'${instance}' changed since revision ${change.revision}: read its status again`
 	);
 });
 /**

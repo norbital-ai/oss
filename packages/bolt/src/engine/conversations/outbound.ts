@@ -34,8 +34,7 @@ export function sendPiece(c: Chain, s: Send, now: string, gated = false): string
 	capturePiece(c,
 		'sconv',
 		'sys_conversation',
-		`INSERT INTO sys_conversation (id, integration, thread, kind, envoy) SELECT ${c.p(conv)}, ${c.p(s.instance)}, ${c.p(s.thread)}, ${c.p(s.kind ?? 'dm')},
-		(SELECT i.envoy FROM sys_integration i WHERE i.id = ${c.p(s.instance)} AND i.owner IS NULL)
+		`INSERT INTO sys_conversation (id, integration, thread, kind) SELECT ${c.p(conv)}, ${c.p(s.instance)}, ${c.p(s.thread)}, ${c.p(s.kind ?? 'dm')}
 		${gated ? `WHERE ${GATED}` : ''} ON CONFLICT (id) DO NOTHING`
 	);
 	const sent = messagePiece(

@@ -848,6 +848,8 @@ export const IntegrationOffer = Schema.Struct({
 	scope: Schema.optionalKey(IntegrationScope),
 	/** `true` for workspace-declared integrations (`src/integration/`), `false` for Bolt built-ins. */
 	custom: Schema.optionalKey(Schema.Boolean),
+	/** `true` when declared as a workspace connection (`src/integration/*` non-personal or listed in `workspace.connections`). */
+	declared: Schema.optionalKey(Schema.Boolean),
 	/** Runtime configuration fields declared on the integration definition. */
 	configuration: Schema.optionalKey(Schema.Record(Schema.String, KindSchema)),
 	/** It carries a conversation, so an envoy can answer on it. */

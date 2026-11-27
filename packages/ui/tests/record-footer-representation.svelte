@@ -58,6 +58,12 @@
 	</div>
 {/snippet}
 
+{#snippet customHeader()}
+	<nav data-custom-breadcrumb class="flex min-w-0 items-center gap-1 truncate">
+		<span>Project A</span><span>/</span><span>Job J1</span>
+	</nav>
+{/snippet}
+
 {#if fixture.representation === 'raw'}
 	{@render detail()}
 {:else}
@@ -69,8 +75,10 @@
 		title="Authored job"
 		subtitle="Represented record"
 		lock={fixture.lock}
-		footer="Authored footer"
-		footer_actions={nativeActions}
+		auto_save={fixture.auto_save}
+		header={fixture.custom_header ? customHeader : true}
+		footer={fixture.auto_save !== undefined ? undefined : 'Authored footer'}
+		footer_actions={fixture.auto_save !== undefined ? undefined : nativeActions}
 		tabs={[{ name: 'extra', title: 'Extra detail', body: extraTab }]}
 	>
 		{#snippet children()}{@render detail()}{/snippet}

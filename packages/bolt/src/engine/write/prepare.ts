@@ -5,7 +5,7 @@ import { BoltError } from '../../protocol/errors.ts';
 import { LIMITS, type Invocation, type Outcome, type RowData } from '../contracts.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import type { EngineError } from '../errors.ts';
-import { instanceTransform } from '../integrations/instances.ts';
+import { envoyChannelTransform, instanceTransform } from '../integrations/instances.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { changeInputs, judgeSubmitted } from './admit.ts';
 import { Flattener, type Item } from './flatten.ts';
@@ -75,25 +75,41 @@ const ENGINE_TRANSFORMS: {
 } = {
 	sys_user: displayNameTransform('sys_user'),
 	sys_workspace: displayNameTransform('sys_workspace'),
-	sys_integration: Effect.fnUntraced(function* (
+	sys_integration: (_db, m, items, pre) =>
+		Effect.succeed(instanceTransform(m, items, (id) => pre.get(k('sys_integration', id)))),
+	sys_envoy_channel: Effect.fnUntraced(function* (
 		db: TenantDb,
 		m: EngineManifest,
-		items: readonly Item[],
-		pre: ReadonlyMap<string, RowData>
+		items: readonly Item[]
 	) {
-		const envoyNamed = items.some(
-			({ change: c }) =>
-				c.model === 'sys_integration' &&
-				c.op !== 'delete' &&
-				(c.op === 'update' ? c.set : c.values)['envoy'] != null
+		const needsLookup = items.some(
+			({ change: c }) => c.model === 'sys_envoy_channel' && c.op !== 'delete' && c.op !== 'update'
 		);
-		const [envoys] = envoyNamed
-			? yield* db.read([{ text: 'SELECT id FROM sys_envoy WHERE active', params: [] }])
-			: [undefined];
-		const active = new Set(
-			(envoys?.rows ?? []).flatMap((row) => (typeof row['id'] === 'string' ? [row['id']] : []))
+		const [envoysRes, instancesRes] = needsLookup
+			? yield* db.read([
+					{ text: 'SELECT id::text AS id FROM sys_envoy WHERE active', params: [] },
+					{ text: 'SELECT id, integration, owner FROM sys_integration', params: [] }
+				])
+			: [undefined, undefined];
+		const activeEnvoys = new Set(
+			(envoysRes?.rows ?? []).flatMap((row) => (typeof row['id'] === 'string' ? [row['id']] : []))
 		);
-		return instanceTransform(m, items, (id) => pre.get(k('sys_integration', id)), active);
+		const knownInstances = new Map(
+			(instancesRes?.rows ?? []).flatMap((row) =>
+				typeof row['id'] === 'string' && typeof row['integration'] === 'string'
+					? [
+							[
+								row['id'],
+								{
+									integration: row['integration'],
+									owner: typeof row['owner'] === 'string' ? row['owner'] : null
+								}
+							] as const
+						]
+					: []
+			)
+		);
+		return envoyChannelTransform(m, items, activeEnvoys, knownInstances);
 	})
 };
 

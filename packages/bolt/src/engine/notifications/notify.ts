@@ -261,7 +261,7 @@ export const notice_sends = Effect.fn('Bolt.noticeSends')(function* (
 			JSON.stringify(ids)
 		),
 		sql(
-			`SELECT u.id, u.email, u.phone, u.telegram, u.slack, u.discord, ${memberTeams(m.workspace, '$1')} AS teams, u.signup FROM sys_user u WHERE u.active AND u.kind = 'staff'`,
+			`SELECT u.id, u.email, u.phone, u.telegram, u.slack, u.discord, ${memberTeams(m.workspace, '$1')} AS teams, u.signup FROM sys_user u WHERE u.active AND u.kind IN ('staff', 'external')`,
 			...(m.workspace.memberships === undefined ? [] : [new Date(yield* Clock.currentTimeMillis).toISOString()])
 		)
 	]);

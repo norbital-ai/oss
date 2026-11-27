@@ -58,8 +58,16 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		title?: string;
 		/** Hide the model noun when the authored heading already identifies the record. */
 		eyebrow?: boolean;
-		/** A page-level shell: false drops its heading row and history scrubber when the page header already names the record. */
-		header?: boolean;
+		/**
+		 * A page-level shell: `false` drops its heading row and history scrubber when the page header already names the
+		 * record. A `Snippet` replaces the heading on the same single line as the header tools, flushed to the start.
+		 */
+		header?: boolean | Snippet;
+		/**
+		 * Auto-save mode for stored records: stays in edit mode whenever editable and debounces saves automatically,
+		 * showing live save status in the footer (`true` defaults to 700 ms; a number sets the debounce in milliseconds).
+		 */
+		auto_save?: boolean | number;
 		/** A line under the heading: text, or field names shown by kind (`['customer', 'due_on']` → `Acme · Jan 2, 2026`). */
 		subtitle?: string | readonly string[];
 		/** Iconify id inside the state pill. */
@@ -99,6 +107,13 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	// the tab each record was last on, for this page's life: reopening a record after a child record closes (a trial
 	// opened from its project's Trials tab) lands where the person left it, not back on the first tab
 	const lastTab = new Map<string, string>();
+	const AUTO_SAVE_DEFAULT_MS = 700;
+	const resolveAutoSave = (value: boolean | number | null | undefined): number | null =>
+		value === true
+			? AUTO_SAVE_DEFAULT_MS
+			: typeof value === 'number' && Number.isFinite(value) && value >= 0
+				? value
+				: null;
 </script>
 
 <script lang="ts" generics="C extends ModelKey">
@@ -144,7 +159,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		provideRecordController,
 		use_record_controller
 	} from '../form/form-state.svelte.js';
-	import { draftKey, formSpec, locked } from '../form/draft.js';
+	import { changed, draftKey, formSpec, locked } from '../form/draft.js';
 	import { pendingUnload } from '../form/unload.js';
 	import { mapped, queryState, type ReadState } from '../read/state.js';
 	import { checkpoints, historicalFields, historicalValue, skipText, type Checkpoint } from './history.js';
@@ -169,6 +184,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		title,
 		eyebrow = true,
 		header = true,
+		auto_save,
 		subtitle,
 		icon,
 		badge,
@@ -194,17 +210,26 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	const formText = ui_text();
 	provide_model(() => of);
 
+	const headerSnippet = $derived(typeof header === 'function' ? header : undefined);
+	const showPageHeader = $derived(header !== false);
 	// a representation that renders <RecordShell of={same}> without a body gets the generated view, not itself again;
 	// a shell inside a framed shell (a record within a record's tab) shows its body only: a record view has one tab row
 	const INSIDE = 'ui.views.record';
 	// The native read feeds both the record view and Form's model-specific record contract.
 	type StoredRecord = RecordOf<C> & Row;
 	type Scrub = { readonly past: StoredRecord | null };
+	type AutoSaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'invalid' | 'error';
+	type AutoSaveState = {
+		readonly active: boolean;
+		readonly status: AutoSaveStatus;
+		retry(): void;
+	};
 	type Decoration = {
 		head: Snippet;
 		foot: Snippet;
 		readonly eyebrow: string | null;
 		readonly name: string;
+		readonly auto_save: number | null;
 	};
 	type FormSubmit = {
 		readonly label: string | undefined;
@@ -228,6 +253,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 				readonly loaded: ReadState<Row | null>;
 				readonly live: Row | null;
 				readonly approvals: Approvals;
+				readonly auto_save?: AutoSaveState;
 				scrub?: Scrub;
 				history?: { set(config: RecordHistoryConfig): void };
 				decorate?: (entry: Decoration) => () => void;
@@ -304,6 +330,9 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		},
 		get approvals() {
 			return requests;
+		},
+		get auto_save() {
+			return autoSaveState;
 		},
 		scrub,
 		history: owner
@@ -574,7 +603,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		() => toEyebrow === undefined || !framed ? null : {
 			publish: toEyebrow,
 			text: decoration === undefined
-				? eyebrow && heading ? singular(bolt, of) : null
+				? headerSnippet === undefined && eyebrow && heading ? singular(bolt, of) : null
 				: decoration.eyebrow
 		},
 		(next) => {
@@ -587,10 +616,13 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		head,
 		foot,
 		get eyebrow() {
-			return eyebrow && heading ? singular(bolt, of) : null;
+			return headerSnippet === undefined && eyebrow && heading ? singular(bolt, of) : null;
 		},
 		get name() {
 			return sheetName;
+		},
+		get auto_save() {
+			return resolveAutoSave(auto_save);
 		}
 	};
 	changes(
@@ -702,7 +734,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 			}
 		} else {
 			current.spec = spec;
-			if (live !== null) current.refresh(live);
+			if (live !== null) current.refresh(live, autoSaveDelay !== null);
 		}
 		if (mode === 'create' || id === undefined || bolt.record_capabilities === undefined) return;
 		const target = localController;
@@ -747,15 +779,178 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	});
 	const beforeUnload = pendingUnload(() => localController?.pending === true);
 	const editing = $derived(controller?.mode === 'edit');
+	const autoSaveDelay = $derived(
+		mode === 'create' ? null : resolveAutoSave(decoration?.auto_save ?? auto_save)
+	);
+	const canAutoEdit = $derived(
+		!sharedController &&
+			autoSaveDelay !== null &&
+			live !== null &&
+			shownPast === null &&
+			viewing === null &&
+			!modelLocked &&
+			!under_approval &&
+			lock === undefined &&
+			localController !== null &&
+			!localController.spec.readonly &&
+			localController.can_submit
+	);
+	let autoSaveSaved = $state(false);
+	let autoSaveFailedSig = $state<string | null>(null);
+	let autoSavePendingTimer = $state(false);
+	let autoSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+	changes(
+		() => `${of}/${id ?? ''}`,
+		() => {
+			autoSaveSaved = false;
+			autoSaveFailedSig = null;
+		}
+	);
+	changes(
+		() => canAutoEdit && localController?.mode === 'view',
+		(shouldEdit) => {
+			if (shouldEdit && localController !== null) localController.mode = 'edit';
+		}
+	);
+	changes([() => live, () => localController?.pending, () => autoSaveDelay], () => {
+		if (sharedController || localController === null || live === null || autoSaveDelay === null)
+			return;
+		if (!localController.pending) localController.refresh(live, true);
+	});
+	const draftSignature = $derived.by(() => {
+		if (!canAutoEdit || localController === null || localController.mode !== 'edit') return '';
+		const diff = changed(localController.base, localController.values);
+		const childrenOps = localController.children;
+		const hasChildren = Object.values(childrenOps).some((ops) => ops.length > 0);
+		const extra = localController.extra();
+		const hasExtra = Object.values(extra).some((rows) => rows.length > 0);
+		if (Object.keys(diff).length === 0 && !hasChildren && !hasExtra) return '';
+		return JSON.stringify({ diff, children: childrenOps, extra });
+	});
+	changes(
+		() => draftSignature,
+		(sig) => {
+			if (autoSaveFailedSig !== null && sig !== autoSaveFailedSig) autoSaveFailedSig = null;
+		}
+	);
+	function runAutoSave(sig: string): void {
+		const target = localController;
+		if (
+			target === null ||
+			target.mode !== 'edit' ||
+			target.pending ||
+			!target.dirty ||
+			!target.can_save ||
+			target.requesting_approval ||
+			target.resubmitting
+		)
+			return;
+		fork(
+			target.submit().pipe(
+				Effect.tap((outcome) =>
+					Effect.sync(() => {
+						if (target !== localController) return;
+						if (
+							outcome === null ||
+							(outcome.kind !== 'committed' && outcome.kind !== 'pending_approval')
+						) {
+							autoSaveFailedSig = sig;
+						} else if (outcome.kind === 'committed') {
+							autoSaveFailedSig = null;
+							autoSaveSaved = true;
+						}
+					})
+				)
+			)
+		);
+	}
+	changes(
+		() => ({
+			delay: autoSaveDelay,
+			enabled: canAutoEdit && localController?.mode === 'edit',
+			sig: draftSignature,
+			pending: localController?.pending ?? false,
+			canSave: localController?.can_save ?? false,
+			approval:
+				(localController?.requesting_approval ?? false) || (localController?.resubmitting ?? false),
+			failed: autoSaveFailedSig,
+			formDisabled: (nativeSubmit?.entries ?? []).some((entry) => entry.writable && entry.disabled)
+		}),
+		(state) => {
+			if (autoSaveTimer !== undefined) {
+				clearTimeout(autoSaveTimer);
+				autoSaveTimer = undefined;
+			}
+			autoSavePendingTimer = false;
+			if (
+				state.delay === null ||
+				!state.enabled ||
+				state.sig === '' ||
+				state.pending ||
+				!state.canSave ||
+				state.approval ||
+				state.formDisabled ||
+				state.sig === state.failed
+			)
+				return;
+			autoSavePendingTimer = true;
+			const sig = state.sig;
+			autoSaveTimer = setTimeout(() => {
+				autoSaveTimer = undefined;
+				autoSavePendingTimer = false;
+				runAutoSave(sig);
+			}, state.delay);
+			return () => {
+				if (autoSaveTimer !== undefined) {
+					clearTimeout(autoSaveTimer);
+					autoSaveTimer = undefined;
+				}
+				autoSavePendingTimer = false;
+			};
+		}
+	);
+	onDestroy(() => {
+		if (autoSaveTimer === undefined) return;
+		clearTimeout(autoSaveTimer);
+		autoSaveTimer = undefined;
+		const sig = untrack(() => draftSignature);
+		if (sig !== '' && sig !== untrack(() => autoSaveFailedSig)) runAutoSave(sig);
+	});
+	const ownAutoSave: AutoSaveState = {
+		get active() {
+			return autoSaveDelay !== null && mode !== 'create';
+		},
+		get status() {
+			const d = localController;
+			if (autoSaveDelay === null || d === null || mode === 'create') return 'idle';
+			if (d.pending) return 'saving';
+			if (d.errors.size > 0 || d.semantic_errors.length > 0) return 'invalid';
+			if (d.notice !== null && d.notice.tone !== 'info') return 'error';
+			if (d.dirty || autoSavePendingTimer) return 'pending';
+			return autoSaveSaved ? 'saved' : 'idle';
+		},
+		retry() {
+			autoSaveFailedSig = null;
+			const sig = draftSignature;
+			if (sig !== '') runAutoSave(sig);
+			else if (localController !== null && localController.dirty) fork(localController.submit());
+		}
+	};
+	const autoSaveState = $derived(
+		sameRecord && parent?.auto_save !== undefined ? parent.auto_save : ownAutoSave
+	);
+
 	function done(o: Outcome) {
-		notify(bolt, o);
+		const auto = autoSaveDelay !== null && mode !== 'create';
+		if (!auto || o.kind === 'pending_approval') notify(bolt, o);
 		if (o.kind !== 'committed' && o.kind !== 'pending_approval') return;
 		// the created record is this model's; an act's other writes (a transform's side rows) come first or last
 		const mine = o.records.find((r) => r.model === of);
 		if (o.kind === 'pending_approval') {
 			submitted = { model: of, record: id ?? mine?.id, request_id: o.request_id };
 		}
-		controller?.view();
+		if (!auto || o.kind === 'pending_approval') controller?.view();
 		if (on_done) on_done(o);
 		else if (mode === 'create' && mine !== undefined) open_record(of, mine.id);
 	}
@@ -885,48 +1080,108 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 <svelte:window onbeforeunload={beforeUnload} />
 
 {#snippet head()}
-	<div class="flex min-w-0 flex-col" data-record-head>
-		{#if eyebrow && heading && toEyebrow === undefined}<span
-				class="text-micro text-muted-foreground truncate leading-4">{singular(bolt, of)}</span
-			>{/if}
-		<div class="flex min-w-0 flex-wrap items-center gap-2 sm:flex-nowrap">
-			<div class="mr-auto flex min-w-0 flex-col gap-0.5">
-				<div class="flex min-w-0 items-center gap-2">
-					<h2 class="min-w-0 truncate text-sm leading-5 font-semibold">
-						{titled}
-					</h2>
-					{#if badge || icon}<Badge variant="outline" title={hint}
-							>{#if icon}<Icon {icon} class="size-3" />{/if}{badge ?? ''}</Badge
-						>{/if}
-					{#if openState !== null}
-						{@const changes = openState === 'ChangesRequested'}
-						{@const full = changes ? msg(bolt, 'approval.status.ChangesRequested') : lockReason}
-						<Tooltip text={full}>
-							{#snippet trigger({ props })}
-								<Badge
-									{...props}
-									variant="outline"
-									class="shrink-0 whitespace-nowrap border-tone-warning-border bg-tone-warning-bg text-tone-warning-text hover:bg-warning/15"
-									tabindex={0}
-									role="status"
-									aria-label={full}
-									data-view="approval-badge"
-									>{changes ? msg(bolt, 'approval.status.ChangesRequested') : msg(bolt, 'record.pending')}</Badge
-								>
-							{/snippet}
-						</Tooltip>
-					{/if}
-					{#if trailing}{@render trailing()}{/if}
-				</div>
-				{#if subline}<p class="text-muted-foreground truncate text-sm">{subline}</p>{/if}
+	{#if headerSnippet !== undefined}
+		<div class="flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden" data-record-head>
+			<div class="mr-auto flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+				{@render headerSnippet()}
+				{#if openState !== null}
+					{@const changes = openState === 'ChangesRequested'}
+					{@const full = changes ? msg(bolt, 'approval.status.ChangesRequested') : lockReason}
+					<Tooltip text={full}>
+						{#snippet trigger({ props })}
+							<Badge
+								{...props}
+								variant="outline"
+								class="shrink-0 whitespace-nowrap border-tone-warning-border bg-tone-warning-bg text-tone-warning-text hover:bg-warning/15"
+								tabindex={0}
+								role="status"
+								aria-label={full}
+								data-view="approval-badge"
+								>{changes ? msg(bolt, 'approval.status.ChangesRequested') : msg(bolt, 'record.pending')}</Badge
+							>
+						{/snippet}
+					</Tooltip>
+				{/if}
+				{#if trailing}{@render trailing()}{/if}
 			</div>
 			{#if actions}{@render actions()}{/if}
 		</div>
-	</div>
+	{:else}
+		<div class="flex min-w-0 flex-col" data-record-head>
+			{#if eyebrow && heading && toEyebrow === undefined}<span
+					class="text-micro text-muted-foreground truncate leading-4">{singular(bolt, of)}</span
+				>{/if}
+			<div class="flex min-w-0 flex-wrap items-center gap-2 sm:flex-nowrap">
+				<div class="mr-auto flex min-w-0 flex-col gap-0.5">
+					<div class="flex min-w-0 items-center gap-2">
+						<h2 class="min-w-0 truncate text-sm leading-5 font-semibold">
+							{titled}
+						</h2>
+						{#if badge || icon}<Badge variant="outline" title={hint}
+								>{#if icon}<Icon {icon} class="size-3" />{/if}{badge ?? ''}</Badge
+							>{/if}
+						{#if openState !== null}
+							{@const changes = openState === 'ChangesRequested'}
+							{@const full = changes ? msg(bolt, 'approval.status.ChangesRequested') : lockReason}
+							<Tooltip text={full}>
+								{#snippet trigger({ props })}
+									<Badge
+										{...props}
+										variant="outline"
+										class="shrink-0 whitespace-nowrap border-tone-warning-border bg-tone-warning-bg text-tone-warning-text hover:bg-warning/15"
+										tabindex={0}
+										role="status"
+										aria-label={full}
+										data-view="approval-badge"
+										>{changes ? msg(bolt, 'approval.status.ChangesRequested') : msg(bolt, 'record.pending')}</Badge
+									>
+								{/snippet}
+							</Tooltip>
+						{/if}
+						{#if trailing}{@render trailing()}{/if}
+					</div>
+					{#if subline}<p class="text-muted-foreground truncate text-sm">{subline}</p>{/if}
+				</div>
+				{#if actions}{@render actions()}{/if}
+			</div>
+		</div>
+	{/if}
 {/snippet}
 
 {#snippet frameHead()}
 	{@render (decoration?.head ?? head)()}
+{/snippet}
+
+{#snippet autoSaveIndicator(status: AutoSaveStatus, noticeText: string | null)}
+	<span
+		class="text-meta inline-flex min-w-0 items-center gap-1.5 truncate"
+		role="status"
+		aria-live="polite"
+		data-record-autosave={status}
+	>
+		{#if status === 'saving'}
+			<Icon icon="lucide:loader-circle" class="size-3.5 shrink-0 animate-spin" />
+			<span class="truncate">{formText('saving')}</span>
+		{:else if status === 'pending'}
+			<Icon icon="lucide:circle-dot" class="size-3 shrink-0" />
+			<span class="truncate">{formText('unsaved')}</span>
+		{:else if status === 'invalid'}
+			<span class="inline-flex min-w-0 items-center gap-1.5 text-destructive">
+				<Icon icon="lucide:circle-alert" class="size-3.5 shrink-0" />
+				<span class="truncate">{msg(bolt, 'record.fixErrorsToSave')}</span>
+			</span>
+		{:else if status === 'error'}
+			<span class="inline-flex min-w-0 items-center gap-1.5 text-destructive">
+				<Icon icon="lucide:triangle-alert" class="size-3.5 shrink-0" />
+				<span class="truncate">{noticeText ?? msg(bolt, 'record.autoSaveFailed')}</span>
+			</span>
+		{:else}
+			<Icon icon="lucide:check" class="size-3.5 shrink-0 text-tone-success-text" />
+			<span class="truncate"
+				>{msg(bolt, status === 'saved' ? 'record.saved' : 'record.allChangesSaved')}</span
+			>
+		{/if}
+	</span>
 {/snippet}
 
 {#snippet foot()}
@@ -940,6 +1195,12 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	{@const blocked = lock !== undefined || modelLocked || under_approval}
 	{@const canEdit = current && draft?.mode === 'view' && !blocked && draft.can_submit}
 	{@const inEdit = current && draft?.mode === 'edit'}
+	{@const autoEdit =
+		inEdit &&
+		autoSaveState.active &&
+		draft !== null &&
+		!draft.requesting_approval &&
+		!draft.resubmitting}
 	{@const formEntries = nativeSubmit?.entries ?? []}
 	{@const formDisabled = formEntries.some((entry) => entry.writable && entry.disabled)}
 	{@const creating =
@@ -953,12 +1214,21 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		!canEdit &&
 		!creating &&
 		(blocked || openState !== null)}
-	<span class="text-meta mr-auto min-w-0 truncate" role="status">
-		{#if inEdit && draft?.dirty && !draft.pending}{formText('unsaved')}
-		{:else if typeof footer === 'string'}{footer}
-		{:else if footer}{@render footer()}
-		{:else if openRequest?.status === 'ChangesRequested' && openRequest.mine}{msg(bolt, 'approval.resubmitOnSave')}{/if}
-	</span>
+	{#if autoEdit && footer === undefined}
+		<div class="mr-auto flex min-w-0 items-center">
+			{@render autoSaveIndicator(
+				autoSaveState.status,
+				draft.notice ? bolt.t(draft.notice.text) : null
+			)}
+		</div>
+	{:else}
+		<span class="text-meta mr-auto min-w-0 truncate" role="status">
+			{#if !autoEdit && inEdit && draft?.dirty && !draft.pending}{formText('unsaved')}
+			{:else if typeof footer === 'string'}{footer}
+			{:else if footer}{@render footer()}
+			{:else if openRequest?.status === 'ChangesRequested' && openRequest.mine}{msg(bolt, 'approval.resubmitOnSave')}{/if}
+		</span>
+	{/if}
 	{@render footer_actions?.()}
 	{#if lockedHere}
 		<Tooltip text={lockReason}>
@@ -968,7 +1238,19 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 				</Button>
 			{/snippet}
 		</Tooltip>
-	{:else if canEdit}
+	{:else if autoEdit}
+		{#if footer !== undefined}
+			{@render autoSaveIndicator(
+				autoSaveState.status,
+				draft.notice ? bolt.t(draft.notice.text) : null
+			)}
+		{/if}
+		{#if autoSaveState.status === 'error'}
+			<Button variant="outline" onclick={() => autoSaveState.retry()} data-record-retry>
+				<Icon icon="lucide:refresh-cw" class="size-3.5" />{formText('retry')}
+			</Button>
+		{/if}
+	{:else if canEdit && !autoSaveState.active}
 		<Button
 			variant="outline"
 			class="min-w-[4.25rem] justify-center"
@@ -1385,10 +1667,10 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	>
 		{#if page}
 			<!-- Page and sheet headers use the same authored contribution; neither belongs to the scrollable body. -->
-			{#if header}<header class="flex shrink-0 flex-col" data-record-chrome>
+			{#if showPageHeader}<header class="flex shrink-0 flex-col" data-record-chrome>
 				{#if pageEyebrow}<span class="text-micro text-muted-foreground truncate leading-4">{pageEyebrow}</span>{/if}
-				<div class="flex flex-wrap items-center gap-x-2">
-					<div class="min-w-0 flex-1">{@render pageHead?.()}</div>
+				<div class="flex flex-nowrap items-center gap-x-2">
+					<div class="min-w-0 flex-1 overflow-hidden">{@render pageHead?.()}</div>
 					{#if owner}{@render tools()}{/if}
 				</div>
 			</header>{/if}

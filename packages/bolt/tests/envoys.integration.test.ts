@@ -14,6 +14,7 @@ import { afterAll } from 'vitest';
 import { Ai } from '../src/engine/ports.ts';
 import { type AiRequest, type AiResponse, Port } from '@norbital-ai/host-api';
 import { act_reply, q_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
+import { id_of } from '../src/index.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { NOTICES } from '../src/engine/envoys/index.ts';
@@ -551,7 +552,7 @@ layer(
 			if (created.kind !== 'committed') throw new Error(created.kind);
 			const envoy = present(created.records[0]).id;
 			const line = yield* (yield* t.as(t.admin)).act({
-				'sys_integration.create': [{ integration: 'whatsapp', name: 'Runtime line', envoy }]
+				'sys_integration.create': [{ integration: 'whatsapp', name: 'Runtime line' }]
 			});
 			expect(line.kind).toBe('committed');
 			const instance = present(
@@ -560,6 +561,15 @@ layer(
 				]))[0]
 			).rows[0]?.['id'];
 			if (typeof instance !== 'string') throw new Error('Missing runtime line');
+			const bound = yield* (yield* t.as(t.admin)).act({
+				'sys_envoy_channel.create': [
+					{
+						envoy: Schema.decodeUnknownSync(id_of('sys_envoy'))(envoy),
+						integration: Schema.decodeUnknownSync(id_of('sys_integration'))(instance)
+					}
+				]
+			});
+			expect(bound.kind).toBe('committed');
 			yield* t.receive(instance, {
 				id: 'runtime-m1',
 				thread: '6591234567:14@s.whatsapp.net',
@@ -655,6 +665,154 @@ layer(
 					peer: '555',
 					text: expect.stringContaining('through the pipeline')
 				});
+			})
+	);
+});
+
+const SHARED_WA = 'shared_wa';
+const ENG_ENVOY = '0199a000-0000-7000-8000-0000000000e4';
+const CLIENT_ENVOY = '0199a000-0000-7000-8000-0000000000e5';
+
+layer(
+	with_envoys(
+		with_accounts(
+			TestWorkspace.layer({
+				manifest,
+				ports: scriptedAi(() => []).layer
+			}),
+			[{ id: SHARED_WA, integration: 'whatsapp', status: { state: 'connected' } }]
+		),
+		[
+			{
+				id: ENG_ENVOY,
+				name: 'Engineering Desk',
+				audience: 'private',
+				policies: ['desk'],
+				triage: false,
+				group_messages: 'mention_or_reply',
+				channels: [
+					{
+						integration: SHARED_WA,
+						scope: {
+							dm: { mode: 'selected', teams: ['t-con'] },
+							groups: { mode: 'selected', threads: [{ id: 'eng-group@g.us', label: 'Engineering' }] }
+						}
+					}
+				]
+			},
+			{
+				id: CLIENT_ENVOY,
+				name: 'Client Desk',
+				audience: 'public',
+				policies: ['desk'],
+				triage: false,
+				group_messages: 'mention_or_reply',
+				channels: [
+					{
+						integration: SHARED_WA,
+						group_messages: 'all',
+						scope: {
+							dm: { mode: 'selected', handles: ['+65 8111 2222'] },
+							groups: { mode: 'selected', threads: [{ id: 'vip-group@g.us', label: 'VIP' }] }
+						}
+					}
+				]
+			}
+		]
+	),
+	{ excludeTestServices: true }
+)('shared channel multi-envoy listening scope routing', (it) => {
+	it.effect(
+		'routes DMs by team or handle, routes groups to each claiming envoy with per-binding group trigger override, and ignores out-of-scope chats silently',
+		() =>
+			Effect.gen(function* () {
+				const t = yield* TestWorkspace;
+				yield* t.db.write({ text: teams_sql(TEAMS), params: [] });
+				yield* t.db.write({
+					text: `INSERT INTO sys_user (id, name, phone, team, active, kind) VALUES ('eng1', 'Ada', '+65 9111 0001', 't-con', true, 'staff')`,
+					params: []
+				});
+
+				// 1. DM from Engineering team member → Engineering Desk answers
+				yield* t.receive(SHARED_WA, [
+					{
+						id: 'sh-dm-eng',
+						thread: '6591110001@s.whatsapp.net',
+						from: { handle: '6591110001@s.whatsapp.net', name: 'Ada' },
+						text: 'hi eng',
+						attachments: [],
+						invocation: 'direct',
+						sent_at: t.clock.now()
+					},
+					// 2. DM from VIP external handle → Client Desk answers
+					{
+						id: 'sh-dm-vip',
+						thread: '6581112222@s.whatsapp.net',
+						from: { handle: '6581112222@s.whatsapp.net', name: 'VIP' },
+						text: 'hi vip',
+						attachments: [],
+						invocation: 'direct',
+						sent_at: t.clock.now()
+					},
+					// 3. DM from unscoped stranger → silently ignored (no turn, no fixed notice!)
+					{
+						id: 'sh-dm-other',
+						thread: '6599990000@s.whatsapp.net',
+						from: { handle: '6599990000@s.whatsapp.net', name: 'Stranger' },
+						text: 'hi nobody',
+						attachments: [],
+						invocation: 'direct',
+						sent_at: t.clock.now()
+					},
+					// 4. Ambient message in VIP group → Client Desk has per-binding group_messages: 'all', so it answers!
+					{
+						id: 'sh-grp-vip',
+						thread: 'vip-group@g.us',
+						group: true,
+						title: 'VIP',
+						from: { handle: '6581112222@s.whatsapp.net', name: 'VIP' },
+						text: 'vip group ambient',
+						attachments: [],
+						invocation: 'ambient',
+						sent_at: t.clock.now()
+					},
+					// 5. Mention in Eng group → Engineering Desk answers
+					{
+						id: 'sh-grp-eng',
+						thread: 'eng-group@g.us',
+						group: true,
+						title: 'Engineering',
+						from: { handle: '6591110001@s.whatsapp.net', name: 'Ada' },
+						text: 'eng group mention',
+						attachments: [],
+						invocation: 'mention',
+						sent_at: t.clock.now()
+					}
+				]);
+				t.clock.advance('2s');
+				yield* t.run_due();
+				yield* t.settled();
+
+				const convs = yield* t.db.rows(
+					Schema.Struct({ thread: Schema.String, envoy: Schema.NullOr(Schema.String) }),
+					{
+						text: `SELECT thread, envoy FROM sys_conversation WHERE integration = $1 ORDER BY thread`,
+						params: [SHARED_WA]
+					}
+				);
+				expect(convs).toEqual([
+					{ thread: '6581112222@s.whatsapp.net', envoy: CLIENT_ENVOY },
+					{ thread: '6591110001@s.whatsapp.net', envoy: ENG_ENVOY },
+					{ thread: '6599990000@s.whatsapp.net', envoy: null },
+					{ thread: 'eng-group@g.us', envoy: ENG_ENVOY },
+					{ thread: 'vip-group@g.us', envoy: CLIENT_ENVOY }
+				]);
+				// Out-of-scope stranger gets NO outbound reply (silent ignore, not private-desk bounce notice)
+				const outboundToStranger = yield* t.db.rows(Schema.Struct({ id: Schema.String }), {
+					text: `SELECT m.id FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation WHERE c.thread = '6599990000@s.whatsapp.net' AND m.direction = 'outbound'`,
+					params: []
+				});
+				expect(outboundToStranger).toEqual([]);
 			})
 	);
 });

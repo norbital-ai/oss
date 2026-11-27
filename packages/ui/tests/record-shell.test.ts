@@ -1551,3 +1551,137 @@ it.live('a live push on the open record updates fields, the Under approval badge
 		});
 	})
 );
+
+it.live('auto_save opens a decorated record in edit mode, debounces saves, stays editable, and supports a single-line custom header', () =>
+	browser(async () => {
+		const acts: SentAct[] = [];
+		let revision = 3;
+		const fixture = await viewFixture({
+			catalog,
+			get: () => ({ ...LIVE, revision }),
+			capabilities: () => ({ ...nativeCapabilities, revision }),
+			act: (body, key) => {
+				acts.push({ ...single_act(body), key });
+				revision += 1;
+				return { ...committed(body), records: [{ model: 'jobs', id: 'j1', revision }] };
+			}
+		});
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(FooterHarness, {
+			target,
+			props: {
+				bolt: fixture.bolt,
+				catalog,
+				layout: 'sheet',
+				representation: 'decorated',
+				auto_save: 40,
+				custom_header: true
+			}
+		});
+		mounted.push(async () => {
+			await unmount(app);
+			target.remove();
+		});
+		await settle();
+
+		// Custom header snippet sits inside Sheet header while keeping accessible dialog name from `title`
+		const dialog = element<HTMLElement>(target, '[role=dialog]');
+		assert.equal(dialog.getAttribute('aria-label'), 'Authored job');
+		assert.ok(dialog.querySelector('header [data-custom-breadcrumb]'));
+		assert.equal(dialog.querySelector('[data-sheet-eyebrow]'), null);
+
+		// Auto-save opens directly in edit mode with status in footer and no Edit / Save buttons
+		const footer = nativeFooter(target);
+		await vi.waitFor(() => {
+			assert.equal(footer.querySelector('[data-record-autosave]')?.getAttribute('data-record-autosave'), 'idle');
+			assert.ok(target.querySelector('[data-field=title] input'));
+		});
+		assert.equal(footer.querySelector('[data-record-save]'), null);
+		assert.equal(
+			[...footer.querySelectorAll('button')].some((b) => textOf(b) === 'Edit'),
+			false
+		);
+
+		// Rapid edits debounce into a single act, stay in edit mode, and show Saved in the footer
+		const input = element<HTMLInputElement>(target, '[data-field=title] input');
+		input.value = 'Paint v4';
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		input.value = 'Paint v5';
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		flushSync();
+		assert.equal(footer.querySelector('[data-record-autosave]')?.getAttribute('data-record-autosave'), 'pending');
+
+		await vi.waitFor(() => {
+			assert.equal(acts.length, 1);
+			assert.equal(footer.querySelector('[data-record-autosave]')?.getAttribute('data-record-autosave'), 'saved');
+		});
+		assert.deepEqual(acts[0]?.input, [{ target: { id: 'j1', revision: 3 }, set: { title: 'Paint v5' } }]);
+		// Remains in edit mode after commit
+		assert.ok(target.querySelector('[data-field=title] input'));
+	})
+);
+
+it.live('auto_save pauses after a save failure and exposes Retry in the footer without looping', () =>
+	browser(async () => {
+		let attempts = 0;
+		const fixture = await viewFixture({
+			catalog,
+			get: () => LIVE,
+			capabilities: () => nativeCapabilities,
+			act: (body) => {
+				attempts += 1;
+				if (attempts === 1) return { kind: 'conflict', records: [] } satisfies WireOutcome;
+				return { ...committed(body), records: [{ model: 'jobs', id: 'j1', revision: 4 }] };
+			}
+		});
+		const target = document.body.appendChild(document.createElement('div'));
+		const app = mount(FooterHarness, {
+			target,
+			props: {
+				bolt: fixture.bolt,
+				catalog,
+				layout: 'sheet',
+				representation: 'decorated',
+				auto_save: 30
+			}
+		});
+		mounted.push(async () => {
+			await unmount(app);
+			target.remove();
+		});
+		await settle();
+
+		const footer = nativeFooter(target);
+		const input = element<HTMLInputElement>(target, '[data-field=title] input');
+		const timers = vi.spyOn(globalThis, 'setTimeout');
+		try {
+			input.value = 'Conflicting edit';
+			input.dispatchEvent(new Event('input', { bubbles: true }));
+			flushSync();
+
+			await vi.waitFor(() => {
+				assert.equal(attempts, 1);
+				assert.equal(footer.querySelector('[data-record-autosave]')?.getAttribute('data-record-autosave'), 'error');
+				assert.ok(footer.querySelector('[data-record-retry]'));
+			});
+
+			// Does not reschedule auto_save in a loop while untouched
+			await settle();
+			assert.equal(attempts, 1);
+			assert.equal(
+				timers.mock.calls.filter(([, delay]) => delay === 30).length,
+				1
+			);
+		} finally {
+			timers.mockRestore();
+		}
+
+		// Clicking Retry succeeds and returns footer to saved
+		element<HTMLButtonElement>(footer, '[data-record-retry]').click();
+		await vi.waitFor(() => {
+			assert.equal(attempts, 2);
+			assert.equal(footer.querySelector('[data-record-autosave]')?.getAttribute('data-record-autosave'), 'saved');
+			assert.equal(footer.querySelector('[data-record-retry]'), null);
+		});
+	})
+);

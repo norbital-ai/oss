@@ -490,7 +490,31 @@ export function discord(options: DiscordOptions = {}): ProviderDef {
 						? Effect.void
 						: rest(Schema.Unknown, 'POST', `/channels/${encodeURIComponent(to)}/typing`).pipe(
 								Effect.asVoid
-							)
+							),
+				discover: () =>
+					Effect.gen(function* () {
+						if (cred === null) return [];
+						const GuildChannel = Schema.Struct({
+							id: Schema.String,
+							name: Schema.optionalKey(Schema.String),
+							type: Schema.optionalKey(Schema.Number)
+						});
+						const out: { id: string; label: string }[] = [];
+						for (const guild of guilds) {
+							const channels = yield* rest(
+								Schema.Array(GuildChannel),
+								'GET',
+								`/guilds/${encodeURIComponent(guild)}/channels`
+							).pipe(Effect.catch(() => Effect.succeed<readonly (typeof GuildChannel.Type)[]>([])));
+							for (const ch of channels)
+								if (ch.type === 0 || ch.type === 5 || ch.type === 15)
+									out.push({
+										id: ch.id,
+										label: ch.name !== undefined && ch.name !== '' ? `#${ch.name}` : ch.id
+									});
+						}
+						return out;
+					})
 			};
 		})
 	};

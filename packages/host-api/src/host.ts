@@ -427,12 +427,12 @@ export type WorkspaceBranch = {
 		/** One instance as an operator observes it; `not_found` for no such instance. */
 		status(instance: string, options: Signal): Promise<InstanceAdmin>;
 		/**
-		 * Pauses or resumes an instance and deploys or detaches its envoy (an active one, on a workspace conversation
-		 * instance, else `invalid`), fenced by the `revision` its status read: `conflict` when it moved. Credentials stay.
+		 * Pauses or resumes an instance, fenced by the `revision` its status read: `conflict` when it moved.
+		 * Credentials and envoy channel bindings stay intact.
 		 */
 		configure(
 			instance: string,
-			change: { readonly active: boolean; readonly envoy: string | null; readonly revision: number },
+			change: { readonly active: boolean; readonly revision: number },
 			options: Signal
 		): Promise<InstanceAdmin>;
 		/**

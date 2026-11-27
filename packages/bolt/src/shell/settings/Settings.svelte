@@ -113,7 +113,14 @@
 		).pipe(Stream.switchMap(() => Stream.fromEffect(owner.settings())));
 	});
 	const s = $derived(settings.current ?? null);
-	const hasConnections = $derived((s?.integrations.length ?? 0) > 0);
+	const declaredIntegrations = $derived(
+		new Set((s?.integrations ?? []).filter((d) => d.declared).map((d) => d.name))
+	);
+	const hasConnections = $derived(
+		s !== null &&
+			(s.integrations.some((d) => d.declared) ||
+				s.instances.some((i) => workspaceConnection(i, s.envoy_channels, declaredIntegrations)))
+	);
 	let mutationError = $state<string | null>(null);
 	const error = $derived(mutationError ?? settings.error?.message ?? null);
 	// Invalidation switches only the inner read, keeping the open integration sheet mounted while it refreshes.
@@ -286,10 +293,13 @@
 		if (intent === null || settings === null || configured === intent.key) return;
 		configured = intent.key;
 		const request = intent.request;
+		const declared = new Set(settings.integrations.filter((d) => d.declared).map((d) => d.name));
 		integrationTab =
 			request.capability === 'integration.manage' &&
 			settings.instances.some(
-				(instance) => instance.id === request.record && workspaceConnection(instance)
+				(instance) =>
+					instance.id === request.record &&
+					workspaceConnection(instance, settings.envoy_channels, declared)
 			)
 				? 'connections'
 				: SYSTEM_UI[request.capability].tab;

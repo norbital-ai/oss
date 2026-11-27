@@ -322,6 +322,31 @@ const EXPECTED: { [table: string]: Shape } = {
 			"(triage_scope in ('dm', 'group', 'all'))"
 		]
 	},
+	sys_envoy_channel: {
+		key: 'id uuid primary key',
+		columns: {
+			scope: 'jsonb',
+			group_messages: 'text',
+			active: 'boolean not null default true',
+			revision: 'int not null default 1',
+			envoy: 'uuid not null',
+			integration: 'text not null',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_envoy_channel_HASH(id)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_envoy_channel_HASH(id), ''))) stored"
+		},
+		unique: ['nulls not distinct (envoy, integration)'],
+		indexes: ['(envoy)', '(integration)', 'using gin (bolt_search)'],
+		fks: [
+			'(envoy) references sys_envoy (id) on delete cascade on update restrict',
+			'(integration) references sys_integration (id) on delete cascade on update restrict'
+		],
+		checks: [
+			"((scope is null or store_json_valid(scope, '{kind:json,optional:true}'::jsonb) is true))",
+			"(group_messages in ('disabled', 'mention_or_reply', 'all'))"
+		]
+	},
 	sys_file: {
 		key: 'id text primary key',
 		columns: {
@@ -377,8 +402,8 @@ const EXPECTED: { [table: string]: Shape } = {
 		columns: {
 			integration: 'text not null',
 			name: 'text not null',
-			envoy: 'text',
 			active: 'boolean not null default true',
+			listen: 'jsonb',
 			configuration: 'jsonb not null default {}',
 			import_start: 'jsonb',
 			status: 'jsonb',
@@ -397,6 +422,7 @@ const EXPECTED: { [table: string]: Shape } = {
 		checks: [
 			"((configuration is null or store_json_valid(configuration, '{default:{},kind:json}'::jsonb) is true))",
 			"((import_start is null or store_json_valid(import_start, '{kind:json,optional:true}'::jsonb) is true))",
+			"((listen is null or store_json_valid(listen, '{kind:json,optional:true}'::jsonb) is true))",
 			"((status is null or store_json_valid(status, '{kind:json,optional:true}'::jsonb) is true))",
 			'(isfinite(updated_at))'
 		]

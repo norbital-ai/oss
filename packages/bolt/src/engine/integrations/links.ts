@@ -127,6 +127,25 @@ export type LinkManager = {
 	readonly discover: (
 		instance: string
 	) => Effect.Effect<readonly { readonly id: string; readonly label: string }[], LinkError>;
+	/** Known groups/channels and recent DMs on a conversation instance (live provider discovery + observed threads). */
+	readonly threads: (
+		instance: string
+	) => Effect.Effect<
+		{
+			readonly groups: readonly {
+				readonly id: string;
+				readonly label: string;
+				readonly last_at?: string;
+			}[];
+			readonly dms: readonly {
+				readonly id: string;
+				readonly handle: string;
+				readonly label: string;
+				readonly last_at?: string;
+			}[];
+		},
+		LinkError
+	>;
 	readonly may: (
 		authority: Authority,
 		instance: string
@@ -1092,8 +1111,9 @@ export const integration_links = (
 				),
 			state,
 			offers: h.enter(
-				Effect.map(Manifest, (manifest) =>
-					[
+				Effect.map(Manifest, (manifest) => {
+					const declaredConnections = new Set(manifest.workspace.connections ?? []);
+					return [
 						...Object.entries(SYSTEM.integrations)
 							.filter(([name]) => !Object.hasOwn(manifest.integrations, name))
 							.map(([integration, definition]) => [integration, definition, false] as const),
@@ -1106,12 +1126,13 @@ export const integration_links = (
 						description: definition.description,
 						scope: scope_of(definition),
 						custom,
+						declared: allows_workspace(definition) && (custom || declaredConnections.has(integration)),
 						configuration: definition.configuration ?? {},
 						conversation: conversational(definition),
 						personal: allows_personal(definition) ? offered(definition, true) : [],
 						workspace: allows_workspace(definition) ? offered(definition, false) : []
-					}))
-				)
+					}));
+				})
 			),
 			watch: (instance) =>
 				Stream.unwrap(
@@ -1384,6 +1405,110 @@ export const integration_links = (
 							: linked(instance).pipe(Effect.flatMap((held) => held.calls.discover));
 					})
 				),
+			threads: (instance) =>
+				Effect.gen(function* () {
+					const x = yield* row(instance);
+					if (x === undefined) return yield* Effect.fail(gone(instance));
+					const liveDiscovered: readonly { readonly id: string; readonly label: string }[] =
+						live.has(instance) && conversational(x.definition)
+							? yield* linked(instance).pipe(
+									Effect.flatMap((held) => held.calls.discover),
+									Effect.catch(() =>
+										Effect.succeed<readonly { readonly id: string; readonly label: string }[]>([])
+									)
+								)
+							: [];
+					const SeenRow = Schema.Struct({
+						thread: Schema.String,
+						kind: Schema.String,
+						title: Schema.NullOr(Schema.String),
+						sender: Schema.NullOr(Schema.String),
+						sender_name: Schema.NullOr(Schema.String),
+						last_at: Schema.NullOr(Schema.String)
+					});
+					const { seen, stored } = yield* h.enter(
+						Effect.gen(function* () {
+							const db = yield* TenantDb;
+							const [seenRows, convRows] = yield* Effect.all([
+								db
+									.rows(SeenRow, {
+										text: `SELECT thread, kind, title, sender, sender_name, last_at::text AS last_at
+											   FROM bolt_seen_thread WHERE instance = $1 ORDER BY last_at DESC LIMIT 200`,
+										params: [instance]
+									})
+									.pipe(Effect.catch(() => Effect.succeed<readonly (typeof SeenRow.Type)[]>([]))),
+								db
+									.rows(SeenRow, {
+										text: `SELECT c.thread, coalesce(c.kind, 'dm') AS kind, c.title,
+											   (SELECT m.sender FROM sys_message m WHERE m.conversation = c.id AND m.direction = 'inbound' ORDER BY m.seq DESC LIMIT 1) AS sender,
+											   (SELECT m.sender_name FROM sys_message m WHERE m.conversation = c.id AND m.direction = 'inbound' ORDER BY m.seq DESC LIMIT 1) AS sender_name,
+											   c.updated_at::text AS last_at
+											   FROM sys_conversation c WHERE c.integration = $1 AND c.thread IS NOT NULL ORDER BY c.updated_at DESC LIMIT 200`,
+										params: [instance]
+									})
+									.pipe(Effect.catch(() => Effect.succeed<readonly (typeof SeenRow.Type)[]>([])))
+							]);
+							return { seen: seenRows, stored: convRows };
+						})
+					);
+					const groups = new Map<string, { id: string; label: string; last_at?: string }>();
+					const dms = new Map<
+						string,
+						{ id: string; handle: string; label: string; last_at?: string }
+					>();
+					for (const item of liveDiscovered)
+						groups.set(item.id, { id: item.id, label: item.label });
+					for (const entry of [...seen, ...stored]) {
+						if (entry.kind === 'group') {
+							const prev = groups.get(entry.thread);
+							const label =
+								entry.title !== null && entry.title.trim() !== ''
+									? entry.title.trim()
+									: prev?.label ?? entry.thread;
+							const last_at =
+								prev?.last_at !== undefined && entry.last_at !== null
+									? prev.last_at > entry.last_at
+										? prev.last_at
+										: entry.last_at
+									: (prev?.last_at ?? entry.last_at ?? undefined);
+							groups.set(entry.thread, {
+								id: entry.thread,
+								label,
+								...(last_at === undefined ? {} : { last_at })
+							});
+						} else {
+							const handle =
+								entry.sender !== null && entry.sender.trim() !== ''
+									? entry.sender.trim()
+									: entry.thread.split('\u001f')[0] ?? entry.thread;
+							if (handle === '') continue;
+							const prev = dms.get(handle);
+							const name = entry.sender_name ?? entry.title;
+							const label =
+								name !== null && name.trim() !== '' && name.trim() !== handle
+									? `${name.trim()} (${handle})`
+									: prev?.label ?? handle;
+							const last_at =
+								prev?.last_at !== undefined && entry.last_at !== null
+									? prev.last_at > entry.last_at
+										? prev.last_at
+										: entry.last_at
+									: (prev?.last_at ?? entry.last_at ?? undefined);
+							dms.set(handle, {
+								id: entry.thread,
+								handle,
+								label,
+								...(last_at === undefined ? {} : { last_at })
+							});
+						}
+					}
+					const byRecency = <T extends { label: string; last_at?: string }>(a: T, b: T) =>
+						(b.last_at ?? '').localeCompare(a.last_at ?? '') || a.label.localeCompare(b.label);
+					return {
+						groups: [...groups.values()].sort(byRecency),
+						dms: [...dms.values()].sort(byRecency)
+					};
+				}),
 			may: (authority, instance) =>
 				h.enter(
 					Effect.gen(function* () {
