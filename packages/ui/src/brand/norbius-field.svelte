@@ -98,8 +98,10 @@
 			}
 			const [ink, brand, ground] = colors;
 
-			// the agent mark's own band, seated like the mark and grown to page scale
-			const reach = Math.min(width * 0.46, height * 0.45);
+			// the agent mark's own band, seated like the mark and grown to page scale. Because the
+			// tilted band is wider than tall, let shorter desktop viewports (e.g. 125–150% Windows
+			// scaling) keep enough horizontal span to still frame the wide access card.
+			const reach = Math.min(width * 0.46, Math.max(height * 0.45, Math.min(440, height * 0.72)));
 			for (const [i, seed] of LATTICE.entries()) {
 				const p = norbiusStripGeometry.point('ready', seed, i, time);
 				xs[i] = width / 2 + (p.x - FIT.cx) * FIT.scale * reach;

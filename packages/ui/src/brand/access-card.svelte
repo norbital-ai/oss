@@ -59,7 +59,7 @@
 				</p>
 			{/if}
 		</Stack>
-		<Stack gap="sm">{@render children()}</Stack>
+		<Stack gap="sm" class="access-card-body">{@render children()}</Stack>
 		{#if hint}
 			<p class="access-card-hint border-t border-border pt-4 text-sm text-muted-foreground">
 				{#if typeof hint === 'string'}{hint}{:else}{@render hint()}{/if}

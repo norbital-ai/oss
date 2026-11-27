@@ -66,22 +66,30 @@
 	height: 100%;
 }
 .access-panel {
-	box-sizing: border-box;
-	width: 100%;
-	max-block-size: calc(
+	--access-panel-border: 2px;
+	--access-panel-max: calc(
 		100dvh - var(--access-space-before) - var(--access-space-after) -
 			var(--access-footer-space, 0px)
 	);
-	overflow: auto;
+	box-sizing: border-box;
+	width: 100%;
+	max-block-size: var(--access-panel-max);
+	overflow: hidden;
 	overflow-wrap: anywhere;
 	border: 1px solid color-mix(in srgb, var(--border, #deddd6) 80%, transparent);
 	border-radius: var(--radius, 0.75rem);
 	background: color-mix(in srgb, var(--card, #f7f7f4) 95%, transparent);
 	box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
+	-webkit-backdrop-filter: blur(8px);
 	backdrop-filter: blur(8px);
 }
 .access-panel-body {
-	display: flow-root;
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
+	max-block-size: calc(var(--access-panel-max) - var(--access-panel-border));
+	overflow-x: hidden;
+	overflow-y: auto;
 	padding: 1.25rem;
 }
 .dark .access-panel {
@@ -97,6 +105,39 @@
 .access-panel:has(.access-card[data-access-wide='false']) {
 	max-width: 32rem;
 	margin-inline: auto;
+}
+/* When a card carries a scrollable region (`[data-access-scroll]`), flatten the intermediate
+   layout wrappers into `.access-panel-body`'s single flex column so the scroll region shrinks
+   against the panel's viewport cap down to its own `min-height` floor, while every sibling keeps
+   `flex-shrink: 0`. Once a tiny viewport falls below `chrome + floor`, `.access-panel-body`
+   scrolls cleanly with zero element overlap. */
+.access-panel-body:has([data-access-scroll]) {
+	gap: 0.5rem;
+}
+.access-panel-body:has([data-access-scroll]) > .access-card,
+.access-panel-body:has([data-access-scroll]) > .access-card > .access-card-content,
+.access-panel-body:has([data-access-scroll]) > .access-card > .access-card-content > .access-card-body,
+.access-panel-body:has([data-access-scroll]) [data-access-scroll] {
+	display: contents;
+}
+.access-panel-body:has([data-access-scroll]) > .access-card > .access-identity,
+.access-panel-body:has([data-access-scroll]) > .access-card > .access-card-content > header,
+.access-panel-body:has([data-access-scroll]) > .access-card > .access-card-content > .access-card-hint,
+.access-panel-body:has([data-access-scroll])
+	> .access-card
+	> .access-card-content
+	> .access-card-body
+	> :not([data-access-scroll]) {
+	flex-shrink: 0;
+}
+.access-panel-body:has([data-access-scroll]) > .access-card > .access-card-content > header {
+	margin-block-end: 0.5rem;
+}
+.access-panel-body:has([data-access-scroll]) > .access-card > .access-card-content > .access-card-hint {
+	margin-block-start: 0.5rem;
+}
+.access-panel-body:has([data-access-scroll]) [data-access-scroll] > [data-layout='scroll'] {
+	flex: 0 1 auto;
 }
 .access-card-description,
 .access-card .access-error {
@@ -222,6 +263,26 @@
 		padding: 1.5rem;
 	}
 }
+/* Shorter desktop/laptop viewports (e.g. 125–150% Windows scaling + browser bars): trim unused
+   vertical padding so cards with a bounded list keep the action button and hint visible. */
+@media (min-width: 640px) and (max-height: 700px) {
+	.access-content {
+		--access-space-before: calc(max(1rem, env(safe-area-inset-top)) + 3rem);
+		--access-space-after: max(1rem, env(safe-area-inset-bottom));
+	}
+	.access-header {
+		padding-top: max(1rem, env(safe-area-inset-top));
+	}
+	.access-panel-body {
+		padding: 1.25rem;
+	}
+	.access-identity {
+		min-block-size: 2rem;
+	}
+	.access-card-hint {
+		min-block-size: 1.5em;
+	}
+}
 @media (max-width: 639px), (max-height: 500px) and (pointer: coarse) {
 	.access-backdrop {
 		display: none;
@@ -241,10 +302,12 @@
 		padding-top: max(1rem, env(safe-area-inset-top));
 	}
 	.access-frame .access-panel {
+		--access-panel-border: 0px;
 		border: 0;
 		border-radius: 0;
 		background: transparent;
 		box-shadow: none;
+		-webkit-backdrop-filter: none;
 		backdrop-filter: none;
 	}
 	.access-frame .access-panel-body {

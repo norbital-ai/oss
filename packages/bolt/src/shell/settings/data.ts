@@ -307,29 +307,30 @@ export const settings = Effect.fn('shell.settings')(function* (
 		// a workspace definition never takes a built-in's name (discover/reserved-name), so the spread loses none
 		integrations: Object.entries({ ...SYSTEM.integrations, ...m.integrations })
 			.sort(([a], [b]) => a.localeCompare(b))
-			.map(([name, d]) => ({
-				name,
-				driver: driver_name(d),
-				description: d.description,
-				scope: scope_of(d),
-				custom: Object.hasOwn(m.integrations, name),
-				declared:
-					allows_workspace(d) &&
-					(Object.hasOwn(m.integrations, name) || declaredWorkspace.has(name)),
-				conversation: conversational(d),
-				personal: allows_personal(d),
-				sends:
-					conversational(d) ||
-					Object.values(m.exposures).some((model) =>
-						Object.values(model.syncs ?? {}).some(
-							(sync) => sync.with === name && sync.write === true
-						)
+			.map(([name, d]) => {
+				const custom = !Object.hasOwn(SYSTEM.integrations, name);
+				return {
+					name,
+					driver: driver_name(d),
+					description: d.description,
+					scope: scope_of(d),
+					custom,
+					declared: allows_workspace(d) && (custom || declaredWorkspace.has(name)),
+					conversation: conversational(d),
+					personal: allows_personal(d),
+					sends:
+						conversational(d) ||
+						Object.values(m.exposures).some((model) =>
+							Object.values(model.syncs ?? {}).some(
+								(sync) => sync.with === name && sync.write === true
+							)
+						),
+					syncs: Object.values(m.exposures).some((model) =>
+						Object.values(model.syncs ?? {}).some((sync) => sync.with === name)
 					),
-				syncs: Object.values(m.exposures).some((model) =>
-					Object.values(model.syncs ?? {}).some((sync) => sync.with === name)
-				),
-				configuration: d.configuration ?? {}
-			})),
+					configuration: d.configuration ?? {}
+				};
+			}),
 		signup:
 			h.signup === undefined
 				? null

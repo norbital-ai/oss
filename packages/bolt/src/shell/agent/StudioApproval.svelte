@@ -199,7 +199,7 @@
 		<p class="shrink-0 px-3 pt-3 pb-2 text-sm font-medium">
 			{t(decided !== null ? 'Workspace update' : step.tool?.studio === 'rollback' ? 'Restore this version?' : 'Apply these changes?')}
 		</p>
-		<Scroll name={t('Change details')} axis="both" fade={false} class="min-h-0 flex-initial space-y-3 overflow-y-auto overscroll-contain px-3 pb-3 text-sm [scrollbar-gutter:auto]">
+		<Scroll name={t('Change details')} axis="both" fade={false} class="min-h-0 flex-initial space-y-3 overflow-y-auto overscroll-contain px-3 pb-3 text-sm">
 			{#if summary !== undefined && summary !== null && summary !== ''}
 				{#if summary.length > 240}
 					<details class="group/summary" data-role="summary">

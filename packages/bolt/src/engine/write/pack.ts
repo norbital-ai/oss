@@ -130,12 +130,16 @@ const decodeJson = <A, I>(schema: Schema.Codec<A, I>, text: string) =>
 	Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text).pipe(
 		Effect.mapError((cause) => BoltError.make('seed_decode', 'decode', cause.message, cause))
 	);
-/** A rows file's lines, cut from its bytes (the artifact port reads whole files): one row each, decoded as it is read. */
-function* linesOf(bytes: Uint8Array) {
-	let start = 0;
+/** A rows file's lines from row `from` on, cut from its bytes: one row each, decoded as it is read. */
+function* linesOf(bytes: Uint8Array, from = 0) {
+	let start = 0,
+		line = 0;
 	for (let at = bytes.indexOf(10); at !== -1; start = at + 1, at = bytes.indexOf(10, start))
-		if (at > start) yield bytes.subarray(start, at);
-	if (start < bytes.length) yield bytes.subarray(start);
+		if (at > start) {
+			if (line >= from) yield bytes.subarray(start, at);
+			line++;
+		}
+	if (start < bytes.length && line >= from) yield bytes.subarray(start);
 }
 /** A pack as a loader takes it: its `pack.json` and each model's rows from row `from`, streamed when restored. */
 export type PackSource = {
@@ -173,7 +177,17 @@ export const memory_source = (
 		rows: Object.fromEntries(Object.entries(rows).map(([c, r]) => [c, r.length])),
 		assets
 	},
-	rows: (model, from) => Stream.fromIterable((rows[model] ?? []).slice(from)),
+	rows: (model, from) => {
+		const list = rows[model];
+		if (list === undefined || from >= list.length) return Stream.empty;
+		function* fromOffset(items: readonly RowData[]) {
+			for (let i = from; i < items.length; i++) {
+				const item = items[i];
+				if (item !== undefined) yield item;
+			}
+		}
+		return Stream.fromIterable(fromOffset(list), { chunkSize: 64 });
+	},
 	asset
 });
 /** A pack whose rows stay on disk until each model is restored, a line at a time (a cell holds 128 MiB). */
@@ -186,7 +200,10 @@ export const read_pack_source = Effect.fn('Bolt.read_pack_source')(function* (di
 	const bytesOf = (model: string) =>
 		held?.model === model
 			? Effect.succeed(held.bytes)
-			: fs.readFile(`${dir}/rows/${model}.jsonl`).pipe(
+			: Effect.suspend(() => {
+					held = undefined;
+					return fs.readFile(`${dir}/rows/${model}.jsonl`);
+				}).pipe(
 					Effect.mapError((cause) => BoltError.make('seed_decode', 'decode', cause.message, cause)),
 					Effect.tap((bytes) =>
 						Effect.sync(() => {
@@ -202,8 +219,7 @@ export const read_pack_source = Effect.fn('Bolt.read_pack_source')(function* (di
 			Object.hasOwn(meta.rows, model)
 				? Stream.unwrap(
 						Effect.map(bytesOf(model), (bytes) =>
-							Stream.fromIterable(linesOf(bytes)).pipe(
-								Stream.drop(from),
+							Stream.fromIterable(linesOf(bytes, from), { chunkSize: 64 }).pipe(
 								Stream.mapEffect((line) => decodeJson(RowSchema, text.decode(line)))
 							)
 						)

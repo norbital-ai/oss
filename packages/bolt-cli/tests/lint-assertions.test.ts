@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { lintAssertions } from '../src/test/assertions.ts';
-import { asserted, lintTest } from '../src/test/lint.ts';
+import { asserted, lintCrossBrowser, lintTest } from '../src/test/lint.ts';
 
 it('refuses non-null assertions and casts, but not `as const`, in TypeScript and Svelte scripts', () => {
 	expect(lintAssertions('a.ts', 'const a = [1] as const;\nconst b = x!.y;\nconst c = y as string;')).toEqual([
@@ -32,5 +32,48 @@ it('rejects testTimeout/hookTimeout, Bun.sleep, 1-arg numeric setTimeout, and Bu
 		'sample.test.ts:3 a wall-clock wait: use TestClock or wait on the event itself',
 		'sample.test.ts:4 a wall-clock wait: use TestClock or wait on the event itself',
 		'sample.test.ts:5 a spawned process'
+	]);
+});
+
+it('rejects cross-OS/browser CSS and Svelte regressions while allowing canonical gated patterns', () => {
+	expect(
+		lintCrossBrowser(
+			'packages/ui/src/base.css',
+			[
+				'::-webkit-scrollbar { width: 8px; }',
+				'.bounded { scrollbar-width: none; }',
+				'@supports not selector(::-webkit-scrollbar) {',
+				'  * { scrollbar-width: thin; scrollbar-color: transparent transparent; }',
+				'}',
+				'/* scrollbar-gutter: stable in a comment is ignored */',
+				'.bad { scrollbar-width: thin; }',
+				'.bad2 { scrollbar-color: red transparent; }'
+			].join('\n')
+		)
+	).toEqual([
+		'packages/ui/src/base.css:7 ungated scrollbar-width/scrollbar-color disables ::-webkit-scrollbar in Chromium 121+: gate with @supports not selector(::-webkit-scrollbar) or use scrollbar-width: none',
+		'packages/ui/src/base.css:8 ungated scrollbar-width/scrollbar-color disables ::-webkit-scrollbar in Chromium 121+: gate with @supports not selector(::-webkit-scrollbar) or use scrollbar-width: none'
+	]);
+
+	expect(
+		lintCrossBrowser(
+			'apps/website/src/app.css',
+			'.code::-webkit-scrollbar { height: 8px; }\n.box { scrollbar-gutter: stable; height: 80vh; }'
+		)
+	).toEqual([
+		'apps/website/src/app.css:1 custom ::-webkit-scrollbar belongs only in @norbital-ai/ui/src/base.css',
+		'apps/website/src/app.css:2 scrollbar-gutter: stable reserves a classic gutter on Windows/Chrome that macOS overlay scrollbars do not',
+		'apps/website/src/app.css:2 legacy vh/h-screen ignores dynamic mobile browser chrome: use dvh or svh'
+	]);
+
+	expect(
+		lintCrossBrowser(
+			'apps/website/src/Page.svelte',
+			'<div class="min-h-svh max-h-[80dvh]"><button>☀</button></div>\n<div class="min-h-screen [scrollbar-gutter:stable]"></div>'
+		)
+	).toEqual([
+		'apps/website/src/Page.svelte:1 raw Unicode symbol renders differently across OS fonts: use an SVG <Icon>',
+		'apps/website/src/Page.svelte:2 scrollbar-gutter: stable reserves a classic gutter on Windows/Chrome that macOS overlay scrollbars do not',
+		'apps/website/src/Page.svelte:2 legacy vh/h-screen ignores dynamic mobile browser chrome: use dvh or svh'
 	]);
 });

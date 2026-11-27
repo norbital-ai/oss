@@ -259,7 +259,7 @@
 		</Popover.Trigger>
 		<Popover.Content
 			align="start"
-			class="max-h-[min(32rem,80vh)] w-[min(44rem,calc(100vw-2rem))] overflow-auto"
+			class="max-h-[min(32rem,80dvh)] w-[min(44rem,calc(100vw-2rem))] overflow-auto"
 			data-structured-inspector
 		>
 			{#if is_json_schema_document(value)}

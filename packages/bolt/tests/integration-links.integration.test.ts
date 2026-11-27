@@ -1438,6 +1438,15 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						yield* until(() => closed.length === 2);
 						expect(closed).toEqual(['cal2', other]);
 						expect(yield* links.state('cal2')).toMatchObject({ state: 'connected' });
+						const offers = yield* links.offers;
+						expect(offers.find((o) => o.integration === 'cal')).toMatchObject({
+							custom: true,
+							declared: true
+						});
+						expect(offers.find((o) => o.integration === 'slack')).toMatchObject({
+							custom: false,
+							declared: false
+						});
 						yield* links.close;
 					})
 				)

@@ -128,7 +128,7 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 	class={cn(
 		SIZE_CLASSES[size],
 		size === 'content' && max && MAX_CLASSES[max],
-		'min-w-0 [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+		'min-w-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
 		SCROLL_AXIS_CLASSES[axis],
 		layoutClasses[layout],
 		layout !== 'block' && GAP_CLASSES[gap],
@@ -145,6 +145,7 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 	style:min-height={size === 'fill' ? min_height : undefined}
 	data-layout="scroll"
 	data-scroll-axis={axis}
+	data-scroll-size={size}
 	data-scroll-inset={padsInset || undefined}
 	{...restProps}
 	{@attach scrollAffordance({ fade })}

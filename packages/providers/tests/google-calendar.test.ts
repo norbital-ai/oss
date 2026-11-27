@@ -698,7 +698,7 @@ describe('the Google Calendar link', () => {
 			const local = yield* fixture(
 				[],
 				{ token: TOKEN },
-				'http://norbital_hq.localhost:5173/hooks/integration/desk'
+				'http://norbital-hq.localhost:5173/hooks/integration/desk'
 			);
 			expect(yield* required(local.link.renew)()).toBe(new Date(NOW + 300_000).toISOString());
 			expect(invalidations(local.h)).toEqual([

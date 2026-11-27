@@ -411,7 +411,7 @@ describe('an instance status', () => {
 describe('norbital.template.json', () => {
 	const manifest = {
 		schema_version: 1,
-		key: 'norbital_construction',
+		key: 'norbital-construction',
 		name: 'Construction Operations',
 		industry: 'Construction',
 		description: 'Projects.',
@@ -431,6 +431,7 @@ describe('norbital.template.json', () => {
 		refuses(TemplateManifest, { ...manifest, capabilities: ['made_up_capability'] });
 		refuses(TemplateManifest, { ...manifest, schema_version: 2 });
 		refuses(TemplateManifest, { ...manifest, key: 'Not A Handle' });
+		refuses(TemplateManifest, { ...manifest, key: 'norbital_construction' });
 		refuses(TemplateManifest, { ...manifest, name: '  ' });
 		refuses(TemplateManifest, {
 			...manifest,
@@ -484,7 +485,7 @@ const built = Effect.gen(function* () {
 		format: 1 as const,
 		contract: CONTRACT,
 		host_api: HOST_API_VERSION,
-		handle: 'norbital_test',
+		handle: 'norbital-test',
 		name: 'Test',
 		schema: fingerprint(schema_slice(workspace)),
 		client: { entry: 'app.js', css: [] },
@@ -508,7 +509,7 @@ describe('the artifact a host reads', () => {
 		Effect.gen(function* () {
 			const dir = yield* built;
 			expect((yield* read_artifact(dir)).manifest.workspace.tz).toBe('Asia/Singapore');
-			expect((yield* read_artifact(dir)).artifact.handle).toBe('norbital_test');
+			expect((yield* read_artifact(dir)).artifact.handle).toBe('norbital-test');
 			expect((yield* read_artifact(dir)).dir).toBe(dir);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);

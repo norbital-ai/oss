@@ -1125,32 +1125,28 @@ export const integration_links = (
 						)
 						.map(([name, spec]) => ({ name, description: spec.description }))
 						.sort((a, b) => a.name.localeCompare(b.name));
-					return [
-						...Object.entries(SYSTEM.integrations)
-							.filter(([name]) => !Object.hasOwn(manifest.integrations, name))
-							.map(([integration, definition]) => [integration, definition, false] as const),
-						...Object.entries(manifest.integrations).map(
-							([integration, definition]) => [integration, definition, true] as const
-						)
-					].map(([integration, definition, custom]): IntegrationOffer => {
-						const isConversation = conversational(definition);
-						return {
-							integration,
-							driver: driver_name(definition),
-							description: definition.description,
-							scope: scope_of(definition),
-							custom,
-							declared:
-								allows_workspace(definition) && (custom || declaredConnections.has(integration)),
-							configuration: definition.configuration ?? {},
-							conversation: isConversation,
-							...(isConversation && channelAutomations.length > 0
-								? { automations: channelAutomations }
-								: {}),
-							personal: allows_personal(definition) ? offered(definition, true) : [],
-							workspace: allows_workspace(definition) ? offered(definition, false) : []
-						};
-					});
+					return Object.entries({ ...SYSTEM.integrations, ...manifest.integrations }).map(
+						([integration, definition]): IntegrationOffer => {
+							const custom = !Object.hasOwn(SYSTEM.integrations, integration);
+							const isConversation = conversational(definition);
+							return {
+								integration,
+								driver: driver_name(definition),
+								description: definition.description,
+								scope: scope_of(definition),
+								custom,
+								declared:
+									allows_workspace(definition) && (custom || declaredConnections.has(integration)),
+								configuration: definition.configuration ?? {},
+								conversation: isConversation,
+								...(isConversation && channelAutomations.length > 0
+									? { automations: channelAutomations }
+									: {}),
+								personal: allows_personal(definition) ? offered(definition, true) : [],
+								workspace: allows_workspace(definition) ? offered(definition, false) : []
+							};
+						}
+					);
 				})
 			),
 			watch: (instance) =>

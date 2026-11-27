@@ -55,6 +55,17 @@ const RULES: readonly Rule[] = [
 ];
 const TEST = /(^|\/)tests\/|\.(test|spec)\.[cm]?[jt]s$/;
 const SOURCE = /\.[cm]?[jt]s$/;
+const CROSS_BROWSER = /\.(css|svelte)$/;
+const BASE_SCROLLBAR_CSS = /(^|[\\/])ui[\\/]src[\\/]base\.css$/;
+const BLOCK_COMMENTS = /\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g;
+const FIREFOX_SCROLLBAR_AT_RULE = /@supports\s+not\s+selector\(\s*::-webkit-scrollbar\s*\)/;
+const SCROLLBAR_WIDTH_OR_COLOR =
+	/\bscrollbar-color\s*:|\bscrollbar-width\s*:\s*(?!none\b)[\w-]+/;
+const SCROLLBAR_GUTTER_STABLE =
+	/\bscrollbar-gutter\s*:\s*stable\b|\[scrollbar-gutter\s*:\s*stable\]/;
+const WEBKIT_SCROLLBAR = /::-webkit-scrollbar\b/;
+const LEGACY_VH = /\b(?:min-|max-)?h-screen\b|(?<![a-zA-Z0-9_-])\d+(?:\.\d+)?vh\b/;
+const OS_SYMBOL_GLYPH = /[☀☾]/;
 /** The folders no lint reads: dependencies, builds, fixtures, and every dot folder (generated output, data, `.git`). */
 const SKIP: ReadonlySet<string> = new Set(['node_modules', 'build', 'dist', 'fixtures']);
 const skipped = (name: string) => SKIP.has(name) || /^\.[^.]/.test(name);
@@ -81,6 +92,62 @@ export const lintTest = (
 			(rule) => (rule.template !== true || options.template === true) && rule.pattern.test(code)
 		).map((rule) => `${path}:${index + 1} ${rule.message}`);
 	});
+
+/** Cross-OS and cross-browser CSS/Svelte invariants, as `path:line message`. */
+export const lintCrossBrowser = (path: string, text: string): readonly string[] => {
+	const stripped = text.replace(BLOCK_COMMENTS, (match) => match.replace(/[^\n]/g, ' '));
+	const allowWebkitScrollbar = BASE_SCROLLBAR_CSS.test(path);
+	const isSvelte = path.endsWith('.svelte');
+	const found: string[] = [];
+	let firefoxGuardDepth = 0;
+	let awaitingGuardBrace = false;
+
+	for (const [index, line] of stripped.split('\n').entries()) {
+		const lineNumber = index + 1;
+		const startsGuard = FIREFOX_SCROLLBAR_AT_RULE.test(line);
+		if (startsGuard) awaitingGuardBrace = true;
+
+		if (firefoxGuardDepth === 0 && !startsGuard && SCROLLBAR_WIDTH_OR_COLOR.test(line)) {
+			found.push(
+				`${path}:${lineNumber} ungated scrollbar-width/scrollbar-color disables ::-webkit-scrollbar in Chromium 121+: gate with @supports not selector(::-webkit-scrollbar) or use scrollbar-width: none`
+			);
+		}
+		if (SCROLLBAR_GUTTER_STABLE.test(line)) {
+			found.push(
+				`${path}:${lineNumber} scrollbar-gutter: stable reserves a classic gutter on Windows/Chrome that macOS overlay scrollbars do not`
+			);
+		}
+		if (!allowWebkitScrollbar && !startsGuard && WEBKIT_SCROLLBAR.test(line)) {
+			found.push(
+				`${path}:${lineNumber} custom ::-webkit-scrollbar belongs only in @norbital-ai/ui/src/base.css`
+			);
+		}
+		if (LEGACY_VH.test(line)) {
+			found.push(
+				`${path}:${lineNumber} legacy vh/h-screen ignores dynamic mobile browser chrome: use dvh or svh`
+			);
+		}
+		if (isSvelte && OS_SYMBOL_GLYPH.test(line)) {
+			found.push(
+				`${path}:${lineNumber} raw Unicode symbol renders differently across OS fonts: use an SVG <Icon>`
+			);
+		}
+
+		for (const ch of line) {
+			if (ch === '{') {
+				if (awaitingGuardBrace) {
+					firefoxGuardDepth = 1;
+					awaitingGuardBrace = false;
+				} else if (firefoxGuardDepth > 0) {
+					firefoxGuardDepth += 1;
+				}
+			} else if (ch === '}' && firefoxGuardDepth > 0) {
+				firefoxGuardDepth -= 1;
+			}
+		}
+	}
+	return found;
+};
 
 /** Every file under `root` no lint skips, by path relative to `root`, and each committed snapshot directory. */
 const tree = (root: string) =>
@@ -119,14 +186,20 @@ export const lintTree = (
 		const found = snapshots.map((shown) => `${shown} a committed snapshot or screenshot directory`);
 		for (const shown of files) {
 			const test = SOURCE.test(shown) && TEST.test(shown),
-				assert = typed !== undefined && asserted(shown);
-			if (!test && !assert) continue;
+				assert = typed !== undefined && asserted(shown),
+				crossBrowser =
+					options.assertions === true &&
+					options.template !== true &&
+					CROSS_BROWSER.test(shown) &&
+					!TEST.test(shown);
+			if (!test && !assert && !crossBrowser) continue;
 			const text = yield* fs.readFileString(join(root, shown));
 			if (test) found.push(...lintTest(shown, text, options));
 			if (assert)
 				found.push(
 					...typed.lintAssertions(shown, text).map(({ line, message }) => `${shown}:${line} ${message}`)
 				);
+			if (crossBrowser) found.push(...lintCrossBrowser(shown, text));
 		}
 		return found;
 	});

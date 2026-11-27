@@ -19,7 +19,7 @@ import {
 
 const metadata = {
 	schema_version: 1,
-	key: 'norbital_fixture',
+	key: 'norbital-fixture',
 	name: 'Fixture',
 	industry: 'Operations',
 	description: 'Fixture workspace',
@@ -83,10 +83,20 @@ describe('bolt templates', () => {
 			const templates = yield* discoverTemplates(root);
 			expect(templates).toHaveLength(1);
 			expect(yield* discoverTemplates(root, 'fixture')).toEqual(templates);
-			expect(yield* discoverTemplates(root, 'norbital_fixture')).toEqual(templates);
+			expect(yield* discoverTemplates(root, 'norbital-fixture')).toEqual(templates);
 			expect(
 				(yield* discoverTemplates(root, 'no-such-template').pipe(Effect.flip)).message
 			).toContain('No template matched');
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
+	it.live('refuses non-DNS underscore organization handles', () =>
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const root = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-template-bad-handle-' });
+			yield* template(root, 'bad', { ...metadata, key: 'norbital_bad' });
+			expect((yield* discoverTemplates(root).pipe(Effect.flip)).message).toContain(
+				'invalid organization handle: norbital_bad'
+			);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
 	it.live('tests only templates it can name, and names those it cannot', () =>
@@ -173,7 +183,7 @@ describe('bolt templates', () => {
 			yield* template(
 				root,
 				'older',
-				{ schemaVersion: 1, key: 'norbital_older', counts: { models: 0 } },
+				{ schemaVersion: 1, key: 'norbital-older', counts: { models: 0 } },
 				'0.0.0'
 			);
 			const delegated: Array<readonly [string, readonly string[]]> = [];
@@ -183,14 +193,14 @@ describe('bolt templates', () => {
 					return '';
 				});
 			expect((yield* discoverTemplates(root)).map(({ handle, bolt }) => [handle, bolt])).toEqual([
-				['norbital_fixture', expect.any(String)],
-				['norbital_older', '0.0.0']
+				['norbital-fixture', expect.any(String)],
+				['norbital-older', '0.0.0']
 			]);
 			yield* checkTemplates(root, 'fixture', delegate);
 			expect(delegated).toEqual([]);
 			yield* checkTemplates(root, undefined, delegate);
 			yield* lockTemplates({ root, filter: 'older', check: true }, delegate);
-			yield* publishTemplates({ root, out: 'out', filter: 'norbital_older' }, delegate);
+			yield* publishTemplates({ root, out: 'out', filter: 'norbital-older' }, delegate);
 			expect(delegated).toEqual([
 				['older', ['check']],
 				['older', ['lock', '--check']],
@@ -203,7 +213,7 @@ describe('bolt templates', () => {
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
 			const root = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-template-bunfig-' });
-			yield* template(root, 'older', { key: 'norbital_older' }, '0.0.0');
+			yield* template(root, 'older', { key: 'norbital-older' }, '0.0.0');
 			const delegate = () => Effect.succeed('');
 			const file = path.join(root, 'bunfig.toml');
 			yield* fs.writeFileString(

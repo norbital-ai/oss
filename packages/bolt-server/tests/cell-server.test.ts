@@ -36,7 +36,7 @@ const fixture = Effect.gen(function* () {
 		path.join(workspace, 'norbital.template.json'),
 		JSON.stringify({
 			schema_version: 1,
-			key: 'norbital_cell_fixture',
+			key: 'norbital-cell-fixture',
 			name: 'Cell fixture',
 			industry: 'Operations',
 			description: 'A workspace served through its cell',

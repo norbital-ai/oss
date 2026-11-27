@@ -472,7 +472,7 @@
 						fade={false}
 						bind:ref={port}
 						onscroll={scrolled}
-						class="flex h-auto min-h-0 w-full flex-1 flex-col-reverse overflow-auto overscroll-contain [scrollbar-gutter:auto]"
+						class="flex h-auto min-h-0 w-full flex-1 flex-col-reverse overflow-auto overscroll-contain"
 						style={`overflow-anchor: ${pinned ? 'none' : 'auto'}`}
 						data-agent-transcript
 					>

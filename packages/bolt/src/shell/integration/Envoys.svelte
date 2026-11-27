@@ -516,8 +516,8 @@
 					{...radio.item_attrs(option.key)}
 					{@attach radio.item(option.key)}
 					data-channel-card={option.kind === 'new' ? option.integration : option.instance.id}
-					class="flex min-w-0 items-start gap-3 rounded-control border px-3 py-2.5 text-left transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 {active
-						? 'border-border-active bg-surface-active ring-1 ring-ring'
+					class="flex min-w-0 items-start gap-3 rounded-control border px-3 py-2.5 text-left transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-50 {active
+						? 'border-ring bg-surface-active ring-1 ring-inset ring-ring'
 						: 'border-border-control bg-surface-subtle hover:bg-surface-hover'}"
 				>
 					<span class="grid size-8 shrink-0 place-items-center rounded-control border border-border bg-background">

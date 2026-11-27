@@ -531,8 +531,8 @@
 								<button
 									{...newDefRadio.item_attrs(item.name)}
 									{@attach newDefRadio.item(item.name)}
-									class="flex min-w-0 items-start gap-3 rounded-control border px-3 py-2.5 text-left transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-ring {active
-										? 'border-border-active bg-surface-active ring-1 ring-ring'
+									class="flex min-w-0 items-start gap-3 rounded-control border px-3 py-2.5 text-left transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring {active
+										? 'border-ring bg-surface-active ring-1 ring-inset ring-ring'
 										: 'border-border-control bg-surface-subtle hover:bg-surface-hover'}"
 									data-connection-choice={item.name}
 								>

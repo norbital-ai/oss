@@ -15,7 +15,7 @@ const TEAMS = { sales: { name: 'Sales', policies: ['rep'] } };
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
-		workspace: { tz: 'UTC', locale: 'en', apps: ['sales'] },
+		workspace: { tz: 'UTC', locale: 'en', apps: ['sales'], connections: ['whatsapp', 'email'] },
 		models: {
 			openings: {
 				description: 'Roles',
@@ -25,7 +25,9 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: { openings: { outputs: { default: { openings: { fields: 'all' } } } } },
-		integrations: {},
+		integrations: {
+			erp: { description: 'ERP webhook', driver: 'http' }
+		},
 		policies: {
 			rep: {
 				description: 'Rep',
@@ -332,6 +334,31 @@ layer(workspace)('shell administration', (it) => {
 				const refused = yield* Effect.exit(member.act({ 'sys_team.create': [{ name: 'Mine' }] }));
 				expect(refused._tag).toBe('Failure');
 				expect((yield* teams).map((team) => team.name)).not.toContain('Mine');
+			})
+	);
+
+	it.effect(
+		'settings marks only workspace-declared connections and custom definitions as declared',
+		() =>
+			Effect.gen(function* () {
+				const s = yield* settings(admin);
+				expect(s.integrations.filter((d) => d.declared).map((d) => d.name)).toEqual([
+					'email',
+					'erp',
+					'whatsapp'
+				]);
+				expect(s.integrations.find((d) => d.name === 'erp')).toMatchObject({
+					custom: true,
+					declared: true
+				});
+				expect(s.integrations.find((d) => d.name === 'whatsapp')).toMatchObject({
+					custom: false,
+					declared: true
+				});
+				expect(s.integrations.find((d) => d.name === 'slack')).toMatchObject({
+					custom: false,
+					declared: false
+				});
 			})
 	);
 });

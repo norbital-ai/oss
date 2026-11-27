@@ -221,9 +221,8 @@
 	{#if !matching && asked !== true && !scope?.historical && update && bolt.record_capabilities !== undefined && form.capabilities === undefined && form.notice === null}
 		<div role="status" aria-busy="true"><Spinner /></div>
 	{:else}
-		<!-- the gutter is kept: a section opening past the fold never narrows the body under a classic scrollbar -->
 		<div
-			class="min-h-0 flex-1 overflow-auto pb-4 [scrollbar-gutter:stable] has-[>[data-form-content]>[data-layout=split][data-size=fill]]:pb-0"
+			class="min-h-0 flex-1 overflow-auto pb-4 has-[>[data-form-content]>[data-layout=split][data-size=fill]]:pb-0"
 			data-form-body
 		>
 			<!-- a column the body's height bounds: open sections share it and scroll inside themselves -->

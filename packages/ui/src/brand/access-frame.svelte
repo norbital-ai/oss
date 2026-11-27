@@ -161,9 +161,10 @@
 						type="button"
 						onclick={on_theme}
 						aria-label={dark ? labels.lightMode : labels.darkMode}
-						class="size-11 rounded-md text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+						data-testid="access-theme-trigger"
+						class="grid size-11 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
 					>
-						{dark ? '☀' : '☾'}
+						<Icon name={dark ? 'lucide:sun' : 'lucide:moon'} class="size-4" />
 					</button>
 					<p class="text-overline hidden sm:block">{labels.secureAccess}</p>
 				</Inline>

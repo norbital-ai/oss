@@ -810,7 +810,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					</Popover.Trigger>
 					<Popover.Content
 						align="start"
-						class="max-h-[min(32rem,var(--bits-popover-content-available-height,80vh))] w-[min(44rem,calc(100vw-2rem))] overflow-auto p-3"
+						class="max-h-[min(32rem,var(--bits-popover-content-available-height,80dvh))] w-[min(44rem,calc(100vw-2rem))] overflow-auto p-3"
 						data-structured-editor
 					>
 						{@render cellValue()}

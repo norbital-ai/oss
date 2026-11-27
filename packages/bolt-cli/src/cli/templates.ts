@@ -143,7 +143,7 @@ export const discoverTemplates = Effect.fn('bolt.discoverTemplates')(function* (
 			continue;
 		if (!slugPattern.test(slug)) return yield* fail(`Invalid template directory name: ${slug}`);
 		const { key } = yield* json(Handle, path.join(directory, templateMetadataFile));
-		if (!/^norbital_[a-z0-9_]+$/.test(key))
+		if (!/^norbital-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(key) || key.length > 63)
 			return yield* fail(`Template ${slug} has an invalid organization handle: ${key}`);
 		if (templates.some((template) => template.handle === key))
 			return yield* fail(`Template ${slug} repeats the handle ${key}.`);

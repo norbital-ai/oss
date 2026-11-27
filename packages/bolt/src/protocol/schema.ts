@@ -963,8 +963,8 @@ export type TemplateCapability = typeof TemplateCapability.Type;
 /** What the template repositories' gate checks, the website draws and a host's template picker lists. */
 export const TemplateManifest = Schema.Struct({
 	schema_version: Schema.Literal(1),
-	/** The workspace handle: the tenant id a host provisions it as (not the directory name). */
-	key: Schema.String.check(Schema.isPattern(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/)),
+	/** The workspace handle: DNS-standard tenant id a host provisions it as (not the directory name). */
+	key: Schema.String.check(Schema.isPattern(/^(?=.{1,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$/)),
 	name: Copy,
 	industry: Copy,
 	description: Copy,

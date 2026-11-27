@@ -58,7 +58,7 @@ bounded, scrollable popover holding it whole: `full` when given, else `text` as 
 			<Popover.Content
 				align="start"
 				class={cn(
-					'max-h-[min(24rem,70vh)] w-[min(40rem,calc(100vw-2rem))] overflow-auto p-3',
+					'max-h-[min(24rem,70dvh)] w-[min(40rem,calc(100vw-2rem))] overflow-auto p-3',
 					full === undefined && text !== undefined && 'text-xs break-words whitespace-pre-wrap'
 				)}
 			>

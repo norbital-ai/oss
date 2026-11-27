@@ -50,7 +50,7 @@
 	</div>
 	{#if active && !response}
 		<form class="flex min-h-0 flex-col" onsubmit={(event) => { event.preventDefault(); fork(submit()); }}>
-			<Scroll name={t('Question details')} axis="both" fade={false} class="min-h-0 flex-initial overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:auto]" data-question-details>
+			<Scroll name={t('Question details')} axis="both" fade={false} class="min-h-0 flex-initial overflow-y-auto overscroll-contain pr-1" data-question-details>
 				<p id="question-{id}" class="text-sm font-medium whitespace-pre-wrap">{question.question}</p>
 				<fieldset disabled={busy} class="mt-4 grid min-w-0 gap-2" aria-labelledby="question-{id}">
 					{#each question.options as option, index (option)}
@@ -71,7 +71,7 @@
 			{#if failed !== null}<p class="mt-2 shrink-0 text-sm text-destructive" role="alert">{failed}</p>{/if}
 		</form>
 	{:else}
-		<Scroll name={t('Question details')} axis="both" fade={false} class="min-h-0 flex-initial overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:auto]" data-question-details>
+		<Scroll name={t('Question details')} axis="both" fade={false} class="min-h-0 flex-initial overflow-y-auto overscroll-contain pr-1" data-question-details>
 			<p id="question-{id}" class="text-sm font-medium whitespace-pre-wrap">{question.question}</p>
 			{#if !response && question.options.length > 0}
 				<ol class="mt-3 list-decimal space-y-1 pl-5 text-sm">{#each question.options as option (option)}<li class="whitespace-pre-wrap">{option}</li>{/each}</ol>

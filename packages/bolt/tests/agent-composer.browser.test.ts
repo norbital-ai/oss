@@ -462,21 +462,28 @@ it('opens at the live tail, stays latched, and detaches until Latest is pressed'
 		transcript().scrollTop = -300;
 		transcript().dispatchEvent(new Event('scroll'));
 		await expect.element(page.getByRole('button', { name: 'Jump to latest', exact: true })).toBeVisible();
-		const viewport = transcript().getBoundingClientRect();
-		const anchor = [...transcript().querySelectorAll('p')].find((node) => {
-			const box = node.getBoundingClientRect();
-			return box.top >= viewport.top && box.bottom <= viewport.bottom;
-		});
+		let anchor: HTMLParagraphElement | undefined;
+		await expect
+			.poll(() => {
+				const viewport = transcript().getBoundingClientRect();
+				anchor = [...transcript().querySelectorAll('p')].find((node) => {
+					const box = node.getBoundingClientRect();
+					return box.height > 0 && box.top >= viewport.top && box.bottom <= viewport.bottom;
+				});
+				return anchor !== undefined;
+			})
+			.toBe(true);
 		if (anchor === undefined) throw new Error('Missing visible detached transcript anchor');
-		const anchor_top = anchor.getBoundingClientRect().top;
+		const anchored = anchor;
+		const anchor_top = anchored.getBoundingClientRect().top;
 		host.rows.push({ id: 'detached-tail', seq: 98, role: 'assistant', text: 'Reply while detached', state: null, tag: 'reply' });
 		await refresh();
 		await expect.poll(() => target.textContent).toContain('Reply while detached');
 		expect(transcript().scrollTop).toBeLessThan(-100);
-		expect(Math.abs(anchor.getBoundingClientRect().top - anchor_top)).toBeLessThanOrEqual(1);
+		expect(Math.abs(anchored.getBoundingClientRect().top - anchor_top)).toBeLessThanOrEqual(1);
 		host.rows = host.rows.map((row) => row.id === 'detached-tail' ? { ...row, text: `Reply while detached\n\n${'Another streamed sentence. '.repeat(100)}\n\nDetached tail complete` } : row);
 		await refresh();
-		await expect.poll(() => Math.abs(anchor.getBoundingClientRect().top - anchor_top)).toBeLessThanOrEqual(1);
+		await expect.poll(() => Math.abs(anchored.getBoundingClientRect().top - anchor_top)).toBeLessThanOrEqual(1);
 		await page.getByRole('button', { name: 'Jump to latest', exact: true }).click();
 		await expect.poll(() => Math.abs(transcript().scrollTop)).toBeLessThanOrEqual(1);
 		await expect.element(page.getByText('Detached tail complete', { exact: true })).toBeVisible();
