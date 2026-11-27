@@ -4420,8 +4420,8 @@ describe('the catalogue', () => {
 				])
 					expect(channel).not.toContain(hidden);
 				expect(channel).toContain('read_messages');
-				expect(staff).toEqual(expect.arrayContaining(['page', 'workspace_read', 'update_plan']));
-				expect(staff).not.toContain('read_messages');
+				expect(staff).toEqual(expect.arrayContaining(['page', 'workspace_read', 'update_plan', 'read_messages']));
+				expect(external).not.toContain('read_messages');
 				expect(external).not.toContain('workspace_read');
 				// the list is the audience's, whatever the step's mode or authority
 				expect((yield* catalogue(yield* ctx({ mode: 'plan' }))).fixed).toEqual((yield* catalogue(yield* ctx())).fixed);

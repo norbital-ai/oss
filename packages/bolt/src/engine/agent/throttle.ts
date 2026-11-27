@@ -38,6 +38,7 @@ import { FileRef, rowsOf, type As } from './schema.ts';
 import { envoyName } from './context.ts';
 import { personMessage } from './queue.ts';
 import { envoySpec, type EnvoySpec } from '../envoys/spec.ts';
+import { classifierConfigOf } from '../integrations/scope.ts';
 /** The durable run's name: queued runs and the logs carry it across releases. */
 const THROTTLE_RUN = 'agent.triage';
 /** Engine constants (the agent budget), never authoring options. */
@@ -228,7 +229,7 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 	const decide = Effect.fn('SmartThrottle.decide')(function* (conversation: string, ran = false) {
 		const [convs, pendingRows, windowRows, later, lastRows] = yield* db.read([
 			{
-				text: `SELECT envoy, kind, status FROM sys_conversation WHERE id = $1`,
+				text: `SELECT c.envoy, c.kind, c.status, i.classifier FROM sys_conversation c LEFT JOIN sys_integration i ON i.id = c.integration WHERE c.id = $1`,
 				params: [conversation]
 			},
 			{
@@ -265,7 +266,8 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 			Schema.Struct({
 				envoy: Schema.NullOr(Schema.String),
 				kind: Schema.NullOr(Schema.String),
-				status: Schema.String
+				status: Schema.String,
+				classifier: Schema.NullOr(Schema.Json)
 			}),
 			convs?.rows ?? []
 		))[0];
@@ -308,7 +310,8 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		const envoyKey = conv.envoy,
 			envoy = envoyKey !== null;
 		const spec = envoyKey === null ? undefined : yield* envoySpec(db, envoyKey);
-		const filterable = envoy && conv.kind === 'group';
+		const channelClassifier = classifierConfigOf(conv.classifier);
+		const filterable = envoy && conv.kind === 'group' && channelClassifier?.mode !== 'all';
 		const throttled =
 			cfg.ai !== undefined &&
 			(envoy
@@ -401,6 +404,9 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		let req: DecisionRequest = {
 			state: {
 				directive: preview(spec?.task ?? m.agent.internal ?? ''),
+				...(channelClassifier?.instructions
+					? { channel_classifier: preview(channelClassifier.instructions) }
+					: {}),
 				conversation: envoy ? (filterable ? 'envoy group' : 'envoy DM') : 'in-app',
 				// the window: oldest first, filtered messages marked, for reading the pending ones only
 				earlier: windowed.toReversed().map((r) => ({

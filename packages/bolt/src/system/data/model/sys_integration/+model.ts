@@ -21,6 +21,8 @@ export default bind_system_model('sys_integration')({
 		import_start: { kind: 'json', optional: true },
 		/** Connection-level capture scope (`ListeningScope`) for conversation integrations; null captures all. */
 		listen: { kind: 'json', optional: true },
+		/** Connection-level classifier & automation settings (`ClassifierConfig`) for conversation integrations; null defaults to smart mode. */
+		classifier: { kind: 'json', optional: true },
 		status: { kind: 'json', optional: true },
 		epoch: { kind: 'text', optional: true },
 		revision: { kind: 'int', default: 1 },
@@ -41,16 +43,17 @@ export default bind_system_model('sys_integration')({
 				'configuration',
 				'import_start',
 				'listen',
+				'classifier',
 				'status',
 				'revision'
 			]
 		}
 	},
 	create: {
-		fields: ['integration', 'name', 'owner', 'configuration', 'listen']
+		fields: ['integration', 'name', 'owner', 'configuration', 'listen', 'classifier']
 	},
 	update: {
-		fields: ['name', 'active', 'configuration', 'import_start', 'listen']
+		fields: ['name', 'active', 'configuration', 'import_start', 'listen', 'classifier']
 	},
 	delete: {}
 });

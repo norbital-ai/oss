@@ -4,7 +4,7 @@ import { ActRefused, ProtocolFailed } from '../decl/errors.ts';
 import type { Json } from '../decl/values.ts';
 import type { ImportStartInput, InstanceStatus } from '@norbital-ai/host-api';
 import { decode_status } from '../protocol/instance-status.ts';
-import { IntegrationOffer, WireError } from '../protocol/schema.ts';
+import { InstanceMessage, IntegrationOffer, WireError } from '../protocol/schema.ts';
 import { browserTransport } from '../protocol/client.ts';
 
 type Options = { fetch?: typeof fetch; base?: string };
@@ -121,6 +121,17 @@ export function integration_client(instance: string, options: Options = {}) {
 						Effect.mapError(
 							() =>
 								new ProtocolFailed({ message: 'The host returned invalid integration threads.' })
+						)
+					)
+				)
+			),
+		messages: (before?: string) =>
+			call('GET', before === undefined ? 'messages' : `messages?before=${encodeURIComponent(before)}`).pipe(
+				Effect.flatMap((value) =>
+					Schema.decodeUnknownEffect(Schema.Array(InstanceMessage))(value).pipe(
+						Effect.mapError(
+							() =>
+								new ProtocolFailed({ message: 'The host returned invalid integration messages.' })
 						)
 					)
 				)

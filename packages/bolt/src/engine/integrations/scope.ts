@@ -255,3 +255,63 @@ export function scopeSummaryParts(
 export const scopeNeedsDirectory = (scope: ListeningScope | null | undefined): boolean =>
 	scope?.dm?.mode === 'selected' &&
 	((scope.dm.teams?.length ?? 0) > 0 || (scope.dm.members?.length ?? 0) > 0);
+
+// ── runtime channel classifier & automation control (`sys_integration.classifier`) ──
+
+export const ClassifierMode = Schema.Literals(['smart', 'all', 'off']);
+export type ClassifierMode = typeof ClassifierMode.Type;
+
+export const ClassifierConfig = Schema.Struct({
+	/** `'smart'` (default): 30-message windowed Sys 1 classifier; `'all'`: pass all (deterministic scope only); `'off'`: store only, pause background triggers. */
+	mode: ClassifierMode,
+	/** Optional runtime verbal rules steering what to drop vs keep/classify (read by Envoys and reactive automations). */
+	instructions: Schema.optionalKey(Schema.String),
+	/** Reactive automations explicitly disabled on this connection (all matching automations are enabled by default). */
+	disabled_automations: Schema.optionalKey(Schema.Array(Schema.String))
+});
+export type ClassifierConfig = typeof ClassifierConfig.Type;
+
+export const decodeClassifierConfig = (
+	value: unknown
+): Option.Option<ClassifierConfig | null> =>
+	value === null || value === undefined
+		? Option.some(null)
+		: Schema.decodeUnknownOption(ClassifierConfig)(value);
+
+export const classifierConfigOf = (value: unknown): ClassifierConfig | null =>
+	Option.getOrElse(decodeClassifierConfig(value), () => null);
+
+export const normalizeClassifierConfig = (
+	config: ClassifierConfig | null | undefined
+): ClassifierConfig | null => {
+	if (config === null || config === undefined) return null;
+	const instructions = config.instructions?.trim() ?? '';
+	const disabled = uniq(config.disabled_automations).sort();
+	if (config.mode === 'smart' && instructions === '' && disabled.length === 0) return null;
+	return {
+		mode: config.mode,
+		...(instructions !== '' ? { instructions } : {}),
+		...(disabled.length > 0 ? { disabled_automations: disabled } : {})
+	};
+};
+
+export const decodeClassifierConfigStrict = (
+	value: unknown
+): { value: ClassifierConfig | null } | { problem: string } => {
+	if (value === null || value === undefined) return { value: null };
+	const decoded = Schema.decodeUnknownOption(ClassifierConfig)(value, { onExcessProperty: 'error' });
+	if (Option.isNone(decoded))
+		return {
+			problem:
+				"Choose a valid classifier configuration ({ mode: 'smart' | 'all' | 'off', instructions?, disabled_automations? })."
+		};
+	return { value: normalizeClassifierConfig(decoded.value) };
+};
+
+/** Whether a connection's classifier config permits `automation` to trigger on its messages. */
+export const connectionAllowsAutomation = (
+	classifier: ClassifierConfig | null | undefined,
+	automation: string
+): boolean =>
+	classifier?.mode !== 'off' &&
+	!(classifier?.disabled_automations?.includes(automation) ?? false);

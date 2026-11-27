@@ -12,7 +12,7 @@
 // from the platform's view of one through this same path.
 import { sql } from '../db/sql.ts';
 import { Clock, Crypto, Effect, Layer, Option, Predicate, Schema } from 'effect';
-import { enqueue, next_due } from '../runs/queue.ts';
+import { enqueue, next_due, queue_events, triggers_of } from '../runs/queue.ts';
 import type { Json } from '../../decl/values.ts';
 import { DbError, type DriverEvent, ImportStart, Port, type ReconcilePage } from '@norbital-ai/host-api';
 import { Files, Logs, type LogsShape } from '../ports.ts';
@@ -33,10 +33,13 @@ import { BoltError } from '../../protocol/errors.ts';
 import type { AgentEngine } from '../agent/index.ts';
 import { conversationOf, definitionOf } from '../integrations/instances.ts';
 import {
+	connectionAllowsAutomation,
+	decodeClassifierConfig,
 	decodeListeningScope,
 	emailRecipientsOf,
 	matchesListeningScope,
 	scopeNeedsDirectory,
+	type ClassifierConfig,
 	type ListeningScope
 } from '../integrations/scope.ts';
 import type { HandleKind } from '../../decl/runtime/integration.ts';
@@ -85,6 +88,7 @@ type Instance = {
 	import_start: ImportStart | null;
 	importStartRaw: Json;
 	listen: ListeningScope | null;
+	classifier: ClassifierConfig | null;
 };
 /** An admitted row (`role` set) keeps its transcript content; only unadmitted history is rewritten by an edit or a revoke. */
 const KEEP = (col: string) =>
@@ -135,10 +139,11 @@ export function conversations(cfg: ConversationsConfig) {
 				integration: Schema.String,
 				owner: Schema.NullOr(Schema.String),
 				import_start: Schema.NullOr(Schema.Json),
-				listen: Schema.NullOr(Schema.Json)
+				listen: Schema.NullOr(Schema.Json),
+				classifier: Schema.NullOr(Schema.Json)
 			}),
 			{
-				text: 'SELECT integration, owner, import_start, listen FROM sys_integration WHERE id = $1',
+				text: 'SELECT integration, owner, import_start, listen, classifier FROM sys_integration WHERE id = $1',
 				params: [id]
 			}
 		);
@@ -157,6 +162,7 @@ export function conversations(cfg: ConversationsConfig) {
 			)
 		);
 		const listen = Option.getOrElse(decodeListeningScope(row.listen), () => null);
+		const classifier = Option.getOrElse(decodeClassifierConfig(row.classifier), () => null);
 		return {
 			id,
 			integration: row.integration,
@@ -165,7 +171,8 @@ export function conversations(cfg: ConversationsConfig) {
 			handle: conv.handle,
 			import_start,
 			importStartRaw: row.import_start,
-			listen
+			listen,
+			classifier
 		};
 	});
 	const files = Effect.fn('Agents.files')(function* (
@@ -249,6 +256,18 @@ export function conversations(cfg: ConversationsConfig) {
 				)`
 				},
 				{ conflict: 'keep' }
+			);
+		// Reactive automations listening to `sys_message`: enqueued in the same statement when permitted by the connection's classifier config.
+		const listening = triggers_of(m).writes.filter(
+			(w) => w.model === 'sys_message' && connectionAllowsAutomation(inst.classifier, w.automation)
+		);
+		if (listening.length > 0)
+			queue_events(
+				c,
+				listening,
+				`${c.p(now)}::timestamptz`,
+				`(SELECT 'sys_message'::text AS c, ${c.p(id)}::text AS id, CASE WHEN inserted THEN 'create'::text WHEN ${deleted ? 'true' : 'false'} THEN 'delete'::text ELSE 'update'::text END AS op FROM ${msg})`,
+				0
 			);
 	}
 	const ingest = Effect.fn('Agents.ingest')(function* (

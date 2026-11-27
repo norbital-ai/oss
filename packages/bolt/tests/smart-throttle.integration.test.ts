@@ -129,6 +129,7 @@ type Action = 'respond' | 'wait' | 'ignore';
 type Seen = {
 	kind: string;
 	directive: string;
+	channel_classifier?: string;
 	assistant: string;
 	pending: readonly string[];
 	earlier: readonly { readonly text: string; readonly filtered?: boolean }[];
@@ -139,6 +140,7 @@ const seen = (r: DecisionRequest): Seen => {
 	const st = Schema.decodeUnknownSync(
 		Schema.Struct({
 			directive: Schema.String,
+			channel_classifier: Schema.optionalKey(Schema.String),
 			conversation: Schema.String,
 			assistant: Schema.String,
 			earlier: Schema.Array(
@@ -152,6 +154,7 @@ const seen = (r: DecisionRequest): Seen => {
 	return {
 		kind: st.conversation,
 		directive: st.directive,
+		...(st.channel_classifier === undefined ? {} : { channel_classifier: st.channel_classifier }),
 		assistant: st.assistant,
 		earlier: st.earlier,
 		pending: st.pending.map((p) => p.text),
@@ -652,6 +655,37 @@ describe('never wedged', () => {
 			yield* t.settled();
 			expect(yield* queued()).toEqual([]);
 			expect(port.inputs).toHaveLength(1);
+		})
+	);
+	it.live('channel classifier instructions reach System 1 and mode all disables group semantic drop', () =>
+		Effect.gen(function* () {
+			yield* open();
+			yield* t.db.write({
+				text: `UPDATE sys_integration SET classifier = $1::jsonb WHERE id = 'field_wa'`,
+				params: [{ mode: 'smart', instructions: 'Escalate urgent roof leaks immediately.' }]
+			});
+			port.script = ['ignore'];
+			yield* say(CAL_WA, 'passing group chatter', group(91));
+			expect(port.inputs[0]?.channel_classifier).toBe('Escalate urgent roof leaks immediately.');
+			expect(port.inputs[0]?.asked).toContain('m0');
+			expect(yield* row('passing group chatter')).toMatchObject({ addressed: false });
+
+			yield* t.db.write({
+				text: `UPDATE sys_integration SET classifier = $1::jsonb WHERE id = 'field_wa'`,
+				params: [{ mode: 'all', instructions: 'Pass every group message.' }]
+			});
+			fresh();
+			port.script = ['respond'];
+			yield* say(CAL_WA, 'every group line passes', group(92));
+			yield* t.settled();
+			expect(port.inputs[0]?.channel_classifier).toBe('Pass every group message.');
+			expect(port.inputs[0]?.asked).not.toContain('m0');
+			expect((yield* row('every group line passes'))['delivered_turn']).not.toBeNull();
+
+			yield* t.db.write({
+				text: `UPDATE sys_integration SET classifier = NULL WHERE id = 'field_wa'`,
+				params: []
+			});
 		})
 	);
 });

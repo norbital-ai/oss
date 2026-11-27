@@ -5,7 +5,7 @@
 import { Schema, type Effect } from 'effect';
 import type { FileRef } from '@norbital-ai/store/kind';
 import { IntegrationScope, type Attachment } from '../decl/runtime/integration.ts';
-import { ListeningScope } from '../engine/integrations/scope.ts';
+import { ClassifierConfig, ListeningScope } from '../engine/integrations/scope.ts';
 import { SyncDeadLetter, SyncHealth } from '../engine/sync/health-schema.ts';
 import type { Json } from '../decl/values.ts';
 import {
@@ -36,6 +36,7 @@ import {
 	AgentRow,
 	Driver,
 	EngineActorSchema,
+	InstanceMessage,
 	NoticeRow,
 	RunTriggerViewSchema
 } from '../protocol/schema.ts';
@@ -105,50 +106,7 @@ export const Invitation = Schema.Struct({
 	status: Schema.Literals(['open', 'accepted', 'revoked', 'expired'])
 });
 export type Invitation = typeof Invitation.Type;
-/** One raw conversation message as an instance's Messages tab lists it: either direction, as stored. */
-export const InstanceMessage = Schema.Struct({
-	id: Schema.String,
-	seq: Schema.String,
-	direction: Schema.Literals(['inbound', 'outbound']),
-	at: Schema.String,
-	thread: Schema.NullOr(Schema.String),
-	kind: Schema.NullOr(Schema.String),
-	title: Schema.NullOr(Schema.String),
-	sender: Schema.NullOr(Schema.String),
-	sender_name: Schema.NullOr(Schema.String),
-	text: Schema.NullOr(Schema.String),
-	files: Schema.Number,
-	status: Schema.NullOr(Schema.String),
-	error: Schema.NullOr(Schema.String),
-	/** Outbound: the delivery timeline, oldest first; `[]` inbound. */
-	delivery: Schema.Array(
-		Schema.Struct({
-			kind: Schema.Literals([
-				'queued',
-				'sent',
-				'deferred',
-				'delivered',
-				'read',
-				'opened',
-				'bounced',
-				'failed',
-				'complained',
-				'replied',
-				'auto_replied'
-			]),
-			at: Schema.String,
-			provider: Schema.String,
-			code: Schema.optionalKey(Schema.String),
-			reason: Schema.optionalKey(Schema.String),
-			permanent: Schema.optionalKey(Schema.Boolean),
-			presumed: Schema.optionalKey(Schema.Boolean),
-			approximate: Schema.optionalKey(Schema.Boolean),
-			raw: Schema.optionalKey(Schema.Json),
-			reply: Schema.optionalKey(Schema.String)
-		})
-	)
-});
-export type InstanceMessage = typeof InstanceMessage.Type;
+export { InstanceMessage };
 /** Durable sync progress and outbox counts for one integration instance. */
 export const InstanceSyncHealth = SyncHealth;
 export type InstanceSyncHealth = typeof InstanceSyncHealth.Type;
@@ -365,6 +323,7 @@ export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 				owner: NullableString,
 				active: Schema.Boolean,
 				listen: Schema.NullOr(ListeningScope),
+				classifier: Schema.NullOr(ClassifierConfig),
 				status: Schema.Json,
 				configuration: Schema.Json,
 				revision: Schema.Number,

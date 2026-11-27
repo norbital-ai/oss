@@ -14,7 +14,12 @@ import {
 	scope_of,
 	type IntegrationScope
 } from '../../decl/runtime/integration.ts';
-import { decodeListeningScope, type ListeningScope } from '../../engine/integrations/scope.ts';
+import {
+	decodeClassifierConfig,
+	decodeListeningScope,
+	type ClassifierConfig,
+	type ListeningScope
+} from '../../engine/integrations/scope.ts';
 import type { Fields } from '@norbital-ai/store/kind';
 import { SYSTEM } from '../../system/index.ts';
 import { conversational } from '../../engine/integrations/instances.ts';
@@ -44,6 +49,7 @@ const InstanceRow = Schema.Struct({
 	owner: nullableText,
 	active: Schema.Boolean,
 	listen: Schema.NullOr(Schema.Json),
+	classifier: Schema.NullOr(Schema.Json),
 	status: Schema.Json,
 	configuration: Schema.Json,
 	revision: Schema.Number
@@ -114,6 +120,7 @@ export type Settings = {
 		owner: string | null;
 		active: boolean;
 		listen: ListeningScope | null;
+		classifier: ClassifierConfig | null;
 		status: Json;
 		configuration: Json;
 		/** The row's revision as read: a delete is guarded by it. */
@@ -197,7 +204,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 			),
 			sql(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
 			sql(
-				'SELECT id, name, integration, owner, active, listen, status, configuration, revision::int AS revision FROM sys_integration ORDER BY name, id'
+				'SELECT id, name, integration, owner, active, listen, classifier, status, configuration, revision::int AS revision FROM sys_integration ORDER BY name, id'
 			),
 			sql(
 				'SELECT id::text AS id, name, audience, task, policies, group_messages, delegation, triage, dm, active FROM sys_envoy ORDER BY name, id'
@@ -275,6 +282,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 		instances: (yield* decode(InstanceRow, instances?.rows ?? [])).map((i) => ({
 			...i,
 			listen: Option.getOrElse(decodeListeningScope(i.listen), () => null),
+			classifier: Option.getOrElse(decodeClassifierConfig(i.classifier), () => null),
 			configuration: i.configuration ?? {},
 			delivery: delivery.get(i.id) ?? idle
 		})),

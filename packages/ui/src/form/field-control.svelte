@@ -11,6 +11,7 @@
 <script lang="ts">
 	import { create_field } from '../behaviors/index.js';
 	import DescriptionHint from './description-hint.svelte';
+	import { useSectionHeading } from './section.svelte';
 	import { cn, ui_text } from '../primitives/utils.js';
 
 	let {
@@ -47,6 +48,23 @@
 	} = $props();
 	const t = ui_text();
 	const description = $derived(error ?? help);
+	const parentPresentation = useFieldPresentation();
+	const sectionHeading = parentPresentation === undefined ? useSectionHeading() : undefined;
+	$effect(() => {
+		if (sectionHeading === undefined) return;
+		return sectionHeading.register(id);
+	});
+	// A sole field directly under a titled section does not repeat the section's title as a second visible label.
+	const redundantLabel = $derived(
+		label.trim() === '' ||
+			(sectionHeading !== undefined &&
+				sectionHeading.sole &&
+				sectionHeading.title !== undefined &&
+				label.trim().toLowerCase() === sectionHeading.title.trim().toLowerCase())
+	);
+	const showDirty = $derived(!readonly && dirty);
+	const showHint = $derived(Boolean(description) && !dense);
+	const showHeader = $derived((!dense && !redundantLabel) || showDirty || showHint);
 	// svelte-ignore state_referenced_locally -- field id is stable for the control lifetime
 	const field = create_field({
 		id,
@@ -91,33 +109,42 @@
 		}
 	}}
 >
-	<div class="flex min-w-0 items-center gap-1">
+	{#if showHeader}
+		<div class="flex min-w-0 items-center gap-1">
+			<svelte:element
+				this={readonly ? 'span' : 'label'}
+				id={`${id}-label`}
+				for={readonly ? undefined : id}
+				class={cn(
+					'min-w-0',
+					dense || redundantLabel ? 'sr-only' : ['text-label', error && 'text-destructive']
+				)}
+			>
+				{label}{#if !readonly && required}<span class="text-destructive" aria-label={t('required')}
+						>*</span
+					>{/if}
+			</svelte:element>
+			{#if showDirty}<span
+					class="size-1.5 shrink-0 rounded-full bg-amber-500"
+					title={t('unsaved')}
+					aria-label={t('unsaved')}
+					data-field-dirty-mark
+				></span>{/if}
+			{#if showHint && description}<DescriptionHint
+					text={description}
+					class={error ? 'text-destructive' : undefined}
+				/>{/if}
+		</div>
+	{:else}
 		<svelte:element
 			this={readonly ? 'span' : 'label'}
 			id={`${id}-label`}
 			for={readonly ? undefined : id}
-			class={cn(
-				'min-w-0',
-				dense
-					? 'sr-only'
-					: `text-xs font-medium ${error ? 'text-destructive' : 'text-muted-foreground'}`
-			)}
+			class="sr-only"
 		>
-			{label}{#if !readonly && required}<span class="text-destructive" aria-label={t('required')}
-					>*</span
-				>{/if}
+			{label}
 		</svelte:element>
-		{#if !readonly && dirty}<span
-				class="size-1.5 shrink-0 rounded-full bg-amber-500"
-				title={t('unsaved')}
-				aria-label={t('unsaved')}
-				data-field-dirty-mark
-			></span>{/if}
-		{#if description && !dense}<DescriptionHint
-				text={description}
-				class={error ? 'text-destructive' : undefined}
-			/>{/if}
-	</div>
+	{/if}
 	{@render children()}
 	{#if help && !dense}<p {...field.description_attrs()} class="sr-only">{help}</p>{/if}
 	{#if error}<p id={`${id}-error`} class="sr-only" role="alert">{error}</p>{/if}

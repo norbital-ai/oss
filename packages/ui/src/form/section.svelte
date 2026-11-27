@@ -15,7 +15,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 <Section name="basis" title="Evidence basis" icon="lucide:list-checks" size="fill"><Table of="evidence" /></Section>
 -->
 <script lang="ts" module>
-	import { getContext, type Snippet } from 'svelte';
+	import { getContext, setContext, type Snippet } from 'svelte';
 	import type { FormState } from './form-state.svelte.js';
 
 	/** The props of `Section`. */
@@ -84,9 +84,20 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	}
 	const SECTION = Symbol.for('norbital.ui.section');
 	const SECTION_TITLE = Symbol.for('norbital.ui.section.title');
+	export type SectionHeadingContext = {
+		readonly title: string | undefined;
+		readonly sole: boolean;
+		readonly register: (id: string) => () => void;
+	};
+	/** The enclosing section's heading and direct field-control count, so a sole matching field does not repeat the section's title. */
+	export const useSectionHeading = () =>
+		getContext<SectionHeadingContext | undefined>(SECTION_TITLE);
 	/** The enclosing section's shown title: a lone structured field under it does not repeat it as its own heading. */
-	export const useSectionTitle = () =>
-		getContext<{ readonly title: string | undefined } | undefined>(SECTION_TITLE)?.title;
+	export const useSectionTitle = () => useSectionHeading()?.title;
+	/** Clears the enclosing section heading context for nested structured fields that own their own labels. */
+	export const clearSectionHeading = () => {
+		setContext(SECTION_TITLE, undefined);
+	};
 	/**
 	 * A section groups at least two controls, or one large control (`data-field-large`, a field spanning its row): its content is a
 	 * single other field, through single-child wrappers, it folds away and the field joins the flow under its own label.
@@ -115,7 +126,8 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	import { bind_findable, create_disclosure, PersistedState } from '../behaviors/index.js';
 	import { contentMotion } from './content-motion.js';
 	import Icon from '@iconify/svelte';
-	import { flushSync, setContext } from 'svelte';
+	import { flushSync } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import Tooltip from '../primitives/tooltip/tooltip.svelte';
 	import { cn, use_controls } from '../primitives/utils.js';
 	import { use_model_key } from '../model/context.js';
@@ -155,9 +167,19 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		observer.observe(node, { childList: true, subtree: true });
 		return () => observer.disconnect();
 	});
-	setContext(SECTION_TITLE, {
+	const sectionControls = new SvelteSet<string>();
+	setContext<SectionHeadingContext>(SECTION_TITLE, {
 		get title() {
 			return lone ? undefined : title;
+		},
+		get sole() {
+			return sectionControls.size === 1;
+		},
+		register(controlId: string) {
+			sectionControls.add(controlId);
+			return () => {
+				sectionControls.delete(controlId);
+			};
 		}
 	});
 	const titled = $derived(title !== undefined && !lone);

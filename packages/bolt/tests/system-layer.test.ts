@@ -404,6 +404,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			name: 'text not null',
 			active: 'boolean not null default true',
 			listen: 'jsonb',
+			classifier: 'jsonb',
 			configuration: 'jsonb not null default {}',
 			import_start: 'jsonb',
 			status: 'jsonb',
@@ -420,6 +421,7 @@ const EXPECTED: { [table: string]: Shape } = {
 		indexes: ['(owner)', 'using gin (bolt_search)'],
 		fks: ['(owner) references sys_user (id) on delete restrict on update restrict'],
 		checks: [
+			"((classifier is null or store_json_valid(classifier, '{kind:json,optional:true}'::jsonb) is true))",
 			"((configuration is null or store_json_valid(configuration, '{default:{},kind:json}'::jsonb) is true))",
 			"((import_start is null or store_json_valid(import_start, '{kind:json,optional:true}'::jsonb) is true))",
 			"((listen is null or store_json_valid(listen, '{kind:json,optional:true}'::jsonb) is true))",

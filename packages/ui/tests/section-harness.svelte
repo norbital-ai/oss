@@ -8,6 +8,7 @@
 	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	import { type KindsHost } from '../src/kinds/context.js';
 	import Field from '../src/form/field.svelte';
+	import FieldControl from '../src/form/field-control.svelte';
 	import Form from '../src/form/form.svelte';
 	import Section from '../src/form/section.svelte';
 	import { type ViewBolt } from '../src/client/contract.js';
@@ -37,5 +38,11 @@
 	>
 	<Section title="Lone"><Field {ctx} name="tags" /></Section>
 	<Section title="Meta"><Field {ctx} name="meta" /></Section>
-	<Section title="Rates"><Field {ctx} name="rates" label="" /></Section>
+	<Section title="Rates"><Field {ctx} name="rates" /></Section>
+	<Section title="Reads"
+		><FieldControl id="reads-custom" label="Reads" readonly><div>read entries</div></FieldControl></Section
+	>
+	<Section title="Custom"
+		><FieldControl id="custom-other" label="Details" readonly><div>other</div></FieldControl></Section
+	>
 </Form>

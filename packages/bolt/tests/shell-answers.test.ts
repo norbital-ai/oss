@@ -216,6 +216,7 @@ const settings = {
 			integration: 'mail',
 			owner: null,
 			listen: null,
+			classifier: null,
 			active: true,
 			status: { state: 'ready' },
 			configuration: { from: 'a@example.test' },

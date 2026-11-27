@@ -45,12 +45,12 @@
 	{#if eyebrow || name}
 		<Stack as="header" gap="xs" class="access-identity min-w-0">
 			{#if eyebrow}<p class="text-overline">{eyebrow}</p>{/if}
-			{#if name}<p class="text-subhead break-words text-foreground">{name}</p>{/if}
+			{#if name}<p class="text-base font-medium break-words text-foreground">{name}</p>{/if}
 		</Stack>
 	{/if}
 	<Stack as="section" gap="md" class="access-card-content">
 		<Stack as="header" gap="xs">
-			<h1 class="text-section text-balance">{title}</h1>
+			<h1 class="text-heading text-balance">{title}</h1>
 			{#if description}
 				<p
 					class="access-card-description max-w-[52ch] text-sm leading-relaxed text-muted-foreground"

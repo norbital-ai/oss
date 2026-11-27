@@ -1253,7 +1253,26 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'1 group': '1 个群组',
 	'Selected groups': '指定群组',
 	'Saving…': '正在保存…',
-	Add: '添加'
+	Add: '添加',
+	Classifier: '分类器',
+	'Smart classifier': '智能分类器',
+	Smart: '智能',
+	'Pass all': '全部放行',
+	'Classifier instructions': '分类规则',
+	'Uses a 30-message conversation window to drop unrelated noise and detect workspace updates.':
+		'基于最近 30 条对话窗口过滤无关消息，并识别需要更新工作区的内容。',
+	'Passes every message within your listening scope without semantic filtering.':
+		'直接放行监听范围内的所有消息，不进行语义过滤。',
+	'Stores messages for on-demand assistant lookups without running background automations.':
+		'仅保存消息供助手按需查询，暂停后台自动触发。',
+	'Optional: describe what to ignore or keep (e.g. ignore personal chatter; capture project updates, orders, and defects).':
+		'可选：说明要忽略或保留的内容（例如忽略私人闲聊，保留项目进度、订单和问题反馈）。',
+	'Connected automations': '关联自动化',
+	'Choose which reactive automations trigger when messages arrive on this connection.':
+		'选择此连接收到消息时触发哪些响应式自动化。',
+	History: '记录',
+	'Messages and delivery history on this connection, newest first.':
+		'此连接的消息与投递记录，按最新时间排序。'
 };
 
 /** The framework copy of a locale (none for English: the key is the text). */

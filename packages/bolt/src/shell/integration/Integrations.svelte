@@ -13,12 +13,10 @@
 		Field,
 		Form,
 		format,
-		format_handle,
 		Icon,
 		open_record,
 		Sheet,
 		Spinner,
-		StateBadge,
 		TableSkeleton,
 		Tabs,
 		type FieldEditor,
@@ -26,9 +24,11 @@
 	} from '@norbital-ai/ui';
 	import { Cluster, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import IntegrationCard from '../../page/IntegrationCard.svelte';
+	import ClassifierEditor from './ClassifierEditor.svelte';
 	import ConfigurationFields from './ConfigurationFields.svelte';
+	import ConnectionHistory from './ConnectionHistory.svelte';
 	import ListeningScopeEditor from './ListeningScopeEditor.svelte';
-	import { listeningScopeOf } from '../../engine/integrations/scope.ts';
+	import { classifierConfigOf, listeningScopeOf } from '../../engine/integrations/scope.ts';
 	import { humanise_word } from '../i18n.ts';
 	import {
 		driverIcon,
@@ -38,7 +38,6 @@
 		type IntegrationSetupEntry
 	} from './setup.ts';
 	import type { Json } from '../../decl/values.ts';
-	import type { InstanceMessage } from '../api-types.ts';
 	import type { Settings } from '../settings/data.ts';
 	import { page_context, type ShellBolt } from '../runtime.ts';
 	import type { ShellApi } from '../api-types.ts';
@@ -305,47 +304,6 @@
 			}
 		);
 	}
-
-	// ── newest-first raw messages; the resource owns cancellation and failures, the window owns appended pages ──
-	const conversation = $derived(
-		current !== undefined && definition(current.integration)?.conversation === true
-			? current.id
-			: null
-	);
-	const messageScope = $derived({ api, instance: conversation });
-	let messageRequest = $state.raw<{ scope: typeof messageScope; before?: string } | undefined>();
-	let messageWindow = $state.raw<
-		{ scope: typeof messageScope; rows: InstanceMessage[]; more: boolean } | undefined
-	>();
-	const log = $derived(messageWindow?.scope === messageScope ? messageWindow : undefined);
-	const messages = observe_once(() => {
-		const scope = messageScope;
-		const before = messageRequest?.scope === scope ? messageRequest.before : undefined;
-		return scope.instance === null
-			? null
-			: scope.api
-					.instance_messages(scope.instance, before)
-					.pipe(Effect.map((rows) => ({ scope, before, rows })));
-	});
-	watch(
-		() => messages.current,
-		(answer) => {
-			if (answer === undefined) return;
-			messageWindow = {
-				scope: answer.scope,
-				rows:
-					answer.before === undefined ? [...answer.rows] : [...(log?.rows ?? []), ...answer.rows],
-				more: answer.rows.length === 100
-			};
-		}
-	);
-	const readLog = (older = false) =>
-		Effect.sync(() => {
-			if (messages.loading) return;
-			const before = older ? log?.rows.at(-1)?.seq : undefined;
-			if (older && before === undefined) return;
-			messageRequest = { scope: messageScope, ...(before === undefined ? {} : { before }) };
-		});
 
 	const syncHealth = observe_once(() => {
 		const instance = current;
@@ -923,6 +881,15 @@
 							{t}
 						/>
 					{/snippet}
+					{#snippet classifierEditor(field: FieldEditor)}
+						<ClassifierEditor
+							value={classifierConfigOf(field.value)}
+							on_change={(next) => field.on_change(next)}
+							automations={offerOf(i.integration)?.automations ?? []}
+							disabled={field.disabled}
+							{t}
+						/>
+					{/snippet}
 					<Stack gap="md">
 						{#if boundEnvoys.length > 0}
 							<p class="text-meta">
@@ -952,114 +919,20 @@
 							{/if}
 							{#if d?.conversation === true}
 								<Field {ctx} name="listen" label={t('Listening scope')} editor={listenEditor} />
+								<Field {ctx} name="classifier" label={t('Classifier')} editor={classifierEditor} />
 							{/if}
 						</Form>
 					</Stack>
 				{/snippet}
 				{#snippet messagesTab()}
-					<div class="flex flex-col gap-2 text-sm" data-instance-messages>
-						<div class="flex items-center justify-between">
-							<p class="text-xs text-muted-foreground">
-								{t('Messages on this instance, newest first.')}
-							</p>
-							<Button variant="ghost" disabled={messages.loading} onclick={() => fork(readLog())}
-								>{t('Refresh')}</Button
-							>
-						</div>
-						{#if messages.error !== undefined}
-							<p role="alert" class="text-xs text-destructive">
-								{messages.error.message}
-							</p>
-						{/if}
-						{#if log === undefined}
-							{#if messages.loading}
-								<p
-									role="status"
-									aria-busy="true"
-									class="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
-								>
-									<Spinner class="size-3" />{t('Loading…')}
-								</p>
-							{/if}
-						{:else if log.rows.length === 0}
-							<p class="text-xs text-muted-foreground">{t('No messages on this instance yet.')}</p>
-						{:else}
-							<ol class="flex flex-col gap-1.5">
-								{#each log.rows as x (x.id)}
-									<li
-										class="rounded-md border border-border/70 px-2.5 py-1.5"
-										data-direction={x.direction}
-										data-instance-message={x.id}
-									>
-										<p class="flex items-center gap-2 text-xs text-muted-foreground">
-											<span class="font-medium text-foreground"
-												>{x.direction === 'inbound' ? '←' : '→'}
-												{x.direction === 'inbound'
-													? format_handle(d?.driver ?? '', x.sender ?? '', x.sender_name)
-													: t('sent')}</span
-											>
-											<span class="min-w-0 truncate"
-												>{x.kind === 'group'
-													? (x.title ?? x.thread)
-													: format_handle(d?.driver ?? '', x.thread ?? '')}</span
-											>
-											<span class="flex-1"></span>
-											{#if x.direction === 'outbound' && x.status !== null}
-												<StateBadge {ctx} state={x.status} label={t(x.status)} />
-											{/if}
-											<time class="tabular-nums">{when(x.at)}</time>
-										</p>
-										<p class="whitespace-pre-wrap">
-											{x.text ?? ''}{#if x.files > 0}
-												<span class="text-xs text-muted-foreground"
-													>· {x.files} {t(x.files === 1 ? 'file' : 'files')}</span
-												>
-											{/if}
-										</p>
-										{#if x.error}
-											<p
-												class="text-xs {x.status === 'skipped'
-													? 'text-muted-foreground'
-													: 'text-destructive'}"
-											>
-												{x.error}
-											</p>
-										{/if}
-										{#if x.delivery.length > 0}
-											<!-- every report the provider (or bolt) made, oldest first -->
-											<details class="text-xs" data-delivery-timeline>
-												<summary class="cursor-pointer text-muted-foreground">{t('Delivery')}</summary>
-												<ol class="mt-1 flex flex-col gap-0.5 border-l border-border/70 pl-2">
-													{#each x.delivery as e, n (n)}
-														<li data-delivery-kind={e.kind}>
-															<span class="font-medium"
-																>{t(e.kind === 'auto_replied' ? 'auto-replied' : e.kind)}</span
-															>{#if e.presumed}
-																<span class="text-muted-foreground">({t('presumed')})</span>
-															{/if}{#if e.approximate}
-																<span class="text-muted-foreground">({t('approximate')})</span>
-															{/if}
-															<time class="tabular-nums text-muted-foreground">{when(e.at)}</time>
-															{#if e.provider !== 'bolt'}
-																<span class="text-muted-foreground">· {e.provider}</span>
-															{/if}
-															{#if e.code}<code class="text-muted-foreground">{e.code}</code>{/if}
-															{#if e.reason}<span class="text-muted-foreground">— {e.reason}</span>{/if}
-														</li>
-													{/each}
-												</ol>
-											</details>
-										{/if}
-									</li>
-								{/each}
-							</ol>
-							{#if log.more}
-								<Button variant="ghost" disabled={messages.loading} onclick={() => fork(readLog(true))}
-									>{t('Older')}</Button
-								>
-							{/if}
-						{/if}
-					</div>
+					<ConnectionHistory
+						{ctx}
+						driver={d?.driver ?? i.integration}
+						instance={i.id}
+						load={(before) => api.instance_messages(i.id, before)}
+						locale={bolt.locale}
+						{t}
+					/>
 				{/snippet}
 				{#snippet instanceTabs(extra?: { title: string; body: Snippet })}
 					<Tabs

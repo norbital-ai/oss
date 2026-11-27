@@ -469,17 +469,86 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 						if (call._tag === 'ai.sys_2.task') {
 							if (job === undefined) return TASK_NEEDS_RUN;
 							const request = Schema.decodeUnknownOption(
-								Schema.Struct({ description: Schema.String, prompt: Schema.String })
+								Schema.Struct({
+									description: Schema.String,
+									prompt: Schema.String,
+									files: Schema.optionalKey(Schema.Array(Schema.Struct({ id: Schema.String })))
+								})
 							)(call.args[0]);
 							if (Option.isNone(request))
-								return cross_failure('invalid_input', 'task takes { description, prompt }');
+								return {
+									ok: false,
+									error: { kind: 'invalid', message: 'task takes { description, prompt, files? }' }
+								};
+							let taskFiles: readonly Json[] | undefined;
+							const givenFiles = request.value.files ?? [];
+							if (givenFiles.length > 0) {
+								const ids = [...new Set(givenFiles.map((f) => f.id))];
+								const stored = yield* db
+									.rows(
+										Schema.Struct({
+											id: Schema.String,
+											name: Schema.String,
+											mime: Schema.String,
+											size: Schema.Number,
+											field: Schema.String
+										}),
+										{
+											text: 'SELECT id, name, mime, size, field FROM sys_file WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))',
+											params: [JSON.stringify(ids)]
+										}
+									)
+									.pipe(Effect.result);
+								if (Result.isFailure(stored)) return failure(stored.failure);
+								const byId = new Map(stored.success.map((row) => [row.id, row]));
+								const resolved: Json[] = [];
+								for (const id of ids) {
+									const row = byId.get(id);
+									if (row === undefined)
+										return {
+											ok: false,
+											error: { kind: 'invalid', message: `No stored file '${id}'.` }
+										};
+									const allowed = yield* readableFile(
+										{ manifest: m, db, read: readCaller, authority, bindings: b },
+										row.id,
+										row.field
+									).pipe(Effect.result);
+									if (Result.isFailure(allowed)) return failure(allowed.failure);
+									if (!allowed.success)
+										return {
+											ok: false,
+											error: { kind: 'invalid', message: `This automation cannot read file '${id}'.` }
+										};
+									resolved.push({ id: row.id, name: row.name, mime: row.mime, bytes: row.size });
+								}
+								taskFiles = resolved;
+							}
 							// the call site names the task, so a retried attempt starts nothing twice
 							const conversation = yield* turns
-								.task({ ...request.value, run: `${run.id}:${key.slice(key.indexOf(':') + 1)}`, policies: authority.policies })
+								.task({
+									description: request.value.description,
+									prompt: request.value.prompt,
+									...(taskFiles === undefined ? {} : { files: taskFiles }),
+									run: `${run.id}:${key.slice(key.indexOf(':') + 1)}`,
+									policies: authority.policies
+								})
 								.pipe(Effect.result);
-							return Result.isSuccess(conversation)
-								? { ok: true, value: { conversation: conversation.success } }
-								: failure(conversation.failure);
+							if (Result.isSuccess(conversation))
+								return { ok: true, value: { conversation: conversation.success } };
+							if (
+								conversation.failure._tag === 'BoltError' &&
+								conversation.failure.code === 'forbidden'
+							)
+								return {
+									ok: false,
+									error: {
+										kind: 'unavailable',
+										facility: 'ai.sys_2.task',
+										reason: conversation.failure.message
+									}
+								};
+							return failure(conversation.failure);
 						}
 						if (call._tag !== 'ai.sys_2.infer') return yield* facilities.dispatch(withProfile);
 						const names = [...new Set(facts.tools ?? [])];

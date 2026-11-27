@@ -138,7 +138,7 @@ export const canRead = Effect.fn('AgentTool.canRead')(function* (x: ToolContext,
 		(x.authority.admin || (member !== undefined && row?.['created_by'] === member))
 	)
 		return true;
-	if (typeof field !== 'string' || !field.includes('.') || field.startsWith('sys_conversation.'))
+	if (typeof field !== 'string' || !field.includes('.'))
 		return false;
 	const { manifest, db, read } = x.engine;
 	return yield* readableFile(

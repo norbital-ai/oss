@@ -347,12 +347,12 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 		const sysInt = col('sys_integration');
 		sysInt.create.push({
 			policy: PERSONAL_CONNECTIONS,
-			columns: { sys_integration: ['integration', 'name', 'owner', 'configuration', 'listen'] },
+			columns: { sys_integration: ['integration', 'name', 'owner', 'configuration', 'listen', 'classifier'] },
 			check: false
 		});
 		sysInt.update.push({
 			policy: PERSONAL_CONNECTIONS,
-			columns: { sys_integration: ['name', 'active', 'configuration', 'import_start', 'listen'] },
+			columns: { sys_integration: ['name', 'active', 'configuration', 'import_start', 'listen', 'classifier'] },
 			check: false
 		});
 		sysInt.delete.push({ policy: PERSONAL_CONNECTIONS, check: false });

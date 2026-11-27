@@ -29,6 +29,7 @@ const settings: Settings = {
 			integration: 'erp',
 			owner: null,
 			listen: null,
+			classifier: null,
 			active: true,
 			status: { state: 'unpaired' },
 			configuration: {},

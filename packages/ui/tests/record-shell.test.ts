@@ -30,6 +30,7 @@ const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 const { default: RecordShell } = await import('../src/record/RecordShell.svelte');
 const { default: FooterHarness } = await import('./record-footer-harness.svelte');
+const { toast } = await import('../src/toast/toast.svelte.js');
 
 const catalog = {
 	jobs: {
@@ -1683,5 +1684,106 @@ it.live('auto_save pauses after a save failure and exposes Retry in the footer w
 			assert.equal(footer.querySelector('[data-record-autosave]')?.getAttribute('data-record-autosave'), 'saved');
 			assert.equal(footer.querySelector('[data-record-retry]'), null);
 		});
+		// Failure notice lives in the footer, not duplicated as an Alert inside FormBody
+		assert.equal(target.querySelector('[data-form-content] [role=alert]'), null);
+	})
+);
+
+it.live('auto_save keeps inputs enabled during in-flight save, suppresses stale capability conflict banners, and flushes on unmount without toasting', () =>
+	browser(async () => {
+		let revision = 3;
+		let actCount = 0;
+		const gate = Effect.runSync(Deferred.make<void>());
+		const acts: SentAct[] = [];
+		const toastSuccess = vi.spyOn(toast, 'success');
+		let emitLive: (() => void) | undefined;
+		try {
+			const fixture = await viewFixture({
+				catalog,
+				get: () => ({ ...LIVE, revision }),
+				capabilities: () => ({ ...nativeCapabilities, revision: revision - 1 }),
+				changes: (_read, emit) => {
+					emitLive = emit;
+					return () => {};
+				},
+				act: (body, key) =>
+					Effect.gen(function* () {
+						actCount += 1;
+						acts.push({ ...single_act(body), key });
+						if (actCount === 1) yield* Deferred.await(gate);
+						revision += 1;
+						return { ...committed(body), records: [{ model: 'jobs', id: 'j1', revision }] };
+					})
+			});
+			const target = document.body.appendChild(document.createElement('div'));
+			const app = mount(FooterHarness, {
+				target,
+				props: {
+					bolt: fixture.bolt,
+					catalog,
+					layout: 'sheet',
+					representation: 'decorated',
+					auto_save: 25
+				}
+			});
+			mounted.push(async () => {
+				await unmount(app);
+				target.remove();
+			});
+			await settle();
+
+			// Stale capability revision during auto_save never renders a destructive conflict alert
+			assert.equal(target.querySelector('[role=alert]'), null);
+
+			const input = element<HTMLInputElement>(target, '[data-field=title] input');
+			input.focus();
+			input.value = 'Draft A';
+			input.dispatchEvent(new Event('input', { bubbles: true }));
+			flushSync();
+
+			// Wait until first save is actively in flight
+			await vi.waitFor(() => {
+				assert.equal(actCount, 1);
+				assert.equal(
+					nativeFooter(target).querySelector('[data-record-autosave]')?.getAttribute('data-record-autosave'),
+					'saving'
+				);
+			});
+
+			// Input stays enabled while background auto-save is in flight and accepts continued typing
+			assert.equal(input.disabled, false);
+			input.value = 'Draft A + B';
+			input.dispatchEvent(new Event('input', { bubbles: true }));
+			flushSync();
+
+			// Complete first save and emit live update; second edit stays intact and debounces cleanly
+			await Effect.runPromise(Deferred.succeed(gate, undefined));
+			emitLive?.();
+			await vi.waitFor(() => {
+				assert.equal(actCount, 2);
+				assert.equal(
+					nativeFooter(target).querySelector('[data-record-autosave]')?.getAttribute('data-record-autosave'),
+					'saved'
+				);
+			});
+			assert.equal(input.value, 'Draft A + B');
+			assert.equal(target.querySelector('[role=alert]'), null);
+
+			// Make another edit and unmount before debounce expires: flushes silently without "Saved" toast
+			input.value = 'Flush on close';
+			input.dispatchEvent(new Event('input', { bubbles: true }));
+			flushSync();
+			await unmount(app);
+			target.remove();
+			mounted.pop();
+
+			await vi.waitFor(() => {
+				assert.equal(actCount, 3);
+			});
+			await settle();
+			assert.equal(toastSuccess.mock.calls.length, 0);
+		} finally {
+			toastSuccess.mockRestore();
+		}
 	})
 );

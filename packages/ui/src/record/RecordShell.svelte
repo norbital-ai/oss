@@ -683,12 +683,17 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 
 	let capabilityRequest = 0;
 	let permissionError = $state<string | null>(null);
+	let destroyed = false;
+	let latchedAutoSave = false;
 	provideRecordController({
 		get current() {
 			return controller;
 		},
 		get historical() {
 			return shownPast !== null || viewing !== null;
+		},
+		get auto_save() {
+			return autoSaveState.active;
 		}
 	});
 	changes([() => of, () => id, () => live, () => exposure, () => modelLocked], () => {
@@ -701,6 +706,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 			current.spec.target.model !== of ||
 			current.spec.target.id !== id;
 		if (created) {
+			latchedAutoSave = mode !== 'create' && resolveAutoSave(decoration?.auto_save ?? auto_save) !== null;
 			// a create's prefill (the opener's contexts) is kept in the history entry: a reload has no contexts to carry it
 			const given: Readonly<Record<string, FieldValue | undefined>> = {
 				...(mode === 'create' ? remembered_create(of) : {}),
@@ -729,8 +735,13 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 			localController.on_outcome(done);
 			if (mode !== 'create' && (mode !== 'edit' || spec.readonly || modelLocked)) {
 				// a draft left on this record reopens in edit, unless the record has locked since: then it can never be saved
-				if (!localController.restored) localController.mode = 'view';
-				else if (modelLocked) localController.view();
+				if (latchedAutoSave && !spec.readonly && !modelLocked && lock === undefined) {
+					localController.mode = 'edit';
+				} else if (!localController.restored) {
+					localController.mode = 'view';
+				} else if (modelLocked) {
+					localController.view();
+				}
 			}
 		} else {
 			current.spec = spec;
@@ -740,13 +751,18 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		const target = localController;
 		if (target === null) return;
 		const revision = live?.['revision'];
+		const knownRevision =
+			typeof target.revision === 'number' && typeof revision === 'number'
+				? Math.max(revision, target.revision)
+				: (target.revision ?? revision);
 		if (
 			!created &&
 			permissionError === null &&
 			target.capabilities != null &&
 			target.capabilities.model === of &&
 			target.capabilities.id === id &&
-			target.capabilities.revision === revision
+			(target.capabilities.revision === revision ||
+				(typeof knownRevision === 'number' && target.capabilities.revision === knownRevision))
 		) {
 			return;
 		}
@@ -759,12 +775,34 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 				Effect.tap((value) =>
 					Effect.sync(() => {
 						if (request !== capabilityRequest || target !== localController) return;
-						if (
-							value !== null &&
-							(value.model !== of || value.id !== id || value.revision !== revision)
-						) {
+						if (value !== null && (value.model !== of || value.id !== id)) {
 							permissionError = formText('conflict');
 							return;
+						}
+						if (value !== null) {
+							const currentRev = typeof target.revision === 'number' ? target.revision : undefined;
+							const liveRev = typeof revision === 'number' ? revision : undefined;
+							const expectedRev =
+								currentRev !== undefined && liveRev !== undefined
+									? Math.max(currentRev, liveRev)
+									: (currentRev ?? liveRev);
+							if (value.revision !== liveRev && value.revision !== currentRev) {
+								if (expectedRev !== undefined && value.revision < expectedRev) {
+									if (
+										target.capabilities === undefined &&
+										(autoSaveDelay !== null || latchedAutoSave)
+									) {
+										target.capabilities = value;
+									}
+									return;
+								}
+								if (autoSaveDelay !== null || latchedAutoSave || target.pending) {
+									target.capabilities = value;
+									return;
+								}
+								permissionError = formText('conflict');
+								return;
+							}
 						}
 						target.capabilities = value;
 					})
@@ -781,6 +819,12 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	const editing = $derived(controller?.mode === 'edit');
 	const autoSaveDelay = $derived(
 		mode === 'create' ? null : resolveAutoSave(decoration?.auto_save ?? auto_save)
+	);
+	changes(
+		() => autoSaveDelay !== null && mode !== 'create',
+		(active) => {
+			if (active) latchedAutoSave = true;
+		}
 	);
 	const canAutoEdit = $derived(
 		!sharedController &&
@@ -808,9 +852,33 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		}
 	);
 	changes(
-		() => canAutoEdit && localController?.mode === 'view',
+		() =>
+			!sharedController &&
+			autoSaveDelay !== null &&
+			live !== null &&
+			shownPast === null &&
+			viewing === null &&
+			!modelLocked &&
+			!under_approval &&
+			lock === undefined &&
+			localController !== null &&
+			!localController.spec.readonly &&
+			(localController.capabilities === undefined || localController.can_submit) &&
+			localController.mode === 'view',
 		(shouldEdit) => {
 			if (shouldEdit && localController !== null) localController.mode = 'edit';
+		}
+	);
+	changes(
+		() =>
+			!sharedController &&
+			autoSaveDelay !== null &&
+			localController !== null &&
+			localController.mode === 'edit' &&
+			localController.capabilities !== undefined &&
+			!localController.can_submit,
+		(cannotEdit) => {
+			if (cannotEdit && localController !== null) localController.mode = 'view';
 		}
 	);
 	changes([() => live, () => localController?.pending, () => autoSaveDelay], () => {
@@ -818,16 +886,17 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 			return;
 		if (!localController.pending) localController.refresh(live, true);
 	});
-	const draftSignature = $derived.by(() => {
-		if (!canAutoEdit || localController === null || localController.mode !== 'edit') return '';
-		const diff = changed(localController.base, localController.values);
-		const childrenOps = localController.children;
+	function pendingDraftSignature(target: FormState | null): string {
+		if (target === null || target.mode !== 'edit') return '';
+		const diff = changed(target.base, target.values);
+		const childrenOps = target.children;
 		const hasChildren = Object.values(childrenOps).some((ops) => ops.length > 0);
-		const extra = localController.extra();
+		const extra = target.extra();
 		const hasExtra = Object.values(extra).some((rows) => rows.length > 0);
 		if (Object.keys(diff).length === 0 && !hasChildren && !hasExtra) return '';
 		return JSON.stringify({ diff, children: childrenOps, extra });
-	});
+	}
+	const draftSignature = $derived(canAutoEdit ? pendingDraftSignature(localController) : '');
 	changes(
 		() => draftSignature,
 		(sig) => {
@@ -846,6 +915,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 			target.resubmitting
 		)
 			return;
+		latchedAutoSave = true;
 		fork(
 			target.submit().pipe(
 				Effect.tap((outcome) =>
@@ -911,10 +981,13 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		}
 	);
 	onDestroy(() => {
-		if (autoSaveTimer === undefined) return;
-		clearTimeout(autoSaveTimer);
-		autoSaveTimer = undefined;
-		const sig = untrack(() => draftSignature);
+		destroyed = true;
+		if (autoSaveTimer !== undefined) {
+			clearTimeout(autoSaveTimer);
+			autoSaveTimer = undefined;
+		}
+		if (!latchedAutoSave) return;
+		const sig = untrack(() => pendingDraftSignature(localController));
 		if (sig !== '' && sig !== untrack(() => autoSaveFailedSig)) runAutoSave(sig);
 	});
 	const ownAutoSave: AutoSaveState = {
@@ -942,7 +1015,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 	);
 
 	function done(o: Outcome) {
-		const auto = autoSaveDelay !== null && mode !== 'create';
+		const auto = latchedAutoSave || (autoSaveDelay !== null && mode !== 'create');
 		if (!auto || o.kind === 'pending_approval') notify(bolt, o);
 		if (o.kind !== 'committed' && o.kind !== 'pending_approval') return;
 		// the created record is this model's; an act's other writes (a transform's side rows) come first or last
@@ -950,7 +1023,7 @@ A record's frame: heading, state pill, actions, tabs, history and runs around it
 		if (o.kind === 'pending_approval') {
 			submitted = { model: of, record: id ?? mine?.id, request_id: o.request_id };
 		}
-		if (!auto || o.kind === 'pending_approval') controller?.view();
+		if (!destroyed && (!auto || o.kind === 'pending_approval')) controller?.view();
 		if (on_done) on_done(o);
 		else if (mode === 'create' && mine !== undefined) open_record(of, mine.id);
 	}

@@ -330,19 +330,51 @@ it.live(
 	() =>
 		Effect.gen(function* () {
 			const { target } = yield* browser(() => show());
-			// one small field: no heading, no rule, its own label
+			// one small field: no heading, no rule, its own visible text-label
 			const lone = section(target, 'Lone');
 			assert.equal(lone.querySelector('h3'), null);
 			assert.equal(lone.dataset['open'], 'true');
-			assert.ok(lone.querySelector('[data-field=tags] label'));
-			// one large structured field keeps its section and heading
+			const loneLabel = element<HTMLLabelElement>(lone, '[data-field=tags] label');
+			assert.ok(loneLabel.classList.contains('text-label'));
+			assert.equal(loneLabel.classList.contains('sr-only'), false);
+			// one large structured field keeps its section and suppresses its duplicate inner label while inner JSON fields stay labeled
 			assert.ok(header(target, 'Meta'));
-			// two fields keep theirs
+			const metaSection = section(target, 'Meta');
+			const metaLabel = element<HTMLLabelElement>(metaSection, '[data-field=meta] > label');
+			assert.ok(metaLabel.classList.contains('sr-only'));
+			element<HTMLButtonElement>(metaSection, '[data-field=meta] button').click();
+			yield* browser(() => settle());
+			const innerMetaLabels = [
+				...metaSection.querySelectorAll<HTMLLabelElement>('[data-schema-field] label')
+			];
+			assert.ok(innerMetaLabels.length === 2);
+			for (const inner of innerMetaLabels) {
+				assert.ok(inner.classList.contains('text-label'));
+				assert.equal(inner.classList.contains('sr-only'), false);
+			}
+			// two fields keep theirs with visible text-label styling
 			assert.ok(header(target, 'Job'));
-			// a lone structure whose only field repeats the section's title shows that field without its own heading
+			const titleLabel = element<HTMLLabelElement>(section(target, 'Job'), '[data-field=title] label');
+			assert.ok(titleLabel.classList.contains('text-label'));
+			assert.equal(titleLabel.classList.contains('sr-only'), false);
+			// a lone structure whose only field repeats the section's title suppresses both its FieldControl label and inner summary
 			assert.ok(header(target, 'Rates'));
+			const ratesLabel = element<HTMLLabelElement>(section(target, 'Rates'), '[data-field=rates] > label');
+			assert.ok(ratesLabel.classList.contains('sr-only'));
 			assert.equal(section(target, 'Rates').querySelector('summary'), null);
 			assert.ok(section(target, 'Rates').querySelector('[data-view=table], button'));
+			// a custom FieldControl alone in a section matching its title suppresses the visible duplicate label while keeping aria-labelledby
+			const readsSection = section(target, 'Reads');
+			const readsLabel = element<HTMLElement>(readsSection, '#reads-custom-label');
+			assert.ok(readsLabel.classList.contains('sr-only'));
+			assert.equal(
+				element<HTMLElement>(readsSection, '[role="group"]').getAttribute('aria-labelledby'),
+				'reads-custom-label'
+			);
+			// a sole FieldControl whose label differs from the section title keeps its visible text-label
+			const customLabel = element<HTMLElement>(section(target, 'Custom'), '#custom-other-label');
+			assert.ok(customLabel.classList.contains('text-label'));
+			assert.equal(customLabel.classList.contains('sr-only'), false);
 		})
 );
 

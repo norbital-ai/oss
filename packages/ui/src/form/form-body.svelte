@@ -254,7 +254,7 @@
 						>{#each visible as name (name)}<Field {ctx} {name} editor={editors?.[name]} view={viewers?.[name]} />{/each}</Grid
 					>
 				{/if}
-				{#if form.notice}
+				{#if form.notice && !(matching && scope?.auto_save === true && form.notice.tone !== 'info')}
 					<Alert
 						variant={form.notice.tone === 'danger' ? 'destructive' : form.notice.tone}
 						role={form.notice.tone === 'danger' ? 'alert' : 'status'}

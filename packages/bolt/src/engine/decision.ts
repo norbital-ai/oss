@@ -283,6 +283,33 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 	});
 	if (owner === 'sys_conversation.inputs' || owner === 'sys_conversation.outputs') {
 		const a = o.authority.actor;
+		if (owner === 'sys_conversation.inputs') {
+			if (yield* held([['sys_conversation', 'inputs']])) return true;
+			if (o.authority.models['sys_message'] !== undefined) {
+				const msgRows = yield* o.db.rows(Schema.Struct({ message: Schema.String }), {
+					text: `SELECT e->>'message' AS message FROM sys_conversation c, LATERAL jsonb_array_elements(c.inputs) e
+						WHERE e->>'id' = $1 AND e->>'message' IS NOT NULL LIMIT 20`,
+					params: [id]
+				});
+				if (msgRows.length > 0) {
+					const cat = catalog_of(o.manifest);
+					const outputs = outputsOf(o.manifest, 'sys_message').filter(
+						(output) => o.authority.admin || grantedArms(o.authority, 'sys_message', output) !== undefined
+					);
+					const reads = yield* Effect.forEach(
+						outputs.flatMap((output) => msgRows.map((row) => [output, row.message] as const)),
+						([output, msgId]) =>
+							Effect.map(ir.get(cat, 'sys_message', msgId, { select: { id: true } }), (read) =>
+								read.kind === 'get' ? { ...read, output } : read
+							)
+					);
+					if (reads.length > 0) {
+						const got = yield* o.read(reads, { as: 'caller', authority: o.authority }, o.bindings);
+						if (got.some((row) => Predicate.isObject(row) && typeof row['id'] === 'string')) return true;
+					}
+				}
+			}
+		}
 		// ponytail: every file field is scanned for a holder; a file-field index if this read gets hot
 		const filed = () =>
 			held(Object.entries(o.manifest.models).flatMap(([c, spec]) =>

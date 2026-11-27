@@ -9,6 +9,7 @@ import { readsAny } from '../access/authority.ts';
 import { confirmed_send } from '../conversations/status.ts';
 import type { EngineError } from '../errors.ts';
 import { layered } from '../manifest.ts';
+import { lower_read } from '../query/engine.ts';
 import { row as systemRow } from '../system/rows.ts';
 import { ToolAnswer } from './ai.ts';
 import { BOUNDS, filesOf, size } from './context.ts';
@@ -41,6 +42,7 @@ import {
 	err,
 	guard,
 	ok,
+	readOutputs,
 	readPaths,
 	receipt,
 	requestId,
@@ -56,6 +58,7 @@ import {
 	describeWorkspace,
 	ledgerRoots,
 	messageCatalogue,
+	readAs,
 	readTool,
 	withExtras
 } from './tools/read.ts';
@@ -857,26 +860,159 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		);
 	});
 
-	if (x.conv.integration !== null) {
+	const canReadMessages = readOutputs(e.manifest, a, 'sys_message').length > 0;
+	if (x.conv.integration !== null || canReadMessages) {
 		add(readMessagesTool, function* (i) {
-			const rows = yield* x.messages({
-				limit: Math.max(1, Math.min(i.limit ?? 50, 50)),
-				...(i.before === undefined ? {} : { before: i.before })
-			});
+			const limit = Math.max(1, Math.min(i.limit ?? 50, 50));
+			const cross =
+				i.conversation !== undefined ||
+				i.integration !== undefined ||
+				i.sender !== undefined ||
+				i.query !== undefined;
+			if (x.conv.integration !== null && !cross) {
+				const rows = yield* x.messages({
+					limit,
+					...(i.before === undefined ? {} : { before: i.before })
+				});
+				return ok({
+					messages: rows.map((r) => ({
+						id: r.id,
+						seq: r.seq,
+						from: r.role === 'assistant' ? 'you' : authorOf(r),
+						sender: r.sender ?? null,
+						message: r.provider_id ?? null,
+						status: r.status ?? null,
+						sent:
+							r.direction === 'outbound' && !confirmed_send(r.status) ? null : (r.sent_at ?? null),
+						created: r.created_at ?? null,
+						text: r.text,
+						files: filesOf(r),
+						addressed: !ambient(r)
+					}))
+				});
+			}
+			if (!canReadMessages)
+				return err('Your policies do not grant reading messages from other connections.');
+			const where: Record<string, Json> = {
+				deleted_at: { is_null: true },
+				...(i.conversation !== undefined ? { conversation: { eq: i.conversation } } : {}),
+				...(i.integration !== undefined
+					? { integration: { eq: i.integration } }
+					: i.conversation === undefined
+						? { integration: { is_null: false } }
+						: {}),
+				...(i.sender !== undefined && i.sender.trim() !== ''
+					? {
+							or: [
+								{ sender: { like: `%${i.sender.trim()}%` } },
+								{ sender_name: { like: `%${i.sender.trim()}%` } }
+							]
+						}
+					: {}),
+				...(i.query !== undefined && i.query.trim() !== ''
+					? { text: { like: `%${i.query.trim()}%` } }
+					: {}),
+				...(i.before !== undefined ? { seq: { lt: i.before } } : {})
+			};
+			const output = readOutputs(e.manifest, a, 'sys_message')[0] ?? 'default';
+			const ir = yield* lower_read(e.manifest, 'query', [
+				{
+					sys_message: {
+						...(output === 'default' ? {} : { output }),
+						where,
+						fields: [
+							'seq',
+							'conversation',
+							'integration',
+							'direction',
+							'role',
+							'author',
+							'sender',
+							'sender_name',
+							'provider_id',
+							'status',
+							'sent_at',
+							'created_at',
+							'text',
+							'email',
+							'addressed',
+							'delivery',
+							'error'
+						],
+						order_by: { seq: 'desc' },
+						limit
+					}
+				}
+			]);
+			const raw = yield* readAs(x)(ir);
+			const page = isObj(raw) && isObj(raw['sys_message']) ? raw['sys_message'] : null;
+			const rows = page !== null && isList(page['rows']) ? page['rows'].filter(isObj) : [];
+			const convIds = [
+				...new Set(
+					rows.flatMap((r) => (typeof r['conversation'] === 'string' ? [r['conversation']] : []))
+				)
+			];
+			const inputsByMessage = new Map<string, Json[]>();
+			if (convIds.length > 0) {
+				const convs = yield* e.db.rows(
+					Schema.Struct({ id: Schema.String, inputs: Schema.Json }),
+					{
+						text: 'SELECT id, inputs FROM sys_conversation WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))',
+						params: [JSON.stringify(convIds)]
+					}
+				);
+				for (const conv of convs) {
+					if (!isList(conv.inputs)) continue;
+					for (const item of conv.inputs) {
+						if (!isObj(item) || typeof item['message'] !== 'string') continue;
+						const { message: msgId, ...rest } = item;
+						const list = inputsByMessage.get(msgId) ?? [];
+						list.push(rest);
+						inputsByMessage.set(msgId, list);
+					}
+				}
+			}
 			return ok({
-				messages: rows.map((r) => ({
-					seq: r.seq,
-					from: r.role === 'assistant' ? 'you' : authorOf(r),
-					sender: r.sender ?? null,
-					message: r.provider_id ?? null,
-					status: r.status ?? null,
-					sent:
-						r.direction === 'outbound' && !confirmed_send(r.status) ? null : (r.sent_at ?? null),
-					created: r.created_at ?? null,
-					text: r.text,
-					files: filesOf(r),
-					addressed: !ambient(r)
-				}))
+				messages: rows.map((r) => {
+					const id = typeof r['id'] === 'string' ? r['id'] : '';
+					const direction = typeof r['direction'] === 'string' ? r['direction'] : null;
+					const status = typeof r['status'] === 'string' ? r['status'] : null;
+					const email = isObj(r['email']) ? r['email'] : null;
+					const subject = email !== null && typeof email['subject'] === 'string' ? email['subject'] : null;
+					return {
+						id,
+						seq: typeof r['seq'] === 'number' ? r['seq'] : null,
+						conversation: typeof r['conversation'] === 'string' ? r['conversation'] : null,
+						integration: typeof r['integration'] === 'string' ? r['integration'] : null,
+						direction,
+						from:
+							r['role'] === 'assistant'
+								? 'you'
+								: typeof r['author'] === 'string'
+									? r['author']
+									: typeof r['sender_name'] === 'string'
+										? r['sender_name']
+										: typeof r['sender'] === 'string'
+											? r['sender']
+											: null,
+						sender: typeof r['sender'] === 'string' ? r['sender'] : null,
+						message: typeof r['provider_id'] === 'string' ? r['provider_id'] : null,
+						...(subject === null ? {} : { subject }),
+						status,
+						sent:
+							direction === 'outbound' && !confirmed_send(status)
+								? null
+								: typeof r['sent_at'] === 'string'
+									? r['sent_at']
+									: null,
+						created: typeof r['created_at'] === 'string' ? r['created_at'] : null,
+						text: typeof r['text'] === 'string' ? r['text'] : null,
+						files: inputsByMessage.get(id) ?? [],
+						addressed: r['addressed'] !== false,
+						...(isList(r['delivery']) && r['delivery'].length > 0 ? { delivery: r['delivery'] } : {}),
+						...(typeof r['error'] === 'string' ? { error: r['error'] } : {})
+					};
+				})
 			});
 		});
 	}

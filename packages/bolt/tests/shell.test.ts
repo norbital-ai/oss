@@ -348,8 +348,12 @@ describe('exposure (the boot catalog ui reads)', () => {
 			Effect.gen(function* () {
 				const admin = (yield* exposure(em, { ...member([]), admin: true }))['sys_integration'];
 				expect(admin).toMatchObject({
-					create: { columns: ['integration', 'name', 'owner', 'configuration', 'listen'] },
-					update: { columns: ['name', 'active', 'configuration', 'import_start', 'listen'] },
+					create: {
+						columns: ['integration', 'name', 'owner', 'configuration', 'listen', 'classifier']
+					},
+					update: {
+						columns: ['name', 'active', 'configuration', 'import_start', 'listen', 'classifier']
+					},
 					relations: { owner: { targets: ['sys_user'], optional: true } }
 				});
 				expect(admin?.fields).not.toHaveProperty('epoch');

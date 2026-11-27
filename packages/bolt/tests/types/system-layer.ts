@@ -38,6 +38,7 @@ is<
 			readonly name: string;
 			readonly owner?: Id<'sys_user'> | null;
 			readonly listen?: Json;
+			readonly classifier?: Json;
 			readonly configuration?: Json;
 		}
 	>
@@ -50,6 +51,7 @@ is<
 			readonly name?: string;
 			readonly active?: boolean;
 			readonly listen?: Json;
+			readonly classifier?: Json;
 			readonly configuration?: Json;
 			readonly import_start?: Json;
 		}

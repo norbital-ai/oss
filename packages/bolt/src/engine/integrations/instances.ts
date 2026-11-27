@@ -49,7 +49,7 @@ import type { Item } from '../write/flatten.ts';
 import { Chain } from '../write/sql.ts';
 import { validate_database_request, validate_database_result } from './database.ts';
 import type { Credentials } from './credentials.ts';
-import { decodeListeningScopeStrict } from './scope.ts';
+import { decodeClassifierConfigStrict, decodeListeningScopeStrict } from './scope.ts';
 
 /** A definition by name: the workspace's, else one of bolt's conversation definitions. */
 export const definitionOf = (m: EngineManifest, name: string): IntegrationSpec | undefined =>
@@ -155,6 +155,18 @@ export function instanceTransform(
 			if ('problem' in checked) return refuse(c.path, 'listen', checked.problem);
 			normalizedListen = checked.value;
 		}
+		let normalizedClassifier: Json | undefined;
+		if (values['classifier'] !== undefined) {
+			if (values['classifier'] !== null && !conversational(def))
+				return refuse(
+					c.path,
+					'classifier',
+					`Classifier settings apply only to a conversation integration; '${name}' is not one.`
+				);
+			const checked = decodeClassifierConfigStrict(values['classifier']);
+			if ('problem' in checked) return refuse(c.path, 'classifier', checked.problem);
+			normalizedClassifier = checked.value;
+		}
 		const hasConfig = !(values['configuration'] === undefined && pre !== undefined);
 		let normalizedConfig: Json | undefined;
 		if (hasConfig) {
@@ -162,13 +174,14 @@ export function instanceTransform(
 			if ('problem' in decoded) return refuse(c.path, 'configuration', decoded.problem);
 			normalizedConfig = decoded.value;
 		}
-		if (!hasConfig && normalizedListen === undefined) {
+		if (!hasConfig && normalizedListen === undefined && normalizedClassifier === undefined) {
 			out.push(it);
 			continue;
 		}
 		const patch: RowData = {
 			...(normalizedConfig === undefined ? {} : { configuration: normalizedConfig }),
-			...(normalizedListen === undefined ? {} : { listen: normalizedListen })
+			...(normalizedListen === undefined ? {} : { listen: normalizedListen }),
+			...(normalizedClassifier === undefined ? {} : { classifier: normalizedClassifier })
 		};
 		out.push({
 			...it,

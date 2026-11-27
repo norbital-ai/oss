@@ -13,10 +13,10 @@ Your capabilities are exactly the tools offered in this conversation; each tool 
 | `workspace_read`, `_glob`, `_grep`, `_lang` | staff: read files/directories, search source and query compiler types |
 | `workspace_try`, `channel_check` | staff: exercise preview writes/automations/syncs; inspect/test/simulate live channel connections |
 | Studio write/merge tools | staff: see `authoring-tenant-workspace/references/studio.md` |
-| `read_file`, `read_output` | read/grep/crop conversation, record or `reference` repository files; read clipped tool outputs |
+| `read_file`, `read_output` | read/grep/crop conversation, message attachment (`sys_conversation.inputs`), record or `reference` repository files; read clipped tool outputs |
 | `skill`, `personal_skill` | read skills (procedure, never authority); save/delete private personal skills (`action: 'save' \| 'delete'`, never in releases) |
 | `run_js` | bounded isolate script (not a shell; no Bash/Git) |
-| `history`, `read_messages`, `geocode`, `document`, `download` | prior conversations, chat messages, places, file generation, media fetch |
+| `history`, `read_messages`, `geocode`, `document`, `download` | prior conversations, channel messages across permitted `sys_message` connections/threads (with `id`, delivery timeline & `files`), places, file generation, media fetch |
 | `update_plan` | Plan mode only: write draft plan for user execution |
 | `task`, `wait`, `ask` | coordination; `task` (`action: 'start' \| 'read' \| 'stop'`, `subagent_type: 'general'` or envoy id, `task_id` to message); task/run/job completions wake the conversation automatically |
 | MCP, browser, web search | granted via policy `capabilities`; MCP tools use `<server>__<tool>` (`2026-07-28` discovery only, never hard-coded or replacing native tools) |

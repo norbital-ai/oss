@@ -65,7 +65,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	import Editor from '../kinds/editor.svelte';
 	import FieldControl from './field-control.svelte';
 	import Show from '../kinds/show.svelte';
-	import { use_form, type FormState } from './form-state.svelte.js';
+	import { use_form, use_record_controller, type FormState } from './form-state.svelte.js';
 	import { claimSectionField } from './section.svelte';
 	import { bolt_of } from '../client/context.js';
 	import { use_field_label, use_field_help } from '../model/context.js';
@@ -84,6 +84,10 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		dense
 	}: FieldProps = $props();
 	const form = use_form();
+	const recordScope = use_record_controller();
+	const backgroundSaving = $derived(
+		recordScope?.auto_save === true && recordScope.current === form
+	);
 	// svelte-ignore state_referenced_locally -- a field's name is fixed for its life
 	claimSectionField(name);
 	const t = ui_text();
@@ -123,14 +127,14 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	// svelte-ignore state_referenced_locally -- a field's editor snippet is fixed for its life
 	if (editor) provideFieldControl(() => `${id}-${name}`);
 	// what the engine knows the viewer cannot write is a floor no prop lifts (nor does it lift an enclosing readonly); a
-	// save in flight holds every editor
+	// manual save in flight holds every editor, while background auto-save keeps controls interactive and focused
 	const controls = provideControls(() => ({
 		readonly:
 			form !== undefined &&
 			(form.spec.readonly === true || field?.readonly === true || form.locked(name))
 				? true
 				: readonly,
-		disabled: form?.pending === true ? true : disabled
+		disabled: form?.pending === true && !backgroundSaving ? true : disabled
 	}));
 </script>
 

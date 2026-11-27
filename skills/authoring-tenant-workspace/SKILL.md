@@ -18,7 +18,7 @@ Start with `bolt-primer`. Read one file under `references/` only when the task n
 | Automations, effects, notifications (`ctx.notify`), reruns, AI  | `automations-and-effects.md`            |
 | Briefs, workspace skills, envoys, integrations, sync boundary   | `agents-and-integrations.md`            |
 | What the platform renders                                       | `built-ins.md`                          |
-| Primitive roles, file placement, slots, toolbar, record tabs, forms, linked views | `app-structure.md` |
+| Primitive roles, file placement, slots, toolbar, record tabs, forms, linked views, printable reports | `app-structure.md` |
 | Composing novel interactive UIs (`Surface`, `@norbital-ai/ui/behaviors`)   | `behaviors-and-composition.md`          |
 | UI review checklist                                             | `ui-standard.md`                        |
 | Layout axioms                                                   | `interface-ideology.md`                 |

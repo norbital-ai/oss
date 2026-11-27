@@ -854,10 +854,59 @@ export const IntegrationOffer = Schema.Struct({
 	configuration: Schema.optionalKey(Schema.Record(Schema.String, KindSchema)),
 	/** It carries a conversation, so an envoy can answer on it. */
 	conversation: Schema.Boolean,
+	/** Reactive workspace automations triggered by messages on this channel (`on: sys_message`). */
+	automations: Schema.optionalKey(
+		Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.String }))
+	),
 	personal: listOf(ProviderChoice),
 	workspace: listOf(ProviderChoice)
 });
 export type IntegrationOffer = typeof IntegrationOffer.Type;
+
+/** One raw conversation message as a connection's History view lists it: either direction, with delivery timeline. */
+export const InstanceMessage = Schema.Struct({
+	id: Schema.String,
+	seq: Schema.String,
+	direction: Schema.Literals(['inbound', 'outbound']),
+	at: Schema.String,
+	thread: Schema.NullOr(Schema.String),
+	kind: Schema.NullOr(Schema.String),
+	title: Schema.NullOr(Schema.String),
+	sender: Schema.NullOr(Schema.String),
+	sender_name: Schema.NullOr(Schema.String),
+	text: Schema.NullOr(Schema.String),
+	files: Schema.Number,
+	status: Schema.NullOr(Schema.String),
+	error: Schema.NullOr(Schema.String),
+	/** Outbound: the delivery timeline, oldest first; `[]` inbound. */
+	delivery: Schema.Array(
+		Schema.Struct({
+			kind: Schema.Literals([
+				'queued',
+				'sent',
+				'deferred',
+				'delivered',
+				'read',
+				'opened',
+				'bounced',
+				'failed',
+				'complained',
+				'replied',
+				'auto_replied'
+			]),
+			at: Schema.String,
+			provider: Schema.String,
+			code: Schema.optionalKey(Schema.String),
+			reason: Schema.optionalKey(Schema.String),
+			permanent: Schema.optionalKey(Schema.Boolean),
+			presumed: Schema.optionalKey(Schema.Boolean),
+			approximate: Schema.optionalKey(Schema.Boolean),
+			raw: Schema.optionalKey(Schema.Json),
+			reply: Schema.optionalKey(Schema.String)
+		})
+	)
+});
+export type InstanceMessage = typeof InstanceMessage.Type;
 
 // ── sessions and host operations ──
 /** `POST /__bolt/session/code`: where to send a sign-in code, and by which channel for a mobile number. */

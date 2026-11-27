@@ -694,3 +694,41 @@ it.live('optional shaped JSON objects stay absent on create until added and can 
 		assert.equal(view.changes.at(-1), null);
 	})
 );
+
+it.live('nested JSON sections use compact chevrons and consistent text-label field typography', () =>
+	browser(async () => {
+		const { target } = await show({
+			kind: { kind: 'json' },
+			mode: 'view',
+			initial: {
+				day: { days: 21.75, basis: 'FIXED' },
+				hour: { basis: 'FIXED', hours: 174 },
+				rounding: { mode: 'HALF_UP', scale: 2 },
+				proration: 'DAY_RATE'
+			}
+		});
+		const summaries = [...target.querySelectorAll<HTMLElement>('details.structured-nested > summary')];
+		assert.deepEqual(
+			summaries.map((s) => textOf(s).trim()),
+			['Day', 'Hour', 'Rounding']
+		);
+		for (const summary of summaries) {
+			const caret = element<SVGElement>(summary, 'svg');
+			assert.ok(caret.classList.contains('size-3'), 'nested section caret uses compact size-3');
+		}
+		for (const path of [
+			'input.day.days',
+			'input.day.basis',
+			'input.hour.basis',
+			'input.hour.hours',
+			'input.rounding.mode',
+			'input.rounding.scale',
+			'input.proration'
+		]) {
+			const field = element<HTMLElement>(target, `[data-schema-field="${path}"]`);
+			const label = element<HTMLElement>(field, '[id$="-label"]');
+			assert.ok(label.classList.contains('text-label'), `${path} uses canonical text-label`);
+			assert.equal(label.classList.contains('sr-only'), false);
+		}
+	})
+);

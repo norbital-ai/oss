@@ -190,7 +190,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	import { use_form } from '../form/form-state.svelte.js';
 	import FieldControl, { useFieldPresentation } from '../form/field-control.svelte';
 	import { optional_bolt_of } from '../client/context.js';
-	import { useSectionTitle } from '../form/section.svelte';
+	import { clearSectionHeading, useSectionTitle } from '../form/section.svelte';
 
 	let {
 		ctx,
@@ -386,9 +386,11 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const objectKind = $derived(kind?.kind === 'object' ? kind : undefined);
 	const fieldKind = (key: string) =>
 		objectKind?.fields[key] ?? (kind?.kind === 'record' ? kind.of : undefined);
-	// the enclosing section's title, read once: a root object whose only field repeats it shows that field headless
+	// the enclosing section's title, read once: a root object whose only field repeats it shows that field headless;
+	// inner JSON fields own their own labels and never register with the enclosing form section
 	// svelte-ignore state_referenced_locally -- a structure's depth is fixed for its life
 	const sectionTitle = depth === 0 ? useSectionTitle() : undefined;
+	clearSectionHeading();
 	const repeatsSection = (heading: string) =>
 		sectionTitle !== undefined &&
 		fields.length === 1 &&
@@ -969,7 +971,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					)}
 			>
 				<summary
-					><Icon icon="lucide:chevron-right" class="size-4 shrink-0" /><span
+					><Icon icon="lucide:chevron-right" class="size-3 shrink-0" /><span
 						>{group.title || 'Advanced'}</span
 					></summary
 				>
@@ -977,7 +979,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			</details>
 		{:else}{@render fieldRows(group.fields)}{/if}
 	{/each}
-	{#if !fields.length}<p class="px-3 py-2 text-sm text-muted-foreground">
+	{#if !fields.length}<p class="structured-empty text-xs text-muted-foreground">
 			{currentMode === 'diff' ? 'No changes' : 'Empty object'}
 		</p>{/if}
 	{#if !locked && objectKind?.optional === true && value !== null && value !== undefined}<div
@@ -994,7 +996,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			data-section={`${controlId}:properties`}
 			data-open={extraErrors.length > 0}
 		>
-			<summary class="cursor-pointer px-3 py-2 text-sm text-muted-foreground"
+			<summary class="structured-properties-summary cursor-pointer text-xs text-muted-foreground"
 				>{t(extraErrors.length ? 'additionalProperties' : 'addProperty')}</summary
 			>
 			<div class="flex items-center gap-2 px-3 pb-2">
@@ -1039,7 +1041,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			row_class={rowChange}
 			row_trailing={locked ? undefined : trailing}
 		/>
-	{:else}<p class="px-3 py-2 text-sm text-muted-foreground">
+	{:else}<p class="structured-empty text-xs text-muted-foreground">
 			{currentMode === 'diff' && changes_only ? 'No changes' : 'Empty array'}
 		</p>{/if}
 	{#if !locked}<Button
@@ -1190,7 +1192,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				open
 			>
 				<summary
-					><Icon icon="lucide:chevron-right" class="size-4 shrink-0" /><span>{heading}</span
+					><Icon icon="lucide:chevron-right" class="size-3 shrink-0" /><span>{heading}</span
 					>{#if layout === 'array'}<span class="ml-auto text-xs font-normal text-muted-foreground"
 							>{value === undefined ? previousList.length : list.length}</span
 						>{/if}</summary
@@ -1326,16 +1328,21 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	}
 	/* clip, not hidden: a hidden box is a scroll container and would pin the sticky labels to itself */
 	.structured-root {
+		--sd-caret: 0.75rem;
+		--sd-caret-gap: 0.375rem;
+		--sd-inset: 0.75rem;
 		overflow: clip;
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
 	}
-	/* Scalar fields share rows as the pane widens; nested structures and wide kinds keep the full width. */
+	/* Scalar fields share rows as the pane widens; nested structures and wide kinds keep the full width.
+	   No vertical padding or row gap on the grid itself: sections sit flush against the frame and each other,
+	   and every field row carries identical top and bottom padding. */
 	.structured-fields-compact {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(min(100%, clamp(9rem, 50% - 8px, 16rem)), 1fr));
-		gap: 8px 16px;
-		padding-block: 4px;
+		gap: 0 16px;
+		padding-block: 0;
 	}
 	.structured-fields-compact > :global(.structured-data),
 	.structured-fields-compact > .structured-field-wide {
@@ -1345,13 +1352,22 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		border-bottom: 0;
 		overflow-wrap: anywhere;
 	}
+	.structured-fields-compact > .structured-field + :global(.structured-data > .structured-nested) {
+		border-top: 1px solid var(--color-border);
+	}
 	.structured-field {
 		min-width: 0;
-		padding: 8px 12px;
+		padding-block: 0.5rem;
+		padding-inline: var(--sd-inset, 0.75rem) 0.75rem;
 		border-bottom: 1px solid var(--color-border);
 	}
 	.structured-field:last-child {
 		border-bottom: 0;
+	}
+	.structured-empty,
+	.structured-properties-summary {
+		padding-block: 0.5rem;
+		padding-inline: var(--sd-inset, 0.75rem) 0.75rem;
 	}
 	.structured-field-value {
 		position: relative;
@@ -1363,13 +1379,20 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	.structured-section > summary {
 		display: flex;
 		align-items: center;
-		gap: 8px;
-		padding: 6px 10px;
+		gap: var(--sd-caret-gap, 0.375rem);
+		padding-block: 0.375rem;
+		padding-inline: var(--sd-inset, 0.75rem) 0.75rem;
 		cursor: pointer;
 		background: var(--color-muted);
 		border-bottom: 1px solid var(--color-border);
 		list-style: none;
-		font-weight: 500;
+		font-size: var(--text-xs);
+		line-height: var(--text-xs--line-height, 1.333);
+		font-weight: var(--font-weight-medium, 510);
+		color: var(--color-muted-foreground);
+	}
+	.structured-section > summary:hover {
+		color: var(--color-foreground);
 	}
 	.structured-section > summary::-webkit-details-marker {
 		display: none;
@@ -1391,17 +1414,28 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		border-bottom-width: 0;
 	}
 	.structured-nested > summary {
-		padding-inline: 12px;
 		background: color-mix(in oklab, var(--color-muted) 60%, var(--color-card));
+	}
+	.structured-section + .structured-section,
+	.structured-fields + .structured-section,
+	.structured-fields + .structured-properties,
+	.structured-section + .structured-properties {
+		border-top: 1px solid var(--color-border);
 	}
 	/* Inside another frame (a step's input or output), the first section is the frame's own content: no rule. */
 	.structured-nested.structured-flat {
 		border: 0;
 	}
-	/* A section's content steps in under its heading, a level at a time, so the hierarchy reads at a glance. */
-	.structured-nested:not(.structured-flat) > .structured-section-body {
-		margin-inline-start: 12px;
+	/* The vertical guide sits dead-center under the caret, and inner content LHS aligns exactly with the section label. */
+	.structured-section:not(.structured-flat) > .structured-section-body {
+		margin-inline-start: calc(var(--sd-inset, 0.75rem) + var(--sd-caret, 0.75rem) / 2 - 0.5px);
 		border-inline-start: 1px solid var(--color-border);
+	}
+	.structured-section:not(.structured-flat) > .structured-section-body > :global(*) {
+		--sd-inset: calc(var(--sd-caret, 0.75rem) / 2 + var(--sd-caret-gap, 0.375rem) - 0.5px);
+	}
+	.structured-section.structured-flat > .structured-section-body {
+		margin-inline-start: calc(var(--sd-caret, 0.75rem) + var(--sd-caret-gap, 0.375rem));
 	}
 	.structured-data :global(input:not([type='checkbox'])),
 	.structured-data :global(textarea),
@@ -1491,11 +1525,15 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		background: var(--color-muted);
 	}
 	@media (max-width: 600px) {
+		.structured-root {
+			--sd-inset: 0.625rem;
+		}
 		.structured-field {
-			padding: 7px 10px;
+			padding-block: 0.4375rem;
+			padding-inline-end: 0.625rem;
 		}
 		.structured-section > summary {
-			padding-inline: 10px;
+			padding-inline-end: 0.625rem;
 		}
 	}
 	@media (hover: none) {

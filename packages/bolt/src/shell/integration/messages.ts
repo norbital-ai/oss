@@ -1,17 +1,9 @@
 // An administrator's paged view of an integration instance's messages and delivery timeline.
-import { sql } from '../../engine/db/sql.ts';
-import { Effect, Schema } from 'effect';
-import { BoltError } from '../../protocol/errors.ts';
+import { Effect } from 'effect';
 import type { Authority } from '../../engine/contracts.ts';
 import type { TenantDbShape } from '../../engine/db/tenant-db.ts';
-import { filesOf } from '../../engine/conversations/store.ts';
+import { readInstanceMessages } from '../../engine/conversations/history.ts';
 import { requireAdmin } from '../../engine/identity/session.ts';
-import { InstanceMessage } from '../api-types.ts';
-
-const decode = <A>(schema: Schema.Decoder<A>, rows: unknown) =>
-	Schema.decodeUnknownEffect(Schema.Array(schema))(rows).pipe(
-		Effect.mapError((e) => BoltError.make('internal', 'decode', String(e)))
-	);
 
 /**
  * An instance's raw messages: every inbound and outbound `sys_message` on it, newest first, a page of
@@ -24,22 +16,5 @@ export const instance_messages = Effect.fn('shell.instance_messages')(function* 
 	before?: string
 ) {
 	yield* requireAdmin(auth);
-	const [known, rows] = yield* db.read([
-		sql('SELECT 1 FROM sys_integration WHERE id = $1', instance),
-		sql(
-			`SELECT m.id, m.seq::text AS seq, m.direction, coalesce(m.sent_at, m.created_at)::text AS at, c.thread, c.kind, c.title,
-			m.sender, m.sender_name, m.text, jsonb_array_length(${filesOf('m')}) AS files, m.status, m.error,
-			CASE WHEN m.direction = 'outbound' AND jsonb_typeof(m.delivery) = 'array' THEN m.delivery ELSE '[]'::jsonb END AS delivery
-		FROM sys_message m LEFT JOIN sys_conversation c ON c.id = m.conversation
-		WHERE m.integration = $1 AND m.direction IN ('inbound', 'outbound') AND ($2::bigint IS NULL OR m.seq < $2::bigint)
-		ORDER BY m.seq DESC LIMIT 100`,
-			instance,
-			before !== undefined && /^\d{1,18}$/.test(before) ? before : null
-		)
-	]);
-	if ((known?.rows.length ?? 0) === 0)
-		return yield* Effect.fail(
-			BoltError.make('not_found', 'decode', `No integration instance '${instance}'.`)
-		);
-	return yield* decode(InstanceMessage, rows?.rows ?? []);
+	return yield* readInstanceMessages(db, instance, before);
 });

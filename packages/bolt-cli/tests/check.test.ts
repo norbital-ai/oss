@@ -968,12 +968,18 @@ describe('bolt check', () => {
 						'<span class="leading-none text-heading">G</span>',
 						'<span class:font-bold={active}>H</span>',
 						'<span class={cn("text-xl", active && "text-foreground")}>I</span>',
-						'<span class={{ "text-3xl": big }}>J</span>'
+						'<span class={{ "text-3xl": big }}>J</span>',
+						'<h1 class="text-marketing-title">K</h1>',
+						'<h2 class="text-title">L</h2>',
+						'<p class="text-section">M</p>',
+						'<h1 class="text-display">N</h1>'
 					].join('\n'),
 					'src/app/a/+good.page.svelte': [
 						'<p class="text-sm font-medium">A</p>',
 						'<span class="text-meta text-muted-foreground">B</span>',
 						'<span class="text-sm leading-5">C</span>',
+						'<h2 class="text-heading">D</h2>',
+						'<p class="text-metric">42</p>',
 						'<div class="prose"><p>Read <b>this</b> and <strong>that</strong>.</p></div>',
 						'<Markdown><strong>Bold in markdown</strong></Markdown>',
 						'<ReadonlyMarkdown><b>Bold in markdown</b></ReadonlyMarkdown>',
@@ -993,7 +999,11 @@ describe('bolt check', () => {
 				'check/typography-tokens src/app/a/+bad.page.svelte:9',
 				'check/typography-tokens src/app/a/+bad.page.svelte:10',
 				'check/typography-tokens src/app/a/+bad.page.svelte:11',
-				'check/typography-tokens src/app/a/+bad.page.svelte:12'
+				'check/typography-tokens src/app/a/+bad.page.svelte:12',
+				'check/typography-tokens src/app/a/+bad.page.svelte:13',
+				'check/typography-tokens src/app/a/+bad.page.svelte:14',
+				'check/typography-tokens src/app/a/+bad.page.svelte:15',
+				'check/typography-tokens src/app/a/+bad.page.svelte:16'
 			]);
 		});
 		it('flags raw indicator unicode glyphs in markup (check/raw-unicode-icons)', () => {

@@ -647,10 +647,11 @@ export const provideForm = (form: FormState) => setContext(KEY, form);
 export const use_form = (): FormState | undefined => getContext<FormState | undefined>(KEY);
 
 const RECORD_CONTROLLER = Symbol.for('norbital.ui.recordController');
-/** The enclosing record's shared form state and historical-view guard. */
+/** The enclosing record's shared form state, historical-view guard, and auto-save flag. */
 export type RecordControllerScope = {
 	readonly current: FormState | null;
 	readonly historical?: boolean;
+	readonly auto_save?: boolean;
 };
 export const provideRecordController = (scope: RecordControllerScope) =>
 	setContext(RECORD_CONTROLLER, scope);

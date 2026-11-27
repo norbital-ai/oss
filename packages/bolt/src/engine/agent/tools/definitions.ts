@@ -213,10 +213,15 @@ export const historyTool = defineTool('history', {
 });
 
 export const readMessagesTool = defineTool('read_messages', {
-	policy: { audiences: ['channel'] },
+	policy: { audiences: ['staff', 'channel', 'system'] },
+	behavior: { data: true },
 	description:
-		"This chat's messages, newest first, before a message seq (default: the newest), at most limit (≤ 50).",
+		'Read messages (newest first, ≤50) from this chat or a permitted connection: id, text, delivery, files.',
 	parameters: Schema.Struct({
+		conversation: Schema.optionalKey(Schema.String),
+		integration: Schema.optionalKey(Schema.String),
+		sender: Schema.optionalKey(Schema.String),
+		query: Schema.optionalKey(Schema.String),
 		before: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
 		limit: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
 	})

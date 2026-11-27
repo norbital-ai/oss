@@ -682,7 +682,11 @@ export type Ai<Tools> = {
 		 * });
 		 * ```
 		 */
-		task(request: { description: string; prompt: string }): Eff<{ conversation: string }, Failure>;
+		task(request: {
+			description: string;
+			prompt: string;
+			files?: readonly FileRef[];
+		}): Eff<{ conversation: string }, Failure>;
 	};
 	/** `dimensions`: the length of the vector field it fills (the host asks the model for that length). */
 	embed: Call<

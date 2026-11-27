@@ -88,6 +88,12 @@ export const integration_routes = (request: HttpServerRequest.HttpServerRequest)
 			return Option.some(
 				HttpServerResponse.jsonUnsafe({ value: yield* manager.value.threads(instance) })
 			);
+		if (request.method === 'GET' && verb === 'messages')
+			return Option.some(
+				HttpServerResponse.jsonUnsafe({
+					value: yield* manager.value.messages(instance, url.searchParams.get('before') ?? undefined)
+				})
+			);
 		if (request.method === 'POST' && verb === 'import-start') {
 			const body = yield* requestBody(request, ImportStartInput);
 			yield* manager.value.import_start(instance, body, authority);

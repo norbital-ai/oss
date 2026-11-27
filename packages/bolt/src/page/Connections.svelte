@@ -9,13 +9,15 @@
 	import { Effect, Schema } from 'effect';
 	import type { Snippet } from 'svelte';
 	import { observe_once } from '@norbital-ai/ui/effect';
-	import { Alert, EmptyState, Field, Form, Spinner, type UiContext } from '@norbital-ai/ui';
+	import { Alert, EmptyState, Field, Form, Spinner, Tabs, type UiContext } from '@norbital-ai/ui';
 	import { Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import type { PersonalIntegrationName, WorkspaceIntegrationName } from '../decl/names.ts';
-	import { listeningScopeOf } from '../engine/integrations/scope.ts';
+	import { classifierConfigOf, listeningScopeOf } from '../engine/integrations/scope.ts';
 	import type { ShellBolt } from '../shell/runtime.ts';
 	import IntegrationCard from './IntegrationCard.svelte';
+	import ClassifierEditor from '../shell/integration/ClassifierEditor.svelte';
 	import ConfigurationFields from '../shell/integration/ConfigurationFields.svelte';
+	import ConnectionHistory from '../shell/integration/ConnectionHistory.svelte';
 	import ListeningScopeEditor from '../shell/integration/ListeningScopeEditor.svelte';
 	import { SHELL_ZH, humanise_word } from '../shell/i18n.ts';
 	import { driverIcon, driverLabel } from '../shell/integration/setup.ts';
@@ -107,7 +109,7 @@
 							scope === 'personal' && me !== null
 								? { owner: { eq: me } }
 								: { owner: { is_null: true } },
-						fields: ['name', 'integration', 'owner', 'active', 'status', 'listen', 'revision'],
+						fields: ['name', 'integration', 'owner', 'active', 'status', 'listen', 'classifier', 'revision'],
 						order_by: 'name',
 						limit: 100
 					}
@@ -159,6 +161,7 @@
 		active: Schema.Boolean,
 		status: Schema.NullOr(Schema.Json),
 		listen: Schema.NullOr(Schema.Json),
+		classifier: Schema.NullOr(Schema.Json),
 		revision: Schema.Number
 	});
 	type AccountRow = typeof AccountRowSchema.Type;
@@ -281,49 +284,97 @@
 	{@const configFields = offer?.configuration ?? {}}
 	{@const canEdit = canUpdate && (scope === 'personal' || admin)}
 	{@const hasConfig = Object.keys(configFields).length > 0 && canEdit}
-	{@const hasListen = offer?.conversation === true && canEdit}
-	<Stack gap="md">
-		{#if hasConfig || hasListen}
-			<Form {ctx} of="sys_integration" mode="update" id={account.id} size="content" submit={t('Save')}>
-				{#if hasConfig}
-					<Field {ctx} name="configuration" label={t('Configuration')}>
-						{#snippet editor(field)}
-							<ConfigurationFields
-								{ctx}
-								integration={account.integration}
-								fields={configFields}
-								{field}
-								{t}
-								translate={translate ?? t}
-							/>
-						{/snippet}
-					</Field>
-				{/if}
-				{#if hasListen}
-					<Field {ctx} name="listen" label={t('Listening scope')}>
-						{#snippet editor(field)}
-							<ListeningScopeEditor
-								driver={offer?.driver ?? account.integration}
-								instance={account.id}
-								client={ctx.integration(account.id)}
-								value={listeningScopeOf(field.value)}
-								on_change={(next) => field.on_change(next)}
-								teams={teamOptions}
-								members={memberOptions}
-								disabled={field.disabled}
-								{t}
-							/>
-						{/snippet}
-					</Field>
-				{/if}
-			</Form>
-		{/if}
-		{#if manage !== undefined}
-			<div class={hasConfig || hasListen ? 'border-t border-border pt-4' : undefined}>
-				{@render manage({ integration: account.integration, instance: account.id, close })}
-			</div>
-		{/if}
-	</Stack>
+	{@const isConversation = offer?.conversation === true}
+	{@const hasListen = isConversation && canEdit}
+	{#snippet settingsPane()}
+		<Stack gap="md">
+			{#if hasConfig || hasListen}
+				<Form {ctx} of="sys_integration" mode="update" id={account.id} size="content" submit={t('Save')}>
+					{#if hasConfig}
+						<Field {ctx} name="configuration" label={t('Configuration')}>
+							{#snippet editor(field)}
+								<ConfigurationFields
+									{ctx}
+									integration={account.integration}
+									fields={configFields}
+									{field}
+									{t}
+									translate={translate ?? t}
+								/>
+							{/snippet}
+						</Field>
+					{/if}
+					{#if hasListen}
+						<Field {ctx} name="listen" label={t('Listening scope')}>
+							{#snippet editor(field)}
+								<ListeningScopeEditor
+									driver={offer?.driver ?? account.integration}
+									instance={account.id}
+									client={ctx.integration(account.id)}
+									value={listeningScopeOf(field.value)}
+									on_change={(next) => field.on_change(next)}
+									teams={teamOptions}
+									members={memberOptions}
+									disabled={field.disabled}
+									{t}
+								/>
+							{/snippet}
+						</Field>
+						<Field {ctx} name="classifier" label={t('Classifier')}>
+							{#snippet editor(field)}
+								<ClassifierEditor
+									value={classifierConfigOf(field.value)}
+									on_change={(next) => field.on_change(next)}
+									automations={offer?.automations ?? []}
+									disabled={field.disabled}
+									{t}
+								/>
+							{/snippet}
+						</Field>
+					{/if}
+				</Form>
+			{/if}
+			{#if manage !== undefined}
+				<div class={hasConfig || hasListen ? 'border-t border-border pt-4' : undefined}>
+					{@render manage({ integration: account.integration, instance: account.id, close })}
+				</div>
+			{/if}
+		</Stack>
+	{/snippet}
+	{#if isConversation}
+		{#snippet historyPane()}
+			{@const client = ctx.integration(account.id)}
+			<ConnectionHistory
+				{ctx}
+				driver={offer?.driver ?? account.integration}
+				instance={account.id}
+				load={(before) => client.messages(before)}
+				locale={ctx.locale}
+				{t}
+			/>
+		{/snippet}
+		<Tabs
+			orientation="horizontal"
+			tabs={[
+				{
+					name: 'settings',
+					title: t('Settings'),
+					icon: 'lucide:settings-2',
+					body: settingsPane,
+					keep_alive: true
+				},
+				{
+					name: 'history',
+					title: t('History'),
+					icon: 'lucide:messages-square',
+					body: historyPane,
+					keep_alive: true
+				}
+			]}
+		/>
+	{:else}
+		{@render settingsPane()}
+	{/if}
 {/snippet}
 
 <Stack gap="md" data-connections={scope}>

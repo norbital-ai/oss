@@ -50,7 +50,8 @@ import {
 	Unavailable
 } from '@norbital-ai/host-api';
 import { resolveImportStart } from './import-start.ts';
-import type { IntegrationOffer } from '../../protocol/schema.ts';
+import type { InstanceMessage, IntegrationOffer } from '../../protocol/schema.ts';
+import { readInstanceMessages } from '../conversations/history.ts';
 import { LIMITS, type Authority } from '../contracts.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { is_transient, type EngineError } from '../errors.ts';
@@ -146,6 +147,11 @@ export type LinkManager = {
 		},
 		LinkError
 	>;
+	/** Newest-first message & delivery history for a conversation instance (authorized via `may`). */
+	readonly messages: (
+		instance: string,
+		before?: string
+	) => Effect.Effect<readonly InstanceMessage[], LinkError>;
 	readonly may: (
 		authority: Authority,
 		instance: string
@@ -1113,6 +1119,12 @@ export const integration_links = (
 			offers: h.enter(
 				Effect.map(Manifest, (manifest) => {
 					const declaredConnections = new Set(manifest.workspace.connections ?? []);
+					const channelAutomations = Object.entries(manifest.automations)
+						.filter(([, spec]) =>
+							(spec.on ?? []).some((trigger) => 'model' in trigger && trigger.model === 'sys_message')
+						)
+						.map(([name, spec]) => ({ name, description: spec.description }))
+						.sort((a, b) => a.name.localeCompare(b.name));
 					return [
 						...Object.entries(SYSTEM.integrations)
 							.filter(([name]) => !Object.hasOwn(manifest.integrations, name))
@@ -1120,18 +1132,25 @@ export const integration_links = (
 						...Object.entries(manifest.integrations).map(
 							([integration, definition]) => [integration, definition, true] as const
 						)
-					].map(([integration, definition, custom]): IntegrationOffer => ({
-						integration,
-						driver: driver_name(definition),
-						description: definition.description,
-						scope: scope_of(definition),
-						custom,
-						declared: allows_workspace(definition) && (custom || declaredConnections.has(integration)),
-						configuration: definition.configuration ?? {},
-						conversation: conversational(definition),
-						personal: allows_personal(definition) ? offered(definition, true) : [],
-						workspace: allows_workspace(definition) ? offered(definition, false) : []
-					}));
+					].map(([integration, definition, custom]): IntegrationOffer => {
+						const isConversation = conversational(definition);
+						return {
+							integration,
+							driver: driver_name(definition),
+							description: definition.description,
+							scope: scope_of(definition),
+							custom,
+							declared:
+								allows_workspace(definition) && (custom || declaredConnections.has(integration)),
+							configuration: definition.configuration ?? {},
+							conversation: isConversation,
+							...(isConversation && channelAutomations.length > 0
+								? { automations: channelAutomations }
+								: {}),
+							personal: allows_personal(definition) ? offered(definition, true) : [],
+							workspace: allows_workspace(definition) ? offered(definition, false) : []
+						};
+					});
 				})
 			),
 			watch: (instance) =>
@@ -1509,6 +1528,8 @@ export const integration_links = (
 						dms: [...dms.values()].sort(byRecency)
 					};
 				}),
+			messages: (instance, before) =>
+				h.enter(Effect.flatMap(TenantDb, (db) => readInstanceMessages(db, instance, before))),
 			may: (authority, instance) =>
 				h.enter(
 					Effect.gen(function* () {

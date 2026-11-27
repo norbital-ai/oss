@@ -47,9 +47,10 @@ const TYPED_COLUMN_FIELDS = new Set([
 const PROSE_COMPONENTS = new Set(['Markdown', 'Prose', 'RichText']);
 const PROSE_CLASS = /(?:^|[\s:'"`])prose(?:$|[\s-'"`])/;
 const FONT_WEIGHT_BAD = /(?:^|[\s:'"`])(font-(?:semibold|bold))(?=$|[\s'"`])/;
-const TEXT_SIZE_BAD = /(?:^|[\s:'"`])(text-(?:lg|xl|2xl|3xl))(?=$|[\s'"`])/;
+const TEXT_SIZE_BAD = /(?:^|[\s:'"`])(text-(?:lg|xl|[2-9]xl))(?=$|[\s'"`])/;
+const TEXT_MARKETING_BAD = /(?:^|[\s:'"`])(text-(?:marketing-(?:display|title|section)|display|title|section))(?=$|[\s'"`])/;
 const TEXT_ARBITRARY_BAD = /(?:^|[\s:'"`])(text-\[[^\s'"`]*)/;
-const TEXT_ROLE_TOKEN = /(?:^|[\s:'"`])(text-(?:meta|overline|label|caption|heading|title|section))(?=$|[\s'"`])/;
+const TEXT_ROLE_TOKEN = /(?:^|[\s:'"`])(text-(?:meta|overline|label|caption|heading|metric|subhead|body|eyebrow|lede|marketing-(?:display|title|section)))(?=$|[\s'"`])/;
 const LEADING_TOKEN = /(?:^|[\s:'"`])(leading-[^\s'"`]+)/;
 const RAW_UNICODE_ICON = /[▲▼ℹ⚠]/;
 const SELF_SIZED_CLASS = /(?:^|[\s:'"`])((?:w|h)-(?:\d+(?:\.\d+)?|\[[^\s'"`]*)|min-(?:w|h)-(?:[1-9]\d*(?:\.\d+)?|\[[^\s'"`]*))(?=$|[\s'"`])/;
@@ -630,7 +631,14 @@ function checkSvelteMarkup(
 						emit(
 							'typography-tokens',
 							c.start,
-							`avoid '${size[1]}'; use typography tokens (text-title, text-section, text-subhead, text-heading)`
+							`avoid '${size[1]}'; use product typography tokens (text-heading, text-metric, text-subhead, text-base, text-sm)`
+						);
+					const marketing = TEXT_MARKETING_BAD.exec(c.value);
+					if (marketing !== null)
+						emit(
+							'typography-tokens',
+							c.start,
+							`avoid '${marketing[1]}' in workspace UI; marketing display tokens are reserved for the website — use product tokens (text-heading, text-metric, text-subhead)`
 						);
 					const arbitrary = TEXT_ARBITRARY_BAD.exec(c.value);
 					if (arbitrary !== null)
