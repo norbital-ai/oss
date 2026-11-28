@@ -142,7 +142,7 @@ it.live('virtual_list compensates scrollTop when a measured row strictly above t
 				],
 				new StubResizeObserver(() => {})
 			);
-			flushSync();
+			flushFrames();
 			assert.equal(port.scrollTop, 432);
 
 			// Sub-pixel jitter (< 0.5px) must not shift scrollTop
@@ -158,7 +158,7 @@ it.live('virtual_list compensates scrollTop when a measured row strictly above t
 				],
 				new StubResizeObserver(() => {})
 			);
-			flushSync();
+			flushFrames();
 			assert.equal(port.scrollTop, 432);
 
 			await unmount(view);

@@ -199,9 +199,9 @@
 	{@const snap = alertsState.current}
 	<Scroll name="workspace-alerts" size="fill" layout="stack" gap="lg">
 		<div class="flex max-w-3xl flex-col gap-5 pb-4 text-xs">
-			<div class="flex flex-wrap items-start justify-between gap-3">
-				<div class="flex flex-col gap-0.5">
-					<div class="flex items-center gap-2">
+			<div class="flex items-start justify-between gap-4">
+				<div class="flex min-w-0 flex-1 flex-col gap-0.5">
+					<div class="flex flex-wrap items-center gap-2">
 						<h2 class="text-sm font-semibold">{t('Workspace alerts')}</h2>
 						<Badge variant={snap.settings.enabled ? 'success' : 'outline'}>
 							{t(snap.settings.enabled ? 'Enabled' : 'Paused')}
@@ -213,7 +213,7 @@
 						)}
 					</p>
 				</div>
-				<div class="flex flex-col items-end gap-1">
+				<div class="flex shrink-0 flex-col items-end gap-1">
 					<Button
 						type="button"
 						variant="outline"
@@ -229,7 +229,7 @@
 						{t(testing ? 'Sending…' : 'Send test alert')}
 					</Button>
 					{#if dirty}
-						<span class="text-meta">{t('Save changes before testing.')}</span>
+						<span class="text-meta text-right">{t('Save changes before testing.')}</span>
 					{/if}
 				</div>
 			</div>

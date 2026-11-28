@@ -419,7 +419,7 @@ for the chosen scope. Every view stays bounded inside its viewport so tables, bo
 							{ field: 'route', label: t('Page'), cell: routeCell },
 							{ field: 'views', label: t('Views'), align: 'end', width: 96 },
 							{ field: 'people', label: t('People'), align: 'end', width: 96 },
-							{ field: 'dwell', label: t('Average time open'), align: 'end', width: 150 }
+							{ field: 'dwell', label: t('Average time open'), align: 'end', width: 175 }
 						]}
 					/>
 				</div>
@@ -707,7 +707,7 @@ for the chosen scope. Every view stays bounded inside its viewport so tables, bo
 					{ field: 'name', label: t('User'), cell: memberNameCell },
 					{ field: 'email_text', label: t('Email / login identity') },
 					{ field: 'status', label: t('Status'), cell: memberStatusCell, width: 140 },
-					{ field: 'last_seen_text', label: t('Last authenticated activity'), width: 180 }
+					{ field: 'last_seen_text', label: t('Last authenticated activity'), width: 215 }
 				]}
 			/>
 		</div>

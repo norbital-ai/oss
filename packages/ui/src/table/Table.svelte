@@ -1302,7 +1302,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 							</thead>
 							<tbody class={refreshing ? 'opacity-60 transition-opacity' : undefined}>
 								{#if win.on}<tr aria-hidden="true" {@attach win.anchor}
-										><td colspan={span} class="h-0! border-0! p-0!" style:height="{win.before}px"></td></tr
+										><td colspan={span} class="border-0! p-0! text-[0px] leading-none" style:height="{win.before}px"></td></tr
 									>{/if}
 								{#each win.slice(rows) as row, j (row['id'] ?? win.start + j)}
 									{@const i = win.start + j}
@@ -1422,7 +1422,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 									</tr>
 								{/each}
 								{#if win.on && win.after > 0}<tr aria-hidden="true"
-										><td colspan={span} class="h-0! border-0! p-0!" style:height="{win.after}px"></td></tr
+										><td colspan={span} class="border-0! p-0! text-[0px] leading-none" style:height="{win.after}px"></td></tr
 									>{/if}
 							</tbody>
 						</table>

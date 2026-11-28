@@ -53,6 +53,14 @@
 		return null;
 	};
 	const BYTES = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+	const SINGULAR_UNIT: Readonly<Record<string, string>> = {
+		jobs: 'job',
+		members: 'member',
+		connections: 'connection',
+		lines: 'line',
+		slots: 'slot',
+		statements: 'statement'
+	};
 	/** A reading in its unit, for people. */
 	export function format_metric_value(unit: string, value: number | null, locale?: string): string {
 		if (value === null) return 'Unavailable';
@@ -76,7 +84,8 @@
 				? `${(value / 3600).toLocaleString(locale, { maximumFractionDigits: 1 })} h`
 				: `${value.toLocaleString(locale, { maximumFractionDigits: 1 })} s`;
 		if (unit === 'load per core') return `${Math.round(value * 100)}%`;
-		return `${value.toLocaleString(locale, { maximumFractionDigits: 1 })} ${unit}`;
+		const label = value === 1 ? (SINGULAR_UNIT[unit] ?? unit) : unit;
+		return `${value.toLocaleString(locale, { maximumFractionDigits: 1 })} ${label}`;
 	}
 </script>
 
@@ -161,21 +170,21 @@
 </script>
 
 <figure class="flex h-full min-w-0 flex-col gap-2 rounded-md border border-border p-3 text-xs">
-	<figcaption class="flex flex-wrap items-start justify-between gap-2">
-		<div class="min-w-0">
-			<span class="block text-xs font-medium text-foreground">{title}</span>
-			{#if description}<span class="text-meta mt-0.5 block leading-snug">{description}</span>{/if}
+	<figcaption class="flex flex-col gap-0.5">
+		<div class="flex items-baseline justify-between gap-2">
+			<span class="min-w-0 truncate text-xs font-medium text-foreground">{title}</span>
+			<span class="text-meta shrink-0 tabular-nums">
+				{#if utilization !== null}{t('peakCapacity').replace(
+						'{n}',
+						String(Math.round(utilization * 100))
+					)} · {metric(primaryPeak)}{:else if aggregation === 'sum'}{t('total')} {metric(
+						primaryTotal
+					)}{:else if aggregation === 'latest'}{t('latest')} {metric(primaryLatest)}{:else}{t('peak')} {metric(
+						primaryPeak
+					)}{/if}
+			</span>
 		</div>
-		<span class="text-meta shrink-0 tabular-nums">
-			{#if utilization !== null}{t('peakCapacity').replace(
-					'{n}',
-					String(Math.round(utilization * 100))
-				)} · {metric(primaryPeak)}{:else if aggregation === 'sum'}{t('total')} {metric(
-					primaryTotal
-				)}{:else if aggregation === 'latest'}{t('latest')} {metric(primaryLatest)}{:else}{t('peak')} {metric(
-					primaryPeak
-				)}{/if}
-		</span>
+		{#if description}<span class="text-meta leading-snug">{description}</span>{/if}
 	</figcaption>
 	<div
 		class="min-h-32 w-full flex-1 touch-pan-y outline-none focus-visible:ring-2 focus-visible:ring-ring"

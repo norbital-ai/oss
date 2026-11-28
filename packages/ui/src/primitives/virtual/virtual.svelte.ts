@@ -93,6 +93,7 @@ export function virtual_list(o: VirtualOptions) {
 	const maxExtra = o.max_overscan ?? Math.max(baseOverscan * 3, 24);
 
 	const sizes = new Map<string, number>();
+	const pendingMeasures = new Map<string, number>();
 	const keys = new WeakMap<Element, string>();
 	const reversedPorts = new WeakMap<Element, boolean>();
 	const lastPortScroll = new WeakMap<Element, { main: number; cross: number }>();
@@ -111,6 +112,7 @@ export function virtual_list(o: VirtualOptions) {
 	let lastSamplePos = 0;
 	let lastSampleTime = 0;
 	let settleTimer: ReturnType<typeof setTimeout> | undefined;
+	let measureFrame = 0;
 
 	const keyAt = (index: number) => (o.key ? o.key(index) : String(index));
 	const fixedSize = $derived(typeof o.size === 'function' ? o.size() : o.size);
@@ -290,21 +292,85 @@ export function virtual_list(o: VirtualOptions) {
 		});
 	}
 
+	function flushMeasurements() {
+		measureFrame = 0;
+		if (!on || fixedStride !== undefined || pendingMeasures.size === 0) {
+			pendingMeasures.clear();
+			return;
+		}
+		let changed = false;
+		let anchorDelta = 0;
+		const liveMeasured = measureBand();
+		const currentPos = liveMeasured?.nextPos ?? pos;
+		const tailed = o.tail?.() === true;
+		const fallback = Math.max(1, estimate + gap);
+		const { tree, keyIndex } = structure;
+
+		for (const [k, extent] of pendingMeasures) {
+			const prev = sizes.get(k);
+			if (extent > 0 && (prev === undefined || Math.abs(prev - extent) >= 0.5)) {
+				const idx = keyIndex.get(k);
+				const prior = prev ?? fallback;
+				if (!tailed && currentPos > 0 && idx !== undefined) {
+					const itemEnd = tree.offset(idx) + prior;
+					// Item lies strictly before the visible viewport: compensate scroll to prevent jump jitter.
+					if (itemEnd <= currentPos) {
+						anchorDelta += extent - prior;
+					}
+				}
+				sizes.set(k, extent);
+				if (idx !== undefined) tree.set(idx, extent);
+				changed = true;
+			}
+		}
+		pendingMeasures.clear();
+
+		if (changed) {
+			if (Math.abs(anchorDelta) >= 1 && anchorEl !== null) {
+				const port = scrollPort();
+				if (port !== null && reversedPorts.get(port) === true) {
+					// Bottom-origin port (`flex-col-reverse` / `flex-row-reverse`) already holds its anchor.
+				} else if (port !== null) {
+					if (horizontal) {
+						const prevScroll = port.scrollLeft;
+						port.scrollLeft = Math.max(0, prevScroll + anchorDelta);
+						const applied = port.scrollLeft - prevScroll;
+						pos = Math.max(0, pos + applied);
+						lastSamplePos = pos;
+					} else {
+						const prevScroll = port.scrollTop;
+						port.scrollTop = Math.max(0, prevScroll + anchorDelta);
+						const applied = port.scrollTop - prevScroll;
+						pos = Math.max(0, pos + applied);
+						lastSamplePos = pos;
+					}
+					recordPortScroll(port);
+				} else if (document.scrollingElement) {
+					if (horizontal) {
+						const prevScroll = document.scrollingElement.scrollLeft;
+						document.scrollingElement.scrollBy({ left: anchorDelta });
+						pos = Math.max(0, pos + (document.scrollingElement.scrollLeft - prevScroll));
+					} else {
+						const prevScroll = document.scrollingElement.scrollTop;
+						document.scrollingElement.scrollBy({ top: anchorDelta });
+						pos = Math.max(0, pos + (document.scrollingElement.scrollTop - prevScroll));
+					}
+					lastSamplePos = pos;
+				}
+			}
+			version++;
+		}
+	}
+
 	// Only allocate a ResizeObserver when item sizes are variable (fixed `size` skips measurements completely).
+	// Measurements commit on the next animation frame so DOM/spacer updates never trigger a ResizeObserver loop error.
 	const observer =
 		o.size !== undefined || typeof ResizeObserver === 'undefined'
 			? null
 			: new ResizeObserver((entries) => {
 					if (!on || fixedStride !== undefined) return;
-					let changed = false;
-					let anchorDelta = 0;
-					const liveMeasured = measureBand();
-					const currentPos = liveMeasured?.nextPos ?? pos;
-					const tailed = o.tail?.() === true;
 					const fixedGap = o.gap;
-					const fallback = Math.max(1, estimate + gap);
-					const { tree, keyIndex } = structure;
-
+					let queued = false;
 					for (const e of entries) {
 						const k = keys.get(e.target);
 						if (k === undefined) continue;
@@ -323,57 +389,13 @@ export function virtual_list(o: VirtualOptions) {
 						}
 						const extent = rawExtent + margin;
 						const prev = sizes.get(k);
-						// Hidden layouts measure 0: keep the estimate; ignore sub-pixel noise.
 						if (extent > 0 && (prev === undefined || Math.abs(prev - extent) >= 0.5)) {
-							const idx = keyIndex.get(k);
-							const prior = prev ?? fallback;
-							if (!tailed && currentPos > 0 && idx !== undefined) {
-								const itemEnd = tree.offset(idx) + prior;
-								// Item lies strictly before the visible viewport: compensate scroll to prevent jump jitter.
-								if (itemEnd <= currentPos) {
-									anchorDelta += extent - prior;
-								}
-							}
-							sizes.set(k, extent);
-							if (idx !== undefined) tree.set(idx, extent);
-							changed = true;
+							pendingMeasures.set(k, extent);
+							queued = true;
 						}
 					}
-
-					if (changed) {
-						if (Math.abs(anchorDelta) >= 1 && anchorEl !== null) {
-							const port = scrollPort();
-							if (port !== null && reversedPorts.get(port) === true) {
-								// Bottom-origin port (`flex-col-reverse` / `flex-row-reverse`) already holds its anchor.
-							} else if (port !== null) {
-								if (horizontal) {
-									const prevScroll = port.scrollLeft;
-									port.scrollLeft = Math.max(0, prevScroll + anchorDelta);
-									const applied = port.scrollLeft - prevScroll;
-									pos = Math.max(0, pos + applied);
-									lastSamplePos = pos;
-								} else {
-									const prevScroll = port.scrollTop;
-									port.scrollTop = Math.max(0, prevScroll + anchorDelta);
-									const applied = port.scrollTop - prevScroll;
-									pos = Math.max(0, pos + applied);
-									lastSamplePos = pos;
-								}
-								recordPortScroll(port);
-							} else if (document.scrollingElement) {
-								if (horizontal) {
-									const prevScroll = document.scrollingElement.scrollLeft;
-									document.scrollingElement.scrollBy({ left: anchorDelta });
-									pos = Math.max(0, pos + (document.scrollingElement.scrollLeft - prevScroll));
-								} else {
-									const prevScroll = document.scrollingElement.scrollTop;
-									document.scrollingElement.scrollBy({ top: anchorDelta });
-									pos = Math.max(0, pos + (document.scrollingElement.scrollTop - prevScroll));
-								}
-								lastSamplePos = pos;
-							}
-						}
-						version++;
+					if (queued && measureFrame === 0) {
+						measureFrame = requestAnimationFrame(flushMeasurements);
 					}
 				});
 
@@ -485,6 +507,11 @@ export function virtual_list(o: VirtualOptions) {
 
 			return () => {
 				cancelAnimationFrame(frame);
+				if (measureFrame !== 0) {
+					cancelAnimationFrame(measureFrame);
+					measureFrame = 0;
+				}
+				pendingMeasures.clear();
 				if (settleTimer !== undefined) {
 					clearTimeout(settleTimer);
 					settleTimer = undefined;
