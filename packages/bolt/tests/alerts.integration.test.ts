@@ -2,7 +2,6 @@
 // automation/integration failure alerts, AI monthly budget threshold alerts, and per-key repeat cooldowns.
 import { expect, layer } from '@effect/vitest';
 import { Context, Effect, FiberSet, Layer, Result, Schema } from 'effect';
-import { TestClock } from 'effect/testing';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { shell_api } from '../src/shell/runtime.ts';
 import { founder_bootstrap } from '../src/engine/identity/session.ts';
@@ -114,6 +113,7 @@ const workspace = Layer.effectContext(
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
 				manifest,
+				now: '2026-11-28T12:00:00Z',
 				ports: Layer.succeed(Transport, {
 					send: (message) =>
 						Effect.sync(() => {
@@ -138,7 +138,7 @@ const workspace = Layer.effectContext(
 	})
 );
 
-layer(workspace)('local workspace command center alerts', (it) => {
+layer(workspace, { excludeTestServices: true })('local workspace command center alerts', (it) => {
 	let adminJar: Jar = new Map();
 	let staffJar: Jar = new Map();
 
@@ -222,7 +222,6 @@ layer(workspace)('local workspace command center alerts', (it) => {
 			const alerts = yield* WorkspaceAlertsService;
 			const adminApi = yield* apiFor(adminJar);
 
-			yield* TestClock.setTime(Date.UTC(2026, 10, 28, 12, 0, 0));
 			sentMails.length = 0;
 
 			// 1. Automation failure alerts once, then respects 30m cooldown, then alerts again after 30m
@@ -235,7 +234,7 @@ layer(workspace)('local workspace command center alerts', (it) => {
 			expect(sentMails[0]?.subject).toContain('Automation failed: nightly_sync');
 			expect(sentMails[0]?.text).toContain('Upstream 500');
 
-			yield* TestClock.adjust('10 minutes');
+			t.clock.advance('10min');
 			yield* alerts.automationFailed({
 				automation: 'nightly_sync',
 				runId: 'run-2',
@@ -243,7 +242,7 @@ layer(workspace)('local workspace command center alerts', (it) => {
 			});
 			expect(sentMails).toHaveLength(1);
 
-			yield* TestClock.adjust('25 minutes');
+			t.clock.advance('25min');
 			yield* alerts.automationFailed({
 				automation: 'nightly_sync',
 				runId: 'run-3',
