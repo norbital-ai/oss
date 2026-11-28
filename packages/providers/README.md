@@ -15,6 +15,7 @@ Entries:
   the shared HTTP answer decoding; `drivers()` also includes guarded HTTP and SQL Server adapters.
   `push()` and `apns()` deliver notices through Web Push and Apple Push Notification service
 - `@norbital-ai/providers/abi` — the provider ABI and `to_drivers()`
+- `@norbital-ai/providers/simulator` — `simulatedProviders()` and `startSimulator()` for running WhatsApp, Telegram and simulated-chat providers against the local channel simulator
 - `@norbital-ai/providers/openrouter` — OpenRouter chat and embeddings
 - `@norbital-ai/providers/openai` — OpenAI-compatible streamed chat, independent of the workspace engine
 - `@norbital-ai/providers/errors` — shared provider failures

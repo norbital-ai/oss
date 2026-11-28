@@ -4,9 +4,8 @@
 // Layer or service key of one copy is not one of the other. So the contract is plain: Promise + AbortSignal +
 // Schema-encoded JSON, failures included. `Request`, `Response`, `AbortSignal` and `Uint8Array` are the realm's own and
 // cross as they are; a port is a record of Promise functions. The engine's Node dependencies are ports too (the release's
-// files, the database, keys, guest isolates, http, images, mcp), so this module runs unchanged inside a cell. Same-graph
-// hosts (bolt-server, `bolt dev`, the kit) compose Bolt's layers directly; `host-api.conformance.integration.test.ts` runs
-// one slice through both entries.
+// files, the database, keys, guest isolates, http, images, mcp), so this module runs unchanged inside a cell. The
+// test kit composes Bolt's layers directly; `host-api.conformance.integration.test.ts` runs one slice through both entries.
 //
 // Two rules at the edge: an answer the host interprets rejects with an encoded `HostApiFailure`, never this release's
 // class; a port the host only relays back (`WorkspaceLinks.port`) keeps this release's own failures. A host port's

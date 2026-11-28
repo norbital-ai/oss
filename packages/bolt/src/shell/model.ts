@@ -1,7 +1,7 @@
 // The boot as the sidebar's navigation model (`Nav.svelte`),  Operations (Norbius, the agent, opened
 // by `NORBIUS` or ⌘K; Approvals) above Applications, one row per app (or a group of apps); an app's pages
 // are the tab strip under its banner (`pages`), not sidebar rows. Everything else sits in the account row's ellipsis
-// popover: Settings (Organization, Integrations, Secrets), System (the command center: builds and releases, the
+// popover: Settings (Organization, Integrations, Secrets), System (the command center: runtime logs, the
 // audit trail, automation runs, inference and people; and Workspace Studio on a host that serves it), Portals (every `portal: true` page the viewer may open — kiosks and customer-facing pages, never a sidebar row or tab). Host plugins and the organisation list are the host's, so this model carries only the current workspace.
 import type { FeatureColorKey } from '@norbital-ai/ui/brand';
 import type { WorkspaceLink } from '@norbital-ai/host-api';

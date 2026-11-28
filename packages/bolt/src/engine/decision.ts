@@ -91,14 +91,6 @@ export const ask = Effect.fn('Decisions.ask')(function* (
 });
 export const failed = (result: DecisionResult | FacilityError): result is FacilityError =>
 	'kind' in result;
-export const choiceOf = (result: DecisionResult, id: string): string | undefined => {
-	const answer = result.answers[id];
-	return answer?.type === 'choice' ? answer.choice : undefined;
-};
-export const noulOf = (result: DecisionResult, id: string): number => {
-	const answer = result.answers[id];
-	return answer?.type === 'noul' ? answer.noul : 0;
-};
 const clipState = (value: Json): Json =>
 	typeof value === 'string'
 		? clip(value)

@@ -9,7 +9,7 @@ This page, its starters below and `workspace_lang` are enough for a normal build
 
 A `+` file is a compiler role default-exporting its declaration; its path is its name (`^[a-z][a-z0-9_]*$`, folders singular). Other files are plain modules. Under `src/`:
 
-- `+workspace.ts` `workspace(spec)`: `tz`, `locale`, `languages` (default `['en']`; English is basis; `>1` enables Globe switcher and `check/messages-locale-missing` + `check/untranslated-text`), `currency`, `apps`, `theme`, `ai`, `capabilities`, `limits`, `signup`
+- `+workspace.ts` `workspace(spec)`: `tz`, `locale`, `languages` (default `['en']`; English is basis; `>1` enables Globe switcher and `check/messages-locale-missing` + `check/untranslated-text`), `currency`, `apps`, `theme`, `ai`, `agent`, `csp`, `convert`, `connections`, `limits`, `signup`
 - `+secrets.ts` `secrets(spec)`: secret names (`UPPER_SNAKE`)
 - `data/model/<name>/+model.ts` `model('<name>', spec)`: fields, `outputs`, writes, `state`, `constraints`, `indexes`, `effect` (post-commit). Nested folders; leaf names it. Beside it: `+representation.svelte` (record view), `+<sync>.sync.ts` `sync('<model>', '<sync>', spec)` (file or remote sync)
 - `data/custom_field/<name>/+custom_field.ts` `custom_field(spec)`, `+renderer.svelte`
@@ -42,7 +42,7 @@ Start each role from its starter below; consult `bolt-contract` cards (`model.md
 
 - **Model & UX economy (avoid sprawl):** Default to **4–8 core models** and **1–2 apps (3–6 pages total)**. Never map every prompt noun, config rule, or UI tab to its own table: inline thresholds, rules, line items, shifts, changeovers, and sub-configs as typed `json` / `custom_field` (or polymorphic `kind` models) unless independent lifecycle, FK targets, approvals, or cross-record queries genuinely require a separate table (see `authoring-tenant-workspace` `references/model-boundaries.md`). Delete unused starter models (such as `notes`) when replacing a blank workspace. Build an operational web app — never a landing/brochure home page with static "Step 1 / Step 2 / Step 3" instruction cards; the first page must show live records, KPIs, and actions.
 - **Never duplicate built-ins:**
-  - Access & approvals: `+<name>.policy.ts`, `sys_team` rows, `ctx.approve`, `sys_approval` — never custom role/permission/approval models or hand-rolled auth checks.
+  - Access & approvals: `+<name>.policy.ts`, `sys_team` rows, `ctx.approve`, `approval_request` — never custom role/permission/approval models or hand-rolled auth checks.
   - Lifecycles: `kind: 'state'` with declared transitions, named `locked` constraints and policy `update.moves` — never shadow status tables or parallel state machines.
   - Live data: `PageBolt.query(...)` (live over SSE) — never manual refresh loops, `setInterval` polling or client refetch/cache state.
   - Platform primitives & UI behaviors: native audit/history, search indexes, filters, cursor paging, import/export, `enum_text`, `file` fields, auth/users/invitations, envoys/channels, write triggers (`on:`), durable waits (`ctx.wait`), `@norbital-ai/ui` (`Table`, `Board`, `RecordShell`, `Surface`, `Tabs`, `TabStrip`, `Sheet`, `Dialog`, `Popover`, `Tooltip`, `Combobox`, `Checkbox`, `TimeInput`/`TimeRangeInput`, `EventCalendar`), and `@norbital-ai/ui/behaviors` for EVERY custom interactive widget. **Never hand-roll** keyboard navigation/roving focus, Escape/outside dismiss, focus traps, menus, trees, grids, inline edit, drag/reorder/resize/panel groups, sliders, drawers, switch/radio/toggle/checkbox groups, token/trigger/file-drop/password/date-time/PIN/color inputs, pagination, clipboard, stick-to-bottom, debounce, or `localStorage` persistence — consult `skill { name: 'bolt-contract', file: 'behaviors.md' }` and `authoring-tenant-workspace` `references/behaviors-and-composition.md`, and expose custom widgets to Norbius with `register_control`.
@@ -73,6 +73,6 @@ Detail: `authoring-tenant-workspace` indexes all references.
 
 ## Messaging, envoys & proposals
 
-- Envoys are runtime `sys_envoy` rows deployed via `sys_integration.envoy` (no source envoy role). Inspect `describe_workspace { names: ['system'] }`, create rows natively, then open `integration.manage` via `page { path, configure }` for pairing. Never collect credentials in chat.
+- Envoys are runtime `sys_envoy` rows bound many-to-many to workspace conversation accounts via `sys_envoy_channel` (no source envoy role). Inspect `describe_workspace { names: ['system'] }`, create rows natively, then open `integration.manage` via `page { path, configure }` for pairing. Never collect credentials in chat.
 - Daily programmatic messages use a cron automation calling `ctx.send` on the active paired workspace account (narrowed with `instance_id`; fail if missing/ambiguous). Replies continue through the envoy; derive Sent state from `sys_message` status/`sent_at`, not queue admission.
 - Keep merge/approval summaries to 1–2 short sentences (user impact + data risk); do not repeat what the native card already displays.

@@ -463,6 +463,12 @@ export const makeTurnIo = Effect.fn('Agents.makeTurnIo')(function* (deps: TurnIo
 				...(current.usage.cost === undefined ? {} : { cost: current.usage.cost })
 			}
 		});
+		if (
+			config.engine.onAiSpend !== undefined &&
+			current.usage.cost !== undefined &&
+			current.usage.cost > 0
+		)
+			yield* config.engine.onAiSpend;
 	});
 
 	/**

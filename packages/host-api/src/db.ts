@@ -1,6 +1,6 @@
 // The tenant database a host serves: SQL statements with JSON parameters, answered as JSON rows. A host implements it
 // once as Effects (`RawDb`, its own driver) and hands a release the Promise form (`HostTenantDb`).
-import type { Effect, Schema } from 'effect';
+import type { Effect } from 'effect';
 import type { DbError } from './errors.ts';
 import type { Json } from '@norbital-ai/store';
 

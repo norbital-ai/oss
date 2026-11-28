@@ -149,7 +149,8 @@ applicable risk names and destructive acceptance markers.
 
 The host replays all files on a scratch database, builds the declared schema on another, and passes the two
 `INTROSPECT` results to `verify`. The resulting `migrations.lock.json` records every SQL checksum and the snapshot
-checksum. Commit the SQL files, snapshot and lock together. Editing a file requires replay verification again.
+checksum, with the packed prefix definitions stored in `physical.json`. Commit the SQL files, `snapshot.json`,
+`migrations.lock.json` and `physical.json` together. Editing a file requires replay verification again.
 
 At application time `pending` validates the lock and the database's applied prefix. The host runs each pending file
 and `record_applied(file)` in one transaction. Once applied, a file's text is immutable; subsequent changes belong in

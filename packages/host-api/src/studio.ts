@@ -170,13 +170,6 @@ export type StudioChangeSet = {
 	/** Its head's last build's diagnosis. */
 	diagnostics?: readonly StudioDiagnostic[];
 };
-/**
- * The viewer's Studio: the change they have open (`change`; absent: none, and the tree is live's) — its working tree
- * at `working ?? commit` (each path's size; `StudioPort.file` reads one file's text), the diff against `base` with each changed text
- * file's two sides, how many live commits it is `behind`, the files still holding conflict markers, its last build's
- * manifest, log and preview — live's Versions newest first, every change, and the host's environments (the Operations
- * pane).
- */
 /** Who is driving a change's preview: Norbius (with its conversation) or the person. */
 export type PreviewControl = {
 	holder: 'norbius' | 'person';
@@ -231,7 +224,7 @@ export type StudioState = {
 	change_sets?: readonly StudioChangeSet[];
 	/** The viewer's change's last build's diagnosis (empty: it built clean; absent: not built, or the host reports none). */
 	diagnostics?: readonly StudioDiagnostic[];
-	/** The retained builds, newest first; `StudioPort.build` reads one's log and diagnostics. */
+	/** The retained builds, newest first; each build's summary, status and counts. */
 	builds?: readonly StudioBuild[];
 	/** The viewer's own held requests: what the agent asked to change on live, awaiting their `approval.decide`. */
 	approvals?: readonly StudioApproval[];
@@ -447,10 +440,18 @@ export const studio_events = (url: string) =>
 		)
 	);
 /** Studio's tabs, each a stable deep link `/studio/<tab>`; `/studio` is the workbench. */
-export const STUDIO_TABS = ['workbench', 'changes', 'versions'] as const;
+export const STUDIO_TABS = [
+	'workbench',
+	'changes',
+	'versions',
+	'improvements',
+	'activity',
+	'telemetry',
+	'bundle'
+] as const;
 /** One of `STUDIO_TABS`. */
 export type StudioTab = (typeof STUDIO_TABS)[number];
-/** Called for an administrator; the host decides what each may do, a refusal rejects with an encoded `HostFailure`. */
+/** Called for a staff member (`inspect` requires an administrator); the host decides what each may do, a refusal rejects with an encoded `HostFailure`. */
 export type StudioPort = {
 	state(auth: Authority): Promise<StudioState>;
 	run(auth: Authority, op: StudioOp): Promise<StudioState>;
@@ -458,7 +459,7 @@ export type StudioPort = {
 	file(auth: Authority, commit: string, path: string): Promise<StudioFile | null>;
 	/** This workspace's frames as they happen, never another's; answers the unsubscribe. Absent → no live stream. */
 	watch?(auth: Authority, send: (frame: StudioFrame) => void): () => void;
-	/** Curated operational diagnostics shared with Realm across the current HOST_API contract. */
+	/** Curated operational diagnostics shared between Workspace Studio and the host's operator console. */
 	inspect(auth: Authority, input: StudioInspectInput): Promise<StudioInspection>;
 	/** Where this host serves Studio's browser bundle, under the workspace; `null`: it has none to serve. */
 	bundle?(): Promise<string | null>;
@@ -468,7 +469,7 @@ const boundedText = Schema.String.check(Schema.isMaxLength(200));
 /** The administrator's monitoring scope. No source paths, code or mutation is accepted here. */
 export const StudioInspectInput = Schema.Struct({
 	range: Schema.Literals(['24h', '7d', '30d']),
-	/** The pane the reader is looking at: the host answers the shared snapshot, and `activity` or `improvements` only for its own pane. */
+	/** The pane the reader is looking at: when supplied, the host may scope reads to that pane; omitted reads the full snapshot. */
 	view: Schema.optionalKey(
 		Schema.Literals(['bundle', 'telemetry', 'logs', 'users', 'activity', 'improvements'])
 	),
@@ -542,6 +543,9 @@ const change = Schema.Struct({
 });
 const chart = Schema.Struct({
 	title: Schema.String,
+	description: Schema.optionalKey(Schema.String),
+	group: Schema.optionalKey(Schema.String),
+	aggregation: Schema.optionalKey(Schema.Literals(['peak', 'sum', 'latest'])),
 	unit: Schema.String,
 	lines: Schema.Array(
 		Schema.Struct({
@@ -569,7 +573,7 @@ const log = Schema.Struct({
 	attributes: Schema.Json
 });
 const message = Schema.NullOr(Schema.String);
-/** Curated host diagnostics shared by the tenant Studio and Realm; never source, manifests or credentials. */
+/** Curated host diagnostics shared by Workspace Studio and the host's operator console; never source, manifests or credentials. */
 export const StudioInspection = Schema.Struct({
 	/** Proven administrator capability is independent of whether member activity could be measured. */
 	can_inspect: Schema.Boolean,

@@ -6,7 +6,7 @@
 // definition and a configuration that decodes with its defaults filled. Accounts remain runtime records. A host's operator
 // observes, configures and restores an instance on its branch, outside any generation (`instance_admin` and after); the
 // serving generations on the branch's epoch hear each change as they hear their own commits.
-import { Clock, Crypto, DateTime, Effect, Option, Predicate, Result, Schema } from 'effect';
+import { Clock, Crypto, DateTime, Effect, Option, Predicate, Schema } from 'effect';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { type Captured, CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { EPOCH } from './outbound.ts';

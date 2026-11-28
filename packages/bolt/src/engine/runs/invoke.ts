@@ -26,7 +26,6 @@ import {
 	LIMITS,
 	cross_failure,
 	type CrossAnswer,
-	type GuestOutcome,
 	type Outcome,
 	type RunTrigger
 } from '../contracts.ts';

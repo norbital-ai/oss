@@ -463,7 +463,10 @@ export const seedRows = Effect.fn('bolt.seedRows')(function* (
 	const own = yield* rowsIn(join(directory, 'rows'), `${tree}/rows`, errors);
 	if (errors.length > 0) return undefined;
 	const rows: { [c: string]: SeedRows[string] } = { ...base };
-	for (const [c, list] of Object.entries(own)) rows[c] = [...(rows[c] ?? []), ...list];
+	for (const [c, list] of Object.entries(own)) {
+		const overridden = new Set(list.map((r) => r['id']));
+		rows[c] = [...(rows[c] ?? []).filter((r) => !overridden.has(r['id'])), ...list];
+	}
 	const shipped = yield* assetList(root, 'seed/public', errors);
 	const publicPaths = new Set(shipped.map((a) => a.path));
 	const banked = yield* bankAssets(

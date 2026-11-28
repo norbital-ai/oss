@@ -7,7 +7,7 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 - `policy({ description, grants, capabilities? })` (filename = name). Teams are `sys_team` rows an administrator edits (`name`, optional `parent`, `policies`); source declares none and holds a team only as an `Id<'sys_team'>` read from a row. Parent graph scopes `actor.team_tree` without inheriting policies or approval rights. Changing policies/routes requires a release; a team's policies change with its row, on the next request.
 - Policies grant only declared model outputs/verbs (`bolt check` refuses others). `outputs: { default: …, <name>: … }` takes nested `{ where?, history?, <relation>?: { where? } }` trees (`{}` = all rows). Policies filter rows, never shape — narrower audiences get narrower outputs.
 - `history: true` grants history under the root `where` (losing row access loses history). `create`/`update` take `{ fields?, <relation>?, verdict? }` (`{}` = all declared fields; no `true` shorthand); `update.moves` grants state transitions; `delete` takes `{ verdict? }`.
-- `capabilities`: `automations` (manual starts by person/agent; code needs none), `syncs` (`'<model>.<sync>'` remote refreshes; model must be readable), `apps` (including kiosks), tools and MCP.
+- `capabilities`: `automations` (manual starts by person/agent; code needs none), `syncs` (`'<model>.<sync>'` remote refreshes; model must be readable), `apps` (including kiosks), `tools`, `mcp`, and `personal_connections` (personal integration definitions a member may connect and manage at `/connections` or via `<Connections />`).
 - Authority is per access point on the root model's policies (including nested layers). Unreadable rows do not exist; hidden fields cannot be filtered, sorted or aggregated. Every member reads `sys_user` (`directory`); `sys_file` listers grant `meta`. Automations hold only their `policies`; effects run as their writer.
 
 ## Admission & limits
@@ -34,7 +34,7 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 | Open | superseder approves (reason required) | Superseded; data stays |
 | Open | requester `withdraw` (page only) | Withdrawn; checkpoint restored |
 
-- `ctx.approvals.decide(id, { decision, reason? })` (members on pages only; automations/effects never decide; render `moves` instead of inferring eligibility). Finished requests stay (`ctx.approvals.list`).
+- `ctx.approvals.decide(id, { decision, reason? })` (members on pages only; automations/effects never decide; render `moves` instead of inferring eligibility). A pending step with no active eligible approver besides the requester surfaces as `stalled: true` in `ApprovalView` and the approval panel so an administrator can add an approver to the team or close the request. Finished requests stay (`ctx.approvals.list`).
 - Held deletes commit only the request (rows remain with `$approval.pending_delete`); final approval re-runs transform with `ctx.approving` and deletes rows + `with`/`on_approved` atomically. Rollback writes `restored` revisions.
 
 ## Lock, effects & verification

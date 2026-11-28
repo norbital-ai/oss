@@ -17,14 +17,17 @@ import {
 	type LogQuery,
 	type LogRow,
 	type SentFeedback,
-	type StudioFile,
-	type StudioInspectInput,
-	StudioInspection,
 	type StudioOp,
 	type StudioView
 } from '@norbital-ai/host-api';
 import type { ActOutcome } from '../engine/contracts.ts';
 import { AgentSettings } from '../engine/agent/settings.ts';
+import {
+	WorkspaceAlertEvent,
+	WorkspaceAlerts,
+	WorkspaceAlertsState,
+	WorkspaceAlertTestResult
+} from '../engine/alerts.ts';
 import { Retention } from '../engine/runs/retention.ts';
 import { FileRef as ConversationFile } from '../engine/agent/schema.ts';
 import type { InboxRequest } from '../engine/approvals/inbox.ts';
@@ -106,6 +109,12 @@ export const Invitation = Schema.Struct({
 	status: Schema.Literals(['open', 'accepted', 'revoked', 'expired'])
 });
 export type Invitation = typeof Invitation.Type;
+export {
+	WorkspaceAlerts,
+	WorkspaceAlertEvent,
+	WorkspaceAlertsState,
+	WorkspaceAlertTestResult
+};
 export { InstanceMessage };
 /** Durable sync progress and outbox counts for one integration instance. */
 export const InstanceSyncHealth = SyncHealth;
@@ -155,16 +164,6 @@ export const KeyRow = Schema.Struct({
 	last_used_at: NullableString
 });
 export type KeyRow = typeof KeyRow.Type;
-export const AuditRow = Schema.Struct({
-	model: Schema.String,
-	record: Schema.String,
-	revision: Schema.Number,
-	at: Schema.String,
-	actor: NullableString,
-	op: Schema.String,
-	changes: Schema.Json
-});
-export type AuditRow = typeof AuditRow.Type;
 const NavPageAnswer = Schema.Struct({
 	name: Schema.String,
 	title: Schema.String,
@@ -348,7 +347,6 @@ export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 			})
 		)
 	),
-	audit: Schema.Array(AuditRow),
 	integrations: Schema.mutable(
 		Schema.Array(
 			Schema.Struct({
@@ -422,7 +420,6 @@ export const RunDetailAnswer: Schema.Decoder<RunDetail> = Schema.Struct({
 		)
 	)
 });
-export const StudioInspectionAnswer = StudioInspection;
 /** The models the member may pick and the one a new conversation runs; the MCP servers its policies name. */
 export const AgentModels = Schema.Struct({
 	models: Schema.Array(AiModelSchema),
@@ -508,6 +505,10 @@ export type ShellApi = {
 	stop_run(id: string): Call<RunView>;
 	settings(): Call<Settings>;
 	settings_op(op: string, input: Json): Call<Json>;
+	/** Workspace alert configuration, monthly AI spend context and recent delivered alerts (admin only). */
+	alerts(): Call<WorkspaceAlertsState>;
+	save_alerts(settings: WorkspaceAlerts): Call<WorkspaceAlerts>;
+	test_alert(): Call<WorkspaceAlertTestResult>;
 	/** An integration instance's host verbs (`/__bolt/integrations/<instance>/…`). */
 	integration(instance: string): ReturnType<typeof integration_client>;
 	/** Every definition with the providers this host offers for it: the envoys' channels. */
@@ -532,8 +533,6 @@ export type ShellApi = {
 	audit_detail(id: string): Call<AuditRecord | null>;
 	studio(): Call<StudioView>;
 	studio_run(op: StudioOp): Call<StudioView>;
-	studio_file(commit: string, path: string): Call<StudioFile | null>;
-	studio_inspect(input: StudioInspectInput): Call<StudioInspection>;
 	/** A member id, `{ team }`, or `null` to end the preview. */
 	preview(target: string | { team: string } | { user: string; impersonate: true } | null): Call<void>;
 	/** `access.explain`: the caller's own Authority, or (administrators) a member's or team's. */
@@ -562,8 +561,6 @@ export type ShellApi = {
 		upload(file: File): Call<Required<Attachment>>;
 		respond_now(conversation: string): AgentAct;
 		confirm(message: string, approve: boolean): AgentAct;
-		set_agent(conversation: string, agent: string): AgentAct;
-		file(message: string, about: { model: string; id: string } | null): AgentAct;
 		stop(conversation: string): AgentAct;
 		set_model(conversation: string, model: string): AgentAct;
 		revise(message: string, text: string, attachments?: readonly Json[]): AgentAct;

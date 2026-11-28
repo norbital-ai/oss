@@ -98,9 +98,6 @@ export const releaseSignIn = (): void => {
 	signInWindow?.close();
 	signInWindow = null;
 };
-/** Whether a provider's setup pairs on Connect alone (a QR, a code, a sign-in), with nothing to fill in first. */
-export const pairsAtOnce = (p: ProviderChoice | undefined): boolean =>
-	p !== undefined && (p.setup.kind === 'qr' || p.setup.kind === 'code' || p.setup.kind === 'oauth');
 
 /** The instance a `sys_integration.create` made, or its refusal (`otherwise` when it did not commit for another reason). */
 export const instanceMade = (

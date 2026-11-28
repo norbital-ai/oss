@@ -2,17 +2,23 @@
 <script lang="ts">
 	import { observe, fork } from '@norbital-ai/ui/effect';
 	import { Effect, Option, Queue, Schema, Stream } from 'effect';
-	import { Cluster } from '@norbital-ai/ui/layout';
+	import { Cluster, Scroll } from '@norbital-ai/ui/layout';
 	import { watch } from '@norbital-ai/ui/behaviors';
 	import {
+		Badge,
 		Button,
 		Checkbox,
 		Combobox,
 		confirm_action,
 		Dialog,
 		EmptyState,
+		Field,
+		Form,
 		format,
+		Icon,
 		Input,
+		RecordShell,
+		Section,
 		Table,
 		TableSkeleton,
 		Tabs,
@@ -20,6 +26,7 @@
 	} from '@norbital-ai/ui';
 	import type { Json } from '../../decl/values.ts';
 	import { read_answer } from '../../protocol/read-answer.ts';
+	import { WORKSPACE_SETTINGS_ID } from '../../system/settings.ts';
 	import type { AiModel } from '@norbital-ai/host-api';
 	import type { SettingsTab, ShellBoot } from '../nav.ts';
 	import type { ShellBolt } from '../runtime.ts';
@@ -264,6 +271,8 @@
 	// the workspace's logo, when the host lets an administrator edit it; a saved change reloads the shell's branding
 	// svelte-ignore state_referenced_locally
 	let brand = $state<{ logo: string | null }>({ logo: workspace.logo ?? null });
+	let savingBrand = $state(false);
+	const logoDirty = $derived(brand.logo !== (workspace.logo ?? null));
 	/** The host's ceiling on an inline logo (a `data:` URL's length). */
 	const LOGO_MAX = 256 * 1024;
 	function pickLogo(file: File | undefined): void {
@@ -282,10 +291,16 @@
 	}
 	const saveBrand = Effect.fn('Settings.saveBrand')(function* () {
 		mutationError = null;
-		const r = yield* Effect.result(api.organization(brand.logo));
-		if (r._tag === 'Success') location.reload();
-		else mutationError = r.failure.message;
+		savingBrand = true;
+		try {
+			const r = yield* Effect.result(api.organization(brand.logo));
+			if (r._tag === 'Success') location.reload();
+			else mutationError = r.failure.message;
+		} finally {
+			savingBrand = false;
+		}
 	});
+	const hasWorkspaceModel = $derived(bolt.catalog['sys_workspace'] !== undefined);
 	let secretValue = $state('');
 	let integrationTab = $state<string | undefined>(undefined);
 	let configured = $state<string | null>(null);
@@ -426,278 +441,429 @@
 	banner={BANNERS[tab]}
 	description={t(DESCRIPTIONS[tab])}
 	{error}
+	bounded
 >
 	{#if s === null}
 		<div role="status" aria-busy="true" aria-label={t('Loading…')}>
 			<TableSkeleton />
 		</div>
 	{:else if tab === 'organization'}
-		<!-- one concern per tab; a tab that edits is one form with its one footer Save -->
-		{#snippet save()}<Cluster gap="sm" justify="end" class="border-t pt-3"
+		<!-- one concern per tab; Workspace combines identity + branding inside the native RecordShell -->
+		{#snippet save()}<Cluster gap="sm" justify="end" class="shrink-0 border-t pt-3"
 				><Button type="submit">{t('Save')}</Button></Cluster
 			>{/snippet}
-		{#snippet workspaceTab()}
-			<div class="flex flex-col gap-4">
-				<p class="text-meta">{t('The workspace handle is its identity in every address and record.')}</p>
-				<dl class="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm">
-					<dt class="text-muted-foreground">{t('Workspace handle')}</dt>
-					<dd>{workspace.handle}</dd>
-					<dt class="text-muted-foreground">{t('Locale')}</dt>
-					<dd>{workspace.locale}</dd>
-					<dt class="text-muted-foreground">{t('Time zone')}</dt>
-					<dd>{workspace.tz}</dd>
-				</dl>
+		{#snippet logoControl(editing: boolean)}
+			<div class="flex flex-col gap-1.5 text-sm">
+				<span class="text-label">{t('Logo')}</span>
+				<p class="text-meta">{t('The logo every member sees.')}</p>
+				<div class="flex flex-wrap items-center gap-3 pt-1">
+					{#if brand.logo !== null}
+						<img
+							src={brand.logo}
+							alt={t('Logo')}
+							class="size-10 rounded-sm border border-border bg-card object-contain p-1"
+						/>
+					{:else}
+						<div
+							class="grid size-10 place-items-center rounded-sm border border-dashed border-border text-muted-foreground"
+						>
+							<Icon name="lucide:image" class="size-4" />
+						</div>
+					{/if}
+					{#if editing}
+						<input
+							type="file"
+							accept="image/png,image/svg+xml,image/webp,image/jpeg"
+							aria-label={t('Logo')}
+							class="text-xs file:mr-2 file:rounded-sm file:border file:border-border file:bg-secondary file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-foreground hover:file:bg-muted"
+							onchange={(e) => pickLogo(e.currentTarget.files?.[0])}
+						/>
+						{#if brand.logo !== null}
+							<Button type="button" variant="ghost" onclick={() => (brand.logo = null)}>
+								{t('Remove logo')}
+							</Button>
+						{/if}
+					{:else if brand.logo === null}
+						<span class="text-meta">{t('Default mark')}</span>
+					{/if}
+				</div>
 			</div>
+		{/snippet}
+		{#snippet workspaceReadonlyMeta()}
+			<div class="grid gap-3 pt-1 sm:grid-cols-3">
+				<div class="flex flex-col gap-1 text-sm">
+					<span class="text-meta">{t('Workspace handle')}</span>
+					<span class="font-mono text-xs text-foreground">{workspace.handle ?? '—'}</span>
+				</div>
+				<div class="flex flex-col gap-1 text-sm">
+					<span class="text-meta">{t('Locale')}</span>
+					<span class="text-foreground">{workspace.locale}</span>
+				</div>
+				<div class="flex flex-col gap-1 text-sm">
+					<span class="text-meta">{t('Time zone')}</span>
+					<span class="text-foreground">{workspace.tz}</span>
+				</div>
+			</div>
+			<p class="text-meta">{t('The workspace handle is its identity in every address and record.')}</p>
+		{/snippet}
+		{#snippet workspaceFooterActions()}
+			{#if workspace.organization && logoDirty}
+				<Button
+					type="button"
+					variant="outline"
+					disabled={savingBrand}
+					onclick={() => fork(saveBrand())}
+				>
+					{savingBrand ? t('Saving…') : t('Save logo')}
+				</Button>
+			{/if}
+		{/snippet}
+		{#snippet workspaceTab()}
+			{#if hasWorkspaceModel}
+				<div class="flex h-full min-h-0 flex-1 flex-col">
+					<RecordShell
+						{ctx}
+						of="sys_workspace"
+						id={WORKSPACE_SETTINGS_ID}
+						header={false}
+						footer_actions={workspaceFooterActions}
+						on_done={(outcome) => {
+							if (outcome.kind === 'committed' && workspace.organization && logoDirty) {
+								fork(saveBrand());
+							}
+						}}
+					>
+						{#snippet children(view)}
+							{@const editing = view.mode === 'edit'}
+							<Form
+								{ctx}
+								of="sys_workspace"
+								mode="update"
+								id={WORKSPACE_SETTINGS_ID}
+								{...(view.mode !== 'create' ? { record: view.record } : {})}
+								readonly={!editing}
+								size="content"
+							>
+								<Section first name="identity" title={t('Identity')}>
+									<Field
+										{ctx}
+										name="name"
+										label={t('Display name')}
+										help={t(
+											'Shown in the sidebar and page titles. Leave blank to use the workspace handle.'
+										)}
+									>
+										{#snippet editor(field)}
+											<Input
+												id={field.id}
+												value={typeof field.value === 'string' ? field.value : ''}
+												placeholder={workspace.handle ?? workspace.name}
+												disabled={field.disabled}
+												oninput={(event) =>
+													field.on_change(
+														event.currentTarget.value.trim() === ''
+															? null
+															: event.currentTarget.value
+													)}
+											/>
+										{/snippet}
+									</Field>
+									{@render workspaceReadonlyMeta()}
+								</Section>
+								{#if workspace.organization}
+									<Section name="branding" title={t('Branding')}>
+										{@render logoControl(editing)}
+									</Section>
+								{/if}
+							</Form>
+						{/snippet}
+					</RecordShell>
+				</div>
+			{:else}
+				<div class="flex flex-col gap-4">
+					{@render workspaceReadonlyMeta()}
+					{#if workspace.organization}
+						<form
+							class="flex flex-col gap-4 border-t border-border pt-4"
+							onsubmit={(e) => {
+								e.preventDefault();
+								if (logoDirty) fork(saveBrand());
+							}}
+						>
+							{@render logoControl(true)}
+							{#if logoDirty}{@render save()}{/if}
+						</form>
+					{/if}
+				</div>
+			{/if}
 		{/snippet}
 		{#snippet teamsTab()}<Teams {ctx} {bolt} {t} settings={s} reload={load} />{/snippet}
 		{#snippet billingTab()}
 			{#if workspace.billing !== undefined}
 				{@const embedded = `${workspace.billing}${workspace.billing.includes('?') ? '&' : '?'}embed=1`}
-				<div class="flex min-h-0 flex-1 flex-col gap-2">
+				<div class="flex h-full min-h-0 flex-1 flex-col">
 					<iframe
 						src={embedded}
 						title={t('Billing')}
-						class="min-h-[42rem] w-full flex-1 border-0 bg-transparent"
+						class="h-full min-h-0 w-full flex-1 border-0 bg-transparent"
 					></iframe>
 				</div>
 			{/if}
 		{/snippet}
-		{#snippet brandingTab()}
-			<form
-				class="flex flex-col gap-4"
-				onsubmit={(e) => {
-					e.preventDefault();
-					if (brand.logo !== (workspace.logo ?? null)) fork(saveBrand());
-				}}
-			>
-				<p class="text-meta">{t('The logo every member sees.')}</p>
-				<div class="flex flex-wrap items-center gap-3 text-sm">
-					<span class="text-muted-foreground">{t('Logo')}</span>
-					{#if brand.logo !== null}<img
-							src={brand.logo}
-							alt={t('Logo')}
-							class="size-10 rounded-sm border object-contain"
-						/>{/if}
-					<input
-						type="file"
-						accept="image/png,image/svg+xml,image/webp,image/jpeg"
-						aria-label={t('Logo')}
-						class="text-xs"
-						onchange={(e) => pickLogo(e.currentTarget.files?.[0])}
-					/>
-					{#if brand.logo !== null}<Button variant="ghost" onclick={() => (brand.logo = null)}
-							>{t('Remove logo')}</Button
-						>{/if}
-				</div>
-				{@render save()}
-			</form>
-		{/snippet}
 		{#snippet assistantTab()}
 			{#if assistant !== null}
 				{@const a = assistant}
+				{@const customPolicyCount = Object.values(a.policies).filter((v) => v.trim() !== '').length}
 				<form
-					class="flex flex-col gap-4"
+					class="flex h-full min-h-0 flex-1 flex-col gap-3"
 					onsubmit={(e) => {
 						e.preventDefault();
 						fork(saveAssistant(a));
 					}}
 				>
-					<p class="text-meta">
-						{t(
-							'Spending limits, the models System 1 and System 2 run and the models members may use. Changes apply to the next message.'
-						)}
-					</p>
-					<div class="flex flex-col gap-3" data-assistant-settings>
-						<p class="text-sm">
-							<span class="text-muted-foreground">{t('Spent this month')}:</span>
-							<span class="tabular-nums" data-assistant-spent>{usd(spentNow)}</span>
-						</p>
-						<div class="grid gap-3 sm:grid-cols-2">
-							<label class="flex flex-col gap-1 text-sm"
-								><span class="text-muted-foreground">{t('Monthly limit (USD)')}</span>
-								<Input
-									class="h-8"
-									type="number"
-									min="0"
-									step="0.01"
-									placeholder={t('No limit')}
-									value={a.monthly}
-									oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
-										(a.monthly = e.currentTarget.value)}
-									data-assistant-monthly
-								/></label
-							>
-							<label class="flex flex-col gap-1 text-sm"
-								><span class="text-muted-foreground">{t('Monthly limit per member (USD)')}</span>
-								<Input
-									class="h-8"
-									type="number"
-									min="0"
-									step="0.01"
-									placeholder={t('No limit')}
-									value={a.member}
-									oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
-										(a.member = e.currentTarget.value)}
-									data-assistant-member
-								/></label
-							>
-						</div>
-						{#if policyNames.length > 0}
-							<fieldset class="flex flex-col gap-1.5 text-sm" data-assistant-policies>
-								<legend class="mb-1 text-muted-foreground">
-									{t(
-										"Monthly limit per member by policy (USD). A member gets the most generous of their policies' limits; a blank one uses the default above."
-									)}
-								</legend>
-								<div class="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
-									{#each policyNames as policy (policy)}
-										<label class="flex items-center gap-2" data-assistant-policy={policy}
-											><span class="min-w-0 flex-1 truncate">{policy.replaceAll('_', ' ')}</span>
-											<Input
-												class="h-8 w-32"
-												type="number"
-												min="0"
-												step="0.01"
-												placeholder={t('Default')}
-												value={a.policies[policy] ?? ''}
-												oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
-													(a.policies[policy] = e.currentTarget.value)}
-											/></label
-										>
-									{/each}
-								</div>
-							</fieldset>
-						{/if}
-						<div class="grid gap-3 sm:grid-cols-2">
-							<label class="flex flex-col gap-1 text-sm" data-assistant-system1
-								><span class="text-muted-foreground"
-									>{t('System 1: fast decisions (triage, AI filters)')}</span
-								>
-								<Combobox
-									searchable
-									clearable
-									options={modelOptions(deciders.models)}
-									value={a.system1}
-									placeholder={`${t('Host default')}: ${labelOf(deciders.models, deciders.default)}`}
-									aria-label={t('System 1 model')}
-									on_change={(id) => (a.system1 = id)}
-								/></label
-							>
-							<label class="flex flex-col gap-1 text-sm" data-assistant-system2
-								><span class="text-muted-foreground">{t("System 2: Norbius's default model")}</span>
-								<Combobox
-									searchable
-									clearable
-									options={modelOptions(catalog)}
-									value={a.system2}
-									placeholder={t('Host default')}
-									aria-label={t('System 2 model')}
-									on_change={(id) => (a.system2 = id)}
-								/></label
-							>
-						</div>
-						{#if catalog.length > 1}
-							<fieldset class="flex flex-col gap-1.5 text-sm" data-assistant-models>
-								<legend class="mb-1 text-muted-foreground">
-									{t(
-										'Models members may use. None chosen allows every model; with one, members see no model choice.'
-									)}
-								</legend>
-								{#if a.models.length > 0}
-									<div class="flex flex-wrap gap-1.5">
-										{#each a.models as id (id)}
-											<span
-												class="inline-flex items-center gap-1 rounded-full border py-0.5 pr-1 pl-2.5 text-xs"
-												data-assistant-model={id}
-												>{labelOf(catalog, id)}<button
-													type="button"
-													class="grid size-5 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-													aria-label={`${t('Remove')} ${id}`}
-													onclick={() => (a.models = a.models.filter((x) => x !== id))}>×</button
-												></span
-											>
-										{/each}
-									</div>
-								{/if}
-								<Combobox
-									searchable
-									class="max-w-sm"
-									options={modelOptions(catalog.filter((model) => !a.models.includes(model.id)))}
-									value={null}
-									placeholder={a.models.length === 0 ? t('Every model') : t('Add a model')}
-									aria-label={t('Models members may use')}
-									on_change={(id) => {
-										if (id !== null) a.models = [...a.models, id];
-									}}
-								/>
-							</fieldset>
-						{/if}
-						<fieldset class="flex flex-col gap-3 text-sm" data-assistant-system>
-							<legend class="mb-1 font-medium">{t('System agents')}</legend>
+					<Scroll name="assistant-settings" size="fill" layout="stack" gap="md">
+						<div class="flex flex-wrap items-center justify-between gap-2">
 							<p class="text-meta">
 								{t(
-									"Agents that work with no person attending. They never merge, control a page or do anything that needs a person's confirmation."
+									'Spending limits, default models and system agents. Changes apply to the next message.'
 								)}
 							</p>
-							{#if workspace.feedback === true}
-								<label class="flex items-start gap-2"
-									><Checkbox bind:checked={a.system.improve} />
-									<span
-										>{t('Improve automatically')}<span class="block text-meta"
-											>{t(
-												'An agent works on feedback and on automations that keep failing, and leaves its commits for an administrator to merge.'
-											)}</span
-										></span
-									></label
+							<Badge variant="outline" class="tabular-nums">
+								<span class="text-muted-foreground">{t('Spent this month')}:</span>&nbsp;<span
+									data-assistant-spent>{usd(spentNow)}</span
 								>
-							{/if}
-							<label class="flex items-start gap-2"
-								><Checkbox bind:checked={a.system.automations} />
-								<span
-									>{t('Let automations start agents')}<span class="block text-meta"
-										>{t('An automation may hand work to an agent, under its own policies.')}</span
-									></span
-								></label
-							>
-							<label class="flex flex-col gap-1"
-								><span class="text-muted-foreground"
-									>{t('What automatic improvement may read')}</span
-								>
-								<Combobox
-									multiple
-									aria-label={t('What automatic improvement may read')}
-									placeholder={t('No records: source only')}
-									options={policyNames.map((policy) => ({ value: policy, label: policy }))}
-									value={a.system.policies}
-									on_change={(policies) => (a.system.policies = policies)}
-								/></label
-							>
-							<div class="grid gap-3 sm:grid-cols-2">
-								{#each [['monthly', 'Monthly limit for system agents (USD)'], ['task', 'Limit for one piece of work (USD)']] as const as [key, label] (key)}
-									<label class="flex flex-col gap-1"
-										><span class="text-muted-foreground">{t(label)}</span>
+							</Badge>
+						</div>
+
+						<div class="flex flex-col gap-4" data-assistant-settings>
+							<section class="flex flex-col gap-3 rounded-lg border border-border p-4">
+								<h3 class="text-sm font-medium">{t('Spending limits')}</h3>
+								<div class="grid gap-3 sm:grid-cols-2">
+									<label class="flex flex-col gap-1 text-sm">
+										<span class="text-muted-foreground">{t('Monthly limit (USD)')}</span>
 										<Input
 											class="h-8"
 											type="number"
 											min="0"
 											step="0.01"
 											placeholder={t('No limit')}
-											value={a.system[key]}
+											value={a.monthly}
 											oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
-												(a.system[key] = e.currentTarget.value)}
-										/></label
+												(a.monthly = e.currentTarget.value)}
+											data-assistant-monthly
+										/>
+									</label>
+									<label class="flex flex-col gap-1 text-sm">
+										<span class="text-muted-foreground">{t('Monthly limit per member (USD)')}</span>
+										<Input
+											class="h-8"
+											type="number"
+											min="0"
+											step="0.01"
+											placeholder={t('No limit')}
+											value={a.member}
+											oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
+												(a.member = e.currentTarget.value)}
+											data-assistant-member
+										/>
+									</label>
+								</div>
+								{#if policyNames.length > 0}
+									<details
+										class="rounded-md border border-border/70 px-3 py-2 text-sm"
+										open={customPolicyCount > 0}
+										data-assistant-policies
 									>
-								{/each}
-							</div>
-						</fieldset>
-					</div>
+										<summary class="flex cursor-pointer items-center justify-between gap-2 font-medium">
+											<span>{t('Per-policy member limits')}</span>
+											{#if customPolicyCount > 0}
+												<Badge variant="outline" class="tabular-nums">{customPolicyCount}</Badge>
+											{/if}
+										</summary>
+										<p class="text-meta mt-1.5">
+											{t(
+												"A member gets the most generous of their policies' limits; a blank one uses the default above."
+											)}
+										</p>
+										<div class="mt-2.5 grid gap-x-4 gap-y-2 sm:grid-cols-2">
+											{#each policyNames as policy (policy)}
+												<label class="flex items-center gap-2" data-assistant-policy={policy}>
+													<span class="min-w-0 flex-1 truncate">{policy.replaceAll('_', ' ')}</span>
+													<Input
+														class="h-8 w-28"
+														type="number"
+														min="0"
+														step="0.01"
+														placeholder={t('Default')}
+														value={a.policies[policy] ?? ''}
+														oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
+															(a.policies[policy] = e.currentTarget.value)}
+													/>
+												</label>
+											{/each}
+										</div>
+									</details>
+								{/if}
+							</section>
+
+							<section class="flex flex-col gap-3 rounded-lg border border-border p-4">
+								<h3 class="text-sm font-medium">{t('Models')}</h3>
+								<div class="grid gap-3 sm:grid-cols-2">
+									<label class="flex flex-col gap-1 text-sm" data-assistant-system1>
+										<span class="text-muted-foreground"
+											>{t('System 1: fast decisions (triage, AI filters)')}</span
+										>
+										<Combobox
+											searchable
+											clearable
+											options={modelOptions(deciders.models)}
+											value={a.system1}
+											placeholder={`${t('Host default')}: ${labelOf(deciders.models, deciders.default)}`}
+											aria-label={t('System 1 model')}
+											on_change={(id) => (a.system1 = id)}
+										/>
+									</label>
+									<label class="flex flex-col gap-1 text-sm" data-assistant-system2>
+										<span class="text-muted-foreground">{t("System 2: Norbius's default model")}</span>
+										<Combobox
+											searchable
+											clearable
+											options={modelOptions(catalog)}
+											value={a.system2}
+											placeholder={t('Host default')}
+											aria-label={t('System 2 model')}
+											on_change={(id) => (a.system2 = id)}
+										/>
+									</label>
+								</div>
+								{#if catalog.length > 1}
+									<details
+										class="rounded-md border border-border/70 px-3 py-2 text-sm"
+										open={a.models.length > 0}
+										data-assistant-models
+									>
+										<summary class="flex cursor-pointer items-center justify-between gap-2 font-medium">
+											<span>{t('Restrict models members may use')}</span>
+											{#if a.models.length > 0}
+												<Badge variant="outline" class="tabular-nums">{a.models.length}</Badge>
+											{/if}
+										</summary>
+										<p class="text-meta mt-1.5">
+											{t(
+												'None chosen allows every model; with one, members see no model choice.'
+											)}
+										</p>
+										<div class="mt-2.5 flex flex-col gap-2">
+											{#if a.models.length > 0}
+												<div class="flex flex-wrap gap-1.5">
+													{#each a.models as id (id)}
+														<span
+															class="inline-flex items-center gap-1 rounded-full border py-0.5 pr-1 pl-2.5 text-xs"
+															data-assistant-model={id}
+															>{labelOf(catalog, id)}<button
+																type="button"
+																class="grid size-5 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+																aria-label={`${t('Remove')} ${id}`}
+																onclick={() => (a.models = a.models.filter((x) => x !== id))}
+																>×</button
+															></span
+														>
+													{/each}
+												</div>
+											{/if}
+											<Combobox
+												searchable
+												class="max-w-sm"
+												options={modelOptions(catalog.filter((model) => !a.models.includes(model.id)))}
+												value={null}
+												placeholder={a.models.length === 0 ? t('Every model') : t('Add a model')}
+												aria-label={t('Models members may use')}
+												on_change={(id) => {
+													if (id !== null) a.models = [...a.models, id];
+												}}
+											/>
+										</div>
+									</details>
+								{/if}
+							</section>
+
+							<section
+								class="flex flex-col gap-3 rounded-lg border border-border p-4 text-sm"
+								aria-labelledby="assistant-system-heading"
+								data-assistant-system
+							>
+								<div class="flex flex-col gap-0.5">
+									<h3 id="assistant-system-heading" class="text-sm font-medium">{t('System agents')}</h3>
+									<p class="text-meta">
+										{t(
+											"Agents that work with no person attending. They never merge, control a page or do anything that needs a person's confirmation."
+										)}
+									</p>
+								</div>
+								<label class="flex items-start gap-2">
+									<Checkbox bind:checked={a.system.automations} />
+									<span
+										>{t('Let automations start agents')}<span class="block text-meta"
+											>{t('An automation may hand work to an agent, under its own policies.')}</span
+										></span
+									>
+								</label>
+								{#if workspace.feedback === true}
+									<label class="flex items-start gap-2">
+										<Checkbox bind:checked={a.system.improve} />
+										<span
+											>{t('Improve automatically')}<span class="block text-meta"
+												>{t(
+													'An agent works on feedback and on automations that keep failing, and leaves its commits for an administrator to merge.'
+												)}</span
+											></span
+										>
+									</label>
+									{#if a.system.improve}
+										<label class="flex flex-col gap-1">
+											<span class="text-muted-foreground"
+												>{t('What automatic improvement may read')}</span
+											>
+											<Combobox
+												multiple
+												aria-label={t('What automatic improvement may read')}
+												placeholder={t('No records: source only')}
+												options={policyNames.map((policy) => ({ value: policy, label: policy }))}
+												value={a.system.policies}
+												on_change={(policies) => (a.system.policies = policies)}
+											/>
+										</label>
+									{/if}
+								{/if}
+								{#if a.system.automations || (workspace.feedback === true && a.system.improve)}
+									<div class="grid gap-3 pt-1 sm:grid-cols-2">
+										{#each [['monthly', 'Monthly limit for system agents (USD)'], ['task', 'Limit for one piece of work (USD)']] as const as [key, label] (key)}
+											<label class="flex flex-col gap-1">
+												<span class="text-muted-foreground">{t(label)}</span>
+												<Input
+													class="h-8"
+													type="number"
+													min="0"
+													step="0.01"
+													placeholder={t('No limit')}
+													value={a.system[key]}
+													oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
+														(a.system[key] = e.currentTarget.value)}
+												/>
+											</label>
+										{/each}
+									</div>
+								{/if}
+							</section>
+						</div>
+					</Scroll>
 					{@render save()}
 				</form>
 			{/if}
 		{/snippet}
 		{#snippet retentionTab()}
 			<form
-				class="flex flex-col gap-4"
+				class="flex h-full min-h-0 flex-1 flex-col gap-4"
 				onsubmit={(e) => {
 					e.preventDefault();
 					const f = new FormData(e.currentTarget);
@@ -711,26 +877,26 @@
 					);
 				}}
 			>
-				<p class="text-meta">
-					{t('A built-in daily cleanup, run while the workspace is in use: it removes read notifications and finished runs past these ages. Unread notifications are kept.')}
-				</p>
-				<div class="grid gap-3 sm:grid-cols-2" data-retention-settings>
-					{#each [['every_days', 'Run every (days)', 1, undefined], ['hour', 'From hour (workspace time)', 0, 23], ['notifications_days', 'Keep read notifications (days)', 1, undefined], ['runs_days', 'Keep finished runs (days)', 1, undefined]] as const as [name, label, min, max] (name)}
-						<label class="flex flex-col gap-1 text-sm"
-							><span class="text-muted-foreground">{t(label)}</span>
-							<Input class="h-8" type="number" step="1" {name} {min} {max} value={s.retention[name]} /></label
-						>
-					{/each}
-				</div>
+				<Scroll name="retention-settings" size="fill" layout="stack" gap="md">
+					<p class="text-meta">
+						{t('A built-in daily cleanup, run while the workspace is in use: it removes read notifications and finished runs past these ages. Unread notifications are kept.')}
+					</p>
+					<div class="grid gap-3 sm:grid-cols-2" data-retention-settings>
+						{#each [['every_days', 'Run every (days)', 1, undefined], ['hour', 'From hour (workspace time)', 0, 23], ['notifications_days', 'Keep read notifications (days)', 1, undefined], ['runs_days', 'Keep finished runs (days)', 1, undefined]] as const as [name, label, min, max] (name)}
+							<label class="flex flex-col gap-1 text-sm"
+								><span class="text-muted-foreground">{t(label)}</span>
+								<Input class="h-8" type="number" step="1" {name} {min} {max} value={s.retention[name]} /></label
+							>
+						{/each}
+					</div>
+				</Scroll>
 				{@render save()}
 			</form>
 		{/snippet}
 		<Tabs
+			class="min-h-0 flex-1"
 			tabs={[
 				{ name: 'workspace', title: t('Workspace'), icon: 'concept:workspace', body: workspaceTab },
-				...(workspace.organization
-					? [{ name: 'branding', title: t('Branding'), icon: 'lucide:image', body: brandingTab, keep_alive: true as const }]
-					: []),
 				...(workspace.billing !== undefined
 					? [{ name: 'billing', title: t('Billing'), icon: 'lucide:receipt', body: billingTab }]
 					: []),
@@ -824,6 +990,7 @@
 			</Table>
 		{/snippet}
 		<Tabs
+			class="min-h-0 flex-1"
 			value={integrationTab ?? (hasConnections ? 'connections' : 'envoys')}
 			on_value_change={(value) => (integrationTab = value)}
 			orientation="horizontal"

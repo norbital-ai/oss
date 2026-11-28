@@ -255,7 +255,8 @@ export class ViewCompiler {
 					Effect.flatMap((view) => exposure_of(view, model)),
 					Effect.mapError(from_store)
 				);
-				const fields = read.select.fields ?? default_fields(projected, read.kind === 'get');
+				// the reader's own default (`items` in store/read/sql): a record or a `{}` (whole) read keeps heavy fields
+				const fields = read.select.fields ?? default_fields(projected, read.kind === 'get' || read.select.whole === true);
 				const syncs = [...syncs_of(this.manifest).values()].filter((sync) => sync.model === model && sync.write);
 				const isApprovable = approvable(this.manifest, cat).has(model);
 				const hasUserField =

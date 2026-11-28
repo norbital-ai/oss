@@ -26,11 +26,11 @@ host's process, metered against each session's CPU budget, for operator-trusted 
 boundary); the release's cell is no security boundary either. A host file never names a runner; `bolt dev` and the test
 kit run on the same one.
 
-Schema changes ship as committed files in `migrations/`: editable SQL, `snapshot.json` and
-`migrations.lock.json`. Review the generated SQL and add `-- accept: <step-id>` within each destructive
+Schema changes ship as committed files in `migrations/`: editable SQL, `snapshot.json`,
+`migrations.lock.json` and `physical.json`. Review the generated SQL and add `-- accept: <step-id>` within each destructive
 step's block when accepting that step. Run `bolt build` again to replay the complete SQL history,
-compare its resulting schema with the declarations and record the verified checksums, then commit all
-three kinds of file with the source change.
+compare its resulting schema with the declarations and record the verified checksums and physical definitions, then commit all
+four kinds of file with the source change.
 
 Startup applies the artifact's migration files in order and records each applied checksum. An applied
 file cannot be edited; a later change needs a new migration. Changed history, an unverified snapshot

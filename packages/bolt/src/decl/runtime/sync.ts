@@ -283,7 +283,8 @@ type RemoteWriteResult = { readonly $id?: string; readonly $version?: string } |
  * to all connections active at that commit, including a change imported by another connection. Each replica has its
  * own id map, version, outbox order and acknowledgement. A change imported by this sync skips its source connection,
  * unless an older uncertain delivery could overwrite it; then the current image is queued behind that delivery.
- * A model's ordinary refs and `+workspace.ts` slots do not select destinations.
+ * A model's ordinary refs do not select destinations, and `+workspace.ts` `connections` only opts built-in definitions
+ * into Settings — every active `sys_integration` row of the integration participates.
  * Pausing an existing replica stops delivery, while retaining later changes and deletes for its next activation.
  *
  * **When.** `read` runs every `every` (default `'15min'`), straight away (debounced) after a verified webhook, and on
@@ -408,7 +409,7 @@ const guest = (body: GeneratorBody | undefined) =>
  * (`with: 'file'`: the native Import, Download template and Export toolbar actions from its `parser`/`read`/`write`) or
  * with another system through integration `with` (runs on `every`). `model` must be the leaf folder's name and `name`
  * the file's. A file's rows enter as the member importing; a remote sync's pages are written as the reserved system
- * identity holding its `policies`, never as admin. `context` is input, never authority; only returned source fields change. Run by `ctx.sync`, a native
+ * identity holding its `policies`, never as admin. `context` is input, never authority; only returned source fields change. Run by `ctx.sync_control`, a native
  * control or the sync's schedule, never by a page script.
  * @returns Declaration metadata and attached bodies. Calling sync does not read or write records.
  * @param model The model's name: its leaf folder.

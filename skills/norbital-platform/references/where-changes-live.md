@@ -11,17 +11,17 @@ Inspect the declaration and configuration model before deciding whether a change
 | Integration driver, config/credential schemas, webhooks, rate, `test` | `src/integration/<name>/+integration.ts` |
 | Custom datatypes & renderers | `src/data/custom_field/<name>/` |
 | Policies, approval verdicts | `src/access_control/policy/` |
-| Teams, their hierarchy and the policies each holds | `sys_team` rows an administrator edits |
-| Staff membership entitlements, zone, locale, languages, theme, limits, AI | `src/+workspace.ts` |
+| Staff membership entitlements, zone, locale, languages, theme, connections, limits, AI | `src/+workspace.ts` |
 | Apps, pages, kiosks, automations, MCP, briefs, workspace skills, secrets | `src/app/`, `automation/`, `agent/`, `+secrets.ts` |
 
 ## Runtime (no release)
 
 | Change | Home |
 | --- | --- |
+| Teams, their hierarchy and the policies each holds | `sys_team` rows an administrator edits |
 | Member identities, affiliation, admin flag, supplemental grants | guarded identity ops & declared membership models |
-| Connected accounts (pairing, credentials, config, pause, envoy) | `sys_integration` rows |
-| Envoys (name, audience, policies, DM/triage/task) | `sys_envoy` rows |
+| Connected accounts (pairing, credentials, config, listen, classifier, pause) | `sys_integration` rows |
+| Envoys (name, audience, policies, DM/triage/task) & channel bindings (`scope`, `group_messages`) | `sys_envoy` & `sys_envoy_channel` rows |
 | Chat models, AI budgets, system agents (on/off, policies, spend limits), retention | Settings → Organization (`sys_config`) |
 | Business catalogues, rates, formulas, extraction schemas, templates | validated runtime configuration models |
 | Secret values | Settings (sealed store) |

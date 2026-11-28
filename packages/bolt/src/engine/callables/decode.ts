@@ -6,11 +6,10 @@ import {
 	type Value,
 	type Where
 } from '@norbital-ai/store/kind';
-import { Array as EffectArray, Effect, Predicate, Result, Schema, SchemaIssue } from 'effect';
+import { Array as EffectArray, Predicate, Result, Schema, SchemaIssue } from 'effect';
 import type { Json } from '../../decl/values.ts';
 
 import { automation_fields, type AutomationInputSchema } from '../../decl/runtime/automation-input.ts';
-import { BoltError } from '../../protocol/errors.ts';
 import { LIMITS } from '../contracts.ts';
 import { clock_default, compile_var, evaluate_var } from '@norbital-ai/store/vars';
 import { customShape, kindChildren } from './kinds.ts';

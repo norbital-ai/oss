@@ -228,7 +228,13 @@ layer(workspace)('shell administration', (it) => {
 					phone: '+6581234567',
 					telegram: 'Rep_Tg'
 				});
-				expect(s.audit).toContainEqual(
+				const history = yield* (yield* TestWorkspace).db.read([
+					{
+						text: "SELECT collection AS model, record::text AS record, op FROM bolt_history WHERE collection = 'sys_user'",
+						params: []
+					}
+				]);
+				expect(history[0]?.rows).toContainEqual(
 					expect.objectContaining({ model: 'sys_user', record: id, op: 'update' })
 				);
 				const boss = s.members.find((u) => u['email'] === 'boss@acme.example')?.['id'];

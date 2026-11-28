@@ -16,7 +16,7 @@ import {
 } from '@norbital-ai/host-api';
 import { BoltError, CODES, PHASES } from '../protocol/errors.ts';
 import { HOST_API } from '../protocol/host-api.ts';
-import { node_ports, type NodePorts } from './ports.ts';
+import type { NodePorts } from './ports.ts';
 import { cron_clock } from '@norbital-ai/host-api/node';
 
 const isCode = Schema.is(Schema.Literals(CODES)),

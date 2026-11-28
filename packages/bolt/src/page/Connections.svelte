@@ -2,8 +2,9 @@
 	@component Reusable plugin-style connection grid driven by Bolt's shared connection FSM.
 	Supports `scope="personal"` (member-owned accounts, defaulting to `ctx.personal_connections`) and
 	`scope="workspace"` (declared workspace accounts, `owner = null`).
-	Handles querying `sys_integration`, `integration_offers()`, install/uninstall/resume, and inline `configuration`
-	and conversation `listen` (listening scope) editing inside each card's Manage Sheet.
+	Handles querying `sys_integration`, `integration_offers()`, install/uninstall/resume, and inline `configuration`,
+	conversation `listen` (listening scope), `classifier` (`ClassifierEditor`) editing and a conversation History tab
+	(`ConnectionHistory`) inside each card's Manage Sheet.
 -->
 <script lang="ts">
 	import { Effect, Schema } from 'effect';

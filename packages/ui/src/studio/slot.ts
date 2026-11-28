@@ -20,6 +20,8 @@ export type StudioProps = {
 	readonly admin: boolean;
 	/** Hands a request to Norbius and sends it; `null` where the viewer has no Norbius. */
 	readonly on_ask: ((prompt: string) => void) | null;
+	/** Opens an agent conversation in Norbius (e.g. from an improvement thread); `null` where absent. */
+	readonly on_conversation?: ((id: string) => void) | null;
 	/** A host's own authenticated endpoint for the Studio routes; absent: the workspace's. */
 	readonly base?: string;
 };

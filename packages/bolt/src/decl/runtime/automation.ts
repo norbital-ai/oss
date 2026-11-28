@@ -273,7 +273,7 @@ export type Automation<S> = {
  * A person's permission to start a job does not grant the job that person's authority. Check `ctx.trigger`
  * explicitly when business rules depend on the starter. A retried run's `act` answers from its earlier commit;
  * `ctx.send` and external requests can repeat.
- * Every declared automation the caller may start appears in the native Command Center Automations, with this typed
+ * Every declared automation the caller may start appears in the native Command Center Queue, with this typed
  * input rendered by `Form`; a page form is optional, not required. A start queues a run and is followed by the native
  * run status — the page does not poll or reimplement the queue.
  * @param spec Input/output contracts, execution policies, trigger and generator body.

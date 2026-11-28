@@ -936,27 +936,25 @@ describe('preview environments drop the meta tools', () => {
 		expect(model.utilities).toEqual([]);
 		expect(command_center_tabs(surfaces(m, auth.actor, true, true, true), true, true)).toEqual([]);
 	});
-	it('the command center: inspection needs a Studio host, the rest follows the viewer', () => {
+	it('the command center is host-agnostic and follows the viewer regardless of Studio', () => {
 		const admin = member([], {}, true).actor,
 			staff = member([]).actor;
-		// tethered (Colony serves Studio): every tab
+		// tethered or untethered: identical host-agnostic tabs; host inspection belongs to Workspace Studio
 		expect(command_center_tabs(surfaces(m, admin, true, true), true, false)).toEqual([
-			'bundle',
-			'telemetry',
 			'logs',
-			'activity',
-			'improvements',
 			'audit',
 			'automations',
 			'inference',
-			'people'
+			'people',
+			'alerts'
 		]);
-		// untethered: no host inspection, the rest stays
 		expect(command_center_tabs(surfaces(m, admin, true), true, false)).toEqual([
+			'logs',
 			'audit',
 			'automations',
 			'inference',
-			'people'
+			'people',
+			'alerts'
 		]);
 		// a staff member: their runs only; an external: none
 		expect(command_center_tabs(surfaces(m, staff, false, true), false, false)).toEqual([
@@ -1018,15 +1016,23 @@ describe('routes and hrefs', () => {
 			{ kind: 'not_found' }
 		]);
 		expect([at('/studio'), at('/studio/x')]).toEqual([{ kind: 'studio' }, { kind: 'not_found' }]);
-		// each Studio tab is a stable deep link; Live moved to the command center
+		// each Studio tab is a stable deep link (authoring + host operational tabs)
 		expect([
 			at('/studio/changes'),
 			at('/studio/versions'),
+			at('/studio/improvements'),
+			at('/studio/activity'),
+			at('/studio/telemetry'),
+			at('/studio/bundle'),
 			at('/studio/live'),
 			at('/studio/changes/1')
 		]).toEqual([
 			{ kind: 'studio', tab: 'changes' },
 			{ kind: 'studio', tab: 'versions' },
+			{ kind: 'studio', tab: 'improvements' },
+			{ kind: 'studio', tab: 'activity' },
+			{ kind: 'studio', tab: 'telemetry' },
+			{ kind: 'studio', tab: 'bundle' },
 			{ kind: 'not_found' },
 			{ kind: 'not_found' }
 		]);

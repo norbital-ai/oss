@@ -4,9 +4,12 @@ Svelte views, field inputs, primitives, design tokens and layout primitives for 
 
 See the [UI package overview](./docs/README.md) for goals, layering, and styling boundaries.
 
-Public entries: `.` (views, inputs, editors, primitives), `./layout`, `./brand` (brand and access
-artwork), `./effect`
-(the mounted Svelte Effect edge) and `./base.css`; `./assets/*` holds the logo and favicons.
+Public entries: `.` (views, inputs, editors, primitives), `./layout`, `./behaviors` (composable
+Svelte 5 headless behavior primitives), `./brand` (brand and access artwork), `./effect` (the
+mounted Svelte Effect edge), `./i18n` (chrome and model-view locale strings), `./code` (shared
+CodeMirror theme, syntax highlighting and language setup), `./read` (`label_read` and `unref`
+view read helpers), `./base.css` and `./brand/access.css` (shared access-page geometry); `./assets/*`
+holds the logo and favicons.
 
 ```svelte
 <script lang="ts">

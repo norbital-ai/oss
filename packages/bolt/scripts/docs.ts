@@ -50,7 +50,7 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 	sync: { bolt: ['sync', 'SyncCtx', 'SyncRow', 'Finding'] },
 	integration: {
 		bolt: ['integration', 'IntegrationLiteral', 'Integration', 'InstanceId', 'instance_id', 'is_instance'],
-		'bolt/page': ['IntegrationSetup']
+		'bolt/page': ['Connections', 'IntegrationSetup']
 	},
 	page: {
 		bolt: ['app', 'group'],
@@ -253,9 +253,9 @@ The default mode is a durable job. \`mode: 'call'\` returns its typed \`output\`
 
 A model answers \`yield* ctx.ai.sys_2.infer({ system: '<role>', prompt: '<task>', output: { kind: 'object', fields: { <field>: { kind: 'text' } } } })\` with the \`output\`'s value (text when absent).
 
-Runtime accounts are durable \`sys_integration\` rows, created in Settings or through \`sys_integration.create\`; source declares no connection slots. \`yield* ctx.notify({ title: '<title>', to: [{ policy: '<policy>' }], via: [instance_id('<integration>', account)] })\` reaches each recipient in the app and on the selected account. Built-in conversation definitions need no duplicate source declaration.
+Runtime accounts are durable \`sys_integration\` rows, created in Settings or through \`sys_integration.create\`; source declares no connection slots, though built-in workspace integrations require opt-in via \`+workspace.ts\` \`connections\` to appear in Settings → Integrations → Connections (custom \`src/integration/*\` definitions appear automatically). \`yield* ctx.notify({ title: '<title>', to: [{ policy: '<policy>' }], via: [instance_id('<integration>', account)] })\` reaches each recipient in the app and on the selected account. Built-in definitions (conversation channels and \`github\`) need no duplicate source declaration.
 
-For a daily channel message, read the intended active workspace account (\`owner\` null, with its intended \`envoy\`) and use \`yield* ctx.send(instance_id('whatsapp', account), { to: '<recipient handle or conversation id>', text: '<message>' })\` in the cron body. Import \`instance_id\` from \`@norbital-ai/bolt\`. Refuse when the account is missing or ambiguous; never silently choose another account. Sends are durably queued, and the provider's acknowledgement and retry outcome appear on the message. Retries of an automation may repeat committed sends: do not promise exactly-once delivery. The recipient's later replies use that account's envoy and the same conversation, with delivered messages in context.
+For a daily channel message, read the intended active workspace account (\`owner\` null; linked to envoys via \`sys_envoy_channel\`) and use \`yield* ctx.send(instance_id('whatsapp', account), { to: '<recipient handle or conversation id>', text: '<message>' })\` in the cron body. Import \`instance_id\` from \`@norbital-ai/bolt\`. Refuse when the account is missing or ambiguous; never silently choose another account. Sends are durably queued, and the provider's acknowledgement and retry outcome appear on the message. Retries of an automation may repeat committed sends: do not promise exactly-once delivery. The recipient's later replies route through the matching \`sys_envoy_channel\` binding on that account and the same conversation, with delivered messages in context.
 
 Time is \`ctx.today\`, a \`PlainDate\`, and \`ctx.now\`, an ISO instant string; do date and duration math with Effect's \`DateTime\` and \`Duration\` (\`DateTime.add(DateTime.makeUnsafe(ctx.today), { months: 1 })\`, \`DateTime.formatIsoDateUtc\`). A model's \`effect\` has the same two.
 
@@ -282,9 +282,9 @@ export default model('<name>', {
 \`\`\`
 
 \`seq\` patterns take one \`{0…}\` counter and only \`{yyyy}\`, \`{yy}\`, \`{mm}\`. \`decimal\`/\`money\` fields write and read as exact decimal strings (\`'10.00'\`), never JS numbers. A required field added to a model with rows needs a data step in its generated migration, filling them.`,
-	integration: `A definition lives at \`src/integration/<name>/+integration.ts\` and declares \`integration('<name>', { … })\` (\`<name>\` is its folder). Read the definition's exported types before authoring it. Built-in conversation definitions already exist.
+	integration: `A definition lives at \`src/integration/<name>/+integration.ts\` and declares \`integration('<name>', { … })\` (\`<name>\` is its folder). Read the definition's exported types before authoring it. Built-in definitions (conversation channels and read-only \`github\` over \`http\`) already exist; list built-in workspace definitions in \`+workspace.ts\` \`connections\` to offer them under Settings → Integrations → Connections (custom \`src/integration/*\` definitions are listed automatically).
 
-Accounts and envoys are runtime records: \`sys_envoy\` holds the assistant's name, task and policies; \`sys_integration\` holds one account, its configuration, optional envoy and durable sealed pairing. Create any number of workspace accounts with no owner. Settings → Envoys creates an envoy then pairs its provider; Settings → Connections creates and configures other workspace accounts. Keep a supplied \`+integration.svelte\` companion.
+Accounts, envoys and channel bindings are runtime records: \`sys_envoy\` holds the assistant's name, task and policies; \`sys_integration\` holds one account, its configuration, conversation \`listen\`/\`classifier\` settings and durable sealed pairing; \`sys_envoy_channel\` binds envoys to workspace conversation accounts many-to-many with per-binding \`scope\` and \`group_messages\` overrides. Create any number of workspace accounts with no owner (and personal accounts where \`scope\` allows and \`capabilities.personal_connections\` grants). Settings → Envoys manages envoys and their channel bindings; Settings → Integrations → Connections manages workspace accounts. Keep a supplied \`+integration.svelte\` companion.
 
 For native setup in a root web conversation, read \`describe_workspace { names: ['system'] }\`; use the returned capability and account id with \`page { path, configure }\`. The native form collects credentials directly from the person. Envoys and delegated agents have no user tab. Never ask for a secret in chat or invent an envoy source file. Cron jobs send through a concrete paired workspace account with \`ctx.send\`; see the automation card.`,
 	access: `A policy is one file; a grant names only verbs its model declares (never grant \`delete\` unless the model declares \`delete: {}\`). State transitions use \`update: { moves: 'all' }\` or \`moves: { <state_field>: ['<from>-><to>'] }\`. Teams are \`sys_team\` rows an administrator edits (a name, an optional parent and the policies its members hold); source declares none and holds a team only as an id read from a row. A policy file:
@@ -404,7 +404,7 @@ Common UI props (host renders \`AppShell\` automatically — pages never import 
 </RecordShell>
 \`\`\``,
 	test: `Tests are \`tests/<name>.test.ts\`. Everything comes from the kit, and \`workspace_test\` runs them (Vitest does **not** type-check tests — always run \`workspace_diagnose {}\` after editing any test file before committing or merging).
-- \`caller.act(...)\` returns \`{ kind: 'committed', records: [{ model, id, revision }] }\` (or \`'held'\`), NOT a per-verb map.
+- \`caller.act(...)\` returns \`{ kind: 'committed', records: [{ model, id, revision }] }\` (or \`{ kind: 'pending_approval', request_id, records }\`), NOT a per-verb map.
 - Brand a record id for \`ref\` fields or \`target\` with \`Schema.decodeUnknownSync(id_of('<model>'))(record.id)\` from \`@norbital-ai/bolt\`.
 - \`caller.query(...)\` returns \`Record<string, QueryPage | AggregateResult>\`; narrow each root inline with \`page !== undefined && 'rows' in page ? page.rows : []\` (never cast or write an unnarrowed \`rowsOf\` helper).
 - \`caller.run('<automation>', input, JobResult)\` starts an automation; call \`yield* t.run_due()\` to drain queued runs.

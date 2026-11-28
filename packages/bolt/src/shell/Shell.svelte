@@ -1205,6 +1205,9 @@
 				on_tab: (x) => navigate(x === 'workbench' ? '/studio' : `/studio/${x}`),
 				on_ask: boot.surfaces.agent
 					? (prompt) => agent.open({ prompt, send: crypto.randomUUID() })
+					: null,
+				on_conversation: boot.surfaces.agent
+					? (conversation) => agent.open({ conversation })
 					: null
 			}}
 		/>

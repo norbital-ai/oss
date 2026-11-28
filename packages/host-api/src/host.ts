@@ -77,7 +77,7 @@ export type ShellPorts = {
 	};
 	/** The host's apex origin (sign-in hand-off, the workspace switcher). */
 	readonly apex?: string;
-	/** Set when this shell serves a preview environment: the live workspace's address (the preview banner's link). */
+	/** Set when this shell serves a preview environment: the live workspace's address (top-level preview loads redirect there). */
 	readonly live?: string;
 	/**
 	 * Where an administrator repairs this workspace when it will not open (the host's recovery Studio). A host with no
@@ -86,7 +86,7 @@ export type ShellPorts = {
 	readonly recovery?: string;
 	/**
 	 * Where an administrator sees this workspace's usage, cost, payment card and invoices (the host's billing page);
-	 * Settings links it. A host that bills nothing sets none.
+	 * Settings embeds it. A host that bills nothing sets none.
 	 */
 	readonly billing?: string;
 	readonly workspaces?: (auth: Authority) => Promise<readonly WorkspaceLink[]>;
@@ -385,7 +385,10 @@ export type WorkspaceBranch = {
 		): Promise<MigrationImpact>;
 	};
 	readonly packs: {
-		/** The release's seed pack by name (`base`), its assets into `files` when given, ready to load in steps. */
+		/**
+		 * A seed pack by name (`base` from the release, or a host-streamed private seed pack such as `'__private'` served
+		 * over `ArtifactPort` under `../seed/<pack>/`), its assets into `files` when given, ready to load in steps.
+		 */
 		load(
 			pack: string,
 			options: Signal & { readonly at: string; readonly files?: FilesPort }

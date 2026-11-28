@@ -30,7 +30,6 @@ import {
 	type ShapeOf,
 	acts_json
 } from '../services.ts';
-import type { EngineManifest } from '../manifest.ts';
 import { enqueue, holderOf, next_due, writerOf } from '../runs/queue.ts';
 import { due_at as roundedDueAt } from '../runs/time.ts';
 import { approval_hook } from '../approvals/approvals.ts';

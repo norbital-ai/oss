@@ -2,7 +2,6 @@
 // ports served around them. Every port is Promise + AbortSignal; a throw is a facility failure (`FacilityFailure`,
 // `Unavailable`), never a release's own class. Every key of `Facilities` is required: `satisfies Facilities` turns a
 // missing one into a type error, `off` is the only way to leave a member out, and `mail` has no `off`.
-import type { Schema } from 'effect';
 import type { AiPort, EmbeddingsPort } from './ai.ts';
 import type { AuditPort } from './audit.ts';
 import type { HostTenantDb } from './db.ts';

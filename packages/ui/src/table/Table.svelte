@@ -227,7 +227,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 		remove
 	}: TableProps<S, RowIn<S>, ColumnsIn<S>> = $props();
 	const client = $derived(optional_bolt_of(ctx));
-	if (untrack(() => client === undefined && !(embedded && controlled && localSource(of))))
+	if (untrack(() => client === undefined && !localSource(of)))
 		throw new Error('A view needs the shell: pass the page ctx with its ui.bolt.');
 	const host = () => {
 		if (client === undefined) throw new Error('A remote table needs the shell.');
@@ -533,12 +533,21 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 				? tableSource._tag === 'local'
 					? tableSource.rows
 					: []
-				: sortRows(
-						searchRows(tableSource._tag === 'local' ? tableSource.rows : [], st.q, fields).filter(
-							(r) => matches(r, { t: 'group', join: 'and', of: vs.rows }, vs.clock)
-						),
-						vs.order
-					)
+				: (() => {
+						const searched = searchRows(
+							tableSource._tag === 'local' ? tableSource.rows : [],
+							st.q,
+							fields
+						);
+						return sortRows(
+							vs.rows.length === 0
+								? searched
+								: searched.filter((r) =>
+										matches(r, { t: 'group', join: 'and', of: vs.rows }, vs.clock)
+									),
+							vs.order
+						);
+					})()
 			: []
 	);
 	const view: ReadState<readonly ReadRow[]> = $derived(

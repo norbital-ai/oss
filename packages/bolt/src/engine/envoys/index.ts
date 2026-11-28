@@ -1,6 +1,6 @@
-// Envoys. An envoy is a runtime `sys_envoy` row
-// deployed on a workspace conversation instance (`sys_integration.envoy`, active, no owner); every turn runs as the
-// `envoy` actor on that instance. The ingest statement queues one `envoys.admit` run per new live message there, so a
+// Envoys. An envoy is a runtime `sys_envoy` row bound to one or more workspace conversation instances
+// (`sys_envoy_channel`, active, on an active ownerless `sys_integration`); every turn runs as the
+// `envoy` actor on the matched instance. The ingest statement queues one `envoys.admit` run per new live message there, so a
 // crash between ingest and admission loses no turn. Admission reads the instance and the envoy's spec as they are now
 // (fail closed on either) and decides the row once: email is always addressed, a group follows `group_messages` (the rest
 // is ambient history `read_messages` reads), triage may hold it. The sender is matched to an active member by the handle

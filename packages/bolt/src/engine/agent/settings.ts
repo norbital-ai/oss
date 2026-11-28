@@ -7,6 +7,7 @@ import { Context, Effect, Layer, Option, Schema, Stream } from 'effect';
 import { FacilityFailure } from '@norbital-ai/host-api';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { Ai } from '../ports.ts';
+import { WorkspaceAlertsService } from '../alerts.ts';
 import { TASK } from './schema.ts';
 
 export const AGENT_KEY = 'agent';
@@ -202,7 +203,8 @@ export const AdminAi = Layer.effect(
 	Ai,
 	Effect.gen(function* () {
 		const ai = yield* Ai,
-			db = yield* TenantDb;
+			db = yield* TenantDb,
+			alerts = yield* Effect.serviceOption(WorkspaceAlertsService);
 		const readSettings = agentSettings(db).pipe(
 			Effect.mapError((error) => new FacilityFailure({ kind: 'upstream', message: error.message }))
 		);
@@ -262,11 +264,13 @@ export const AdminAi = Layer.effect(
 											? s.system1
 											: undefined;
 							const result = yield* ai.ask(request, chosen);
-							if (Number.isFinite(result.cost_usd) && result.cost_usd > 0)
+							if (Number.isFinite(result.cost_usd) && result.cost_usd > 0) {
 								yield* recordSpend(db, result.cost_usd, actor?.member ?? null).pipe(
 									Effect.tapCause(Effect.logWarning),
 									Effect.ignore
 								);
+								if (Option.isSome(alerts)) yield* alerts.value.checkAiSpend;
+							}
 							return result;
 						})
 				: ai.ask,
@@ -285,6 +289,9 @@ export const AdminAi = Layer.effect(
 								Number.isFinite(event.response.usage.cost) &&
 								event.response.usage.cost > 0
 									? recordSpend(db, event.response.usage.cost, actor?.member ?? null).pipe(
+											Effect.andThen(
+												Option.isSome(alerts) ? alerts.value.checkAiSpend : Effect.void
+											),
 											Effect.tapCause(Effect.logWarning),
 											Effect.ignore
 										)

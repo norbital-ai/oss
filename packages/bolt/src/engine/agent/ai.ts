@@ -60,8 +60,12 @@ import { Validator } from '@cfworker/json-schema';
 import { compile, context, evaluate } from '@norbital-ai/store/formula';
 
 const MiB = 1024 * 1024;
-/** A platform budget checked before the provider's own limit: files and bytes a call, bytes one file. */
-export const MODEL_FILES = { count: 24, bytes: 20 * MiB, fileBytes: 8 * MiB } as const;
+/**
+ * A platform budget checked before the provider's own limit: files and bytes a call, bytes one file. 16 files: the
+ * strictest route in use refuses more images a request (DeepInfra serving DeepSeek on OpenRouter: "Too many images in
+ * request: 24 > 16"); more files are read in batches.
+ */
+export const MODEL_FILES = { count: 16, bytes: 20 * MiB, fileBytes: 8 * MiB } as const;
 /** What a message may carry (envoy and panel alike): images, text, recordings and any document, parsed or read by a tool, within `MODEL_FILES`. */
 export const ATTACHMENT_MIME = /^(image|text|audio|application)\/[\w.+-]+$/;
 class ModelIdle extends FacilityFailure {

@@ -1440,6 +1440,8 @@ describe('the AI port under the 20 s idle wall', () => {
 					2,
 					2
 				]);
+				// no batch exceeds what the strictest provider route takes (16 images a request)
+				expect(MODEL_FILES.count).toBeLessThanOrEqual(16);
 				expect(loads).toEqual(files.map((f) => f.id));
 				// the second batch starts from the first one's draft, which minItems alone would have refused
 				expect(required(required(requests[2]).messages[0]).content).toContain(

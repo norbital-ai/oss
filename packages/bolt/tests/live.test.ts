@@ -16,7 +16,7 @@ import {
 } from 'effect';
 import { TestClock } from 'effect/testing';
 import { Live, Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
-import { get, read, type ReadIR } from '../src/protocol/reads.ts';
+import { get, read, request, type ReadIR } from '../src/protocol/reads.ts';
 import { catalog_for } from '@norbital-ai/store';
 import type { Json } from '../src/decl/values.ts';
 import { compile_authority } from '../src/engine/access/authority.ts';
@@ -133,11 +133,11 @@ const connection = Effect.fn('Test.liveConnection')(function* (
 	return { id: yield* Deferred.await(ready), fiber };
 });
 /** All hubs and their connection streams are scope-owned; routing settles before the independent frame consumer. */
-const setup = Effect.fn('Test.liveSetup')(function* (answer: (read: ReadIR) => Json = () => null) {
+const setup = Effect.fn('Test.liveSetup')(function* (answer: (read: ReadIR) => Json = () => null, source = manifest) {
 	const asked: ReadIR[] = [];
 	let n = 0;
 	const hub = yield* makeHub((batch) =>
-		Effect.sync(() => batch.map((read) => (asked.push(read), answer(read) ?? ++n)))
+		Effect.sync(() => batch.map((read) => (asked.push(read), answer(read) ?? ++n))), source
 	);
 	const frames: Frame[] = [];
 	let ended = false;
@@ -766,6 +766,38 @@ describe('engine/live: deltas from the RETURNING image', () => {
 				{ t: 'delta', view: 'v', v: 1, ops: [{ op: 'upsert', path: [], index: 0, row: got }] }
 			]);
 			expect(x.sweep.conservative).toBe(1);
+		})
+	);
+
+	// `{}` reads every exposed field, heavy ones (json, file, custom) included: so must the rows that patch it
+	it.effect('a whole-record read patches its rows with the heavy fields its answer carries', () =>
+		Effect.gen(function* () {
+			const orders = present(manifest.models['orders']);
+			const heavy: EngineManifest = {
+				...manifest,
+				models: { ...manifest.models, orders: { ...orders, fields: { ...orders.fields, meta: { kind: 'json', optional: true } } } }
+			};
+			const owner = Effect.runSync(compile_authority(heavy, { actor: member('root'), policies: [], admin: true }, 'admin'));
+			const first = { id: O(1), title: 't1', meta: null };
+			// the by-id re-read answers as the reader would: `meta` only when the view asks for it
+			const reread = (r: ReadIR) =>
+				page(r.kind === 'read' && r.select.fields?.includes('meta') ? { ...first, title: 'new' } : { id: O(1), title: 'new' });
+			let answered = false;
+			const { hub, frames, connect } = yield* setup((r) => (answered ? reread(r) : ((answered = true), page(first))), heavy);
+			const c = yield* connect(owner);
+			// the page's own root read of `{ orders: { where, limit } }`, without its `total` counter (that needs a reader snapshot)
+			const requested = yield* request(catalog_of(heavy), { orders: { where: { id: { eq: O(1) } }, limit: 1 } });
+			const root = requested.kind === 'request' ? requested.roots[0] : undefined;
+			if (root === undefined || !('read' in root) || root.read.kind !== 'read') throw new Error('Expected one root page read');
+			const { total: _total, ...whole } = root.read;
+			yield* hub.register(c, 'v', { read: whole });
+			yield* TestClock.adjust(0);
+			frames.length = 0;
+			hub.publish([cap(row(1, { meta: null }), row(1, { title: 'new', meta: null }))]);
+			yield* hub.settled;
+			yield* TestClock.adjust(0);
+			const ops = patches(frames).flatMap(([, o]) => o);
+			expect(ops).toEqual([{ op: 'upsert', path: [], index: 0, row: { ...first, title: 'new' } }]);
 		})
 	);
 

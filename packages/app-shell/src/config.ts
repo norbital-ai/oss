@@ -70,7 +70,7 @@ const Fields = Schema.Struct({
 		Schema.String.check(Schema.makeFilter((value: string) => addressProblem('start', value)))
 	),
 	/**
-	 * Pins the app to one workspace page, path included, e.g. `https://t-abc.workspaces.norbital.ai/apps/cleaner`.
+	 * Pins the app to one workspace page, path included, e.g. `https://acme.workspaces.norbital.ai/app/cleaner/jobs`.
 	 * Unset, the app starts at `host` and moves between every workspace on it.
 	 */
 	workspace: Schema.optionalKey(

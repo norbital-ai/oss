@@ -29,7 +29,7 @@ import { requireAdmin, SIGNUP_KEY, type IdentityHost } from '../../engine/identi
 import { AgentHost } from '../../engine/agent/shared.ts';
 import { AgentSettings, agentSettings, saveAgentSettings } from '../../engine/agent/settings.ts';
 import { Retention, RETENTION_DEFAULTS, RETENTION_KEY, saveRetention } from '../../engine/runs/retention.ts';
-import { AuditRow, InvitationRow, KeyRow, Member } from '../api-types.ts';
+import { InvitationRow, KeyRow, Member } from '../api-types.ts';
 
 const nullableText = Schema.NullOr(Schema.String);
 const DeliveryRow = Schema.Struct({
@@ -128,8 +128,6 @@ export type Settings = {
 		delivery: Delivery;
 	}[];
 	mcp: { name: string; url: Json; secrets?: readonly string[] }[];
-	/** Identity changes (`bolt_history` of the identity tables), newest first. */
-	audit: readonly AuditRow[];
 	/**
 	 * The definitions an instance is created of, the workspace's and bolt's conversation ones: whether it carries a
 	 * conversation (an envoy may answer it), may be a member's own account (`personal`), sends outbound, and the
@@ -169,7 +167,6 @@ export type Delivery = {
 	nextRetry: string | null;
 	lastError: string | null;
 };
-const AUDIT_LIMIT = 200;
 /** The settings pages' rows: one row per member with sessions collapsed to a last-seen time; admins only. */
 export const settings = Effect.fn('shell.settings')(function* (
 	h: IdentityHost,
@@ -179,7 +176,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 ) {
 	const now = yield* h.now;
 	yield* requireAdmin(auth);
-	const [users, invitations, keys, audit, deliveries, signup, instances, envoys, envoyChannels, retention] =
+	const [users, invitations, keys, deliveries, signup, instances, envoys, envoyChannels, retention] =
 		yield* h.db.read([
 			// administrators first, then staff, then external members; by name, else address. Anonymous visitors are no members.
 			sql(`SELECT u.id, u.email, u.phone, u.telegram, u.slack, u.discord, u.name, u.kind, u.active, u.admin, u.team, u.last_seen::text AS last_seen
@@ -192,8 +189,6 @@ export const settings = Effect.fn('shell.settings')(function* (
 			sql(
 				'SELECT id, name, prefix, team, created_by, created_at::text AS created_at, revoked_at::text AS revoked_at, last_used_at::text AS last_used_at FROM sys_api_key ORDER BY name, id'
 			),
-			sql(`SELECT collection AS model, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
-			WHERE collection IN ('sys_user', 'sys_invitation') ORDER BY at DESC, revision DESC LIMIT ${AUDIT_LIMIT}`),
 			sql(
 				`SELECT integration, count(*) FILTER (WHERE status IN ('sent', 'deferred', 'delivered', 'read', 'opened', 'replied'))::int AS sent, count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts = 0)::int AS pending,
 			count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts > 0)::int AS retrying, count(*) FILTER (WHERE status IN ('failed', 'uncertain', 'bounced', 'complained'))::int AS failed, count(*) FILTER (WHERE status = 'skipped')::int AS skipped,
@@ -286,7 +281,6 @@ export const settings = Effect.fn('shell.settings')(function* (
 			configuration: i.configuration ?? {},
 			delivery: delivery.get(i.id) ?? idle
 		})),
-		audit: yield* decode(AuditRow, audit?.rows ?? []),
 		mcp: Object.entries(m.mcp).map(([name, s]) => ({
 			name,
 			url: s.url ?? null,

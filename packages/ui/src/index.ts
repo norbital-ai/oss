@@ -5,6 +5,9 @@
 // is Svelte's generic-component shape over its own name-erased implementation.
 /** Live model rows grouped into state, enum or relation lanes; dragging a card updates its lane field under the viewer's grants. */
 export { default as Board } from './board/Board.svelte';
+/** A kanban board over a local row array with the exact lane, empty-state, card and modal chrome of `Board`. */
+export { default as LocalBoard } from './board/LocalBoard.svelte';
+export type { LocalBoardProps, LocalLane } from './board/LocalBoard.svelte';
 /** Live model points on our vector basemap, with clusters, a detail card, an optional side list, overlays and record opening; search and filters retain the viewer's read scope. */
 export { default as Map } from './map/Map.svelte';
 /** A record frame with its label, permissions, approvals, revision history and authored tabs; renders the registered representation or generated form. */
@@ -581,7 +584,8 @@ export type { StudioMount, StudioProps } from './studio/slot.js';
 export { default as PreviewFrame } from './studio/PreviewFrame.svelte';
 export { default as TestResults } from './studio/TestResults.svelte';
 export { elapsed_text } from './studio/elapsed.js';
-/** The same tenant operational surface in Workspace Studio and Realm. */
+/** The same tenant operational surface in Workspace Studio and a host's operator console. */
+export { default as LogView } from './logs/LogView.svelte';
 export { default as WorkspaceOperations } from './workspaces/WorkspaceOperations.svelte';
 export { release_window } from './workspaces/filters.js';
 export type {

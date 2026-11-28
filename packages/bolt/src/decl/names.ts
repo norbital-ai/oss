@@ -90,7 +90,7 @@ export type AppName = keyof NamesPart<'apps'> & string;
 /** The automation names (`src/automation/+<a>.automation.ts`). */
 export type AutomationName = keyof NamesPart<'automations'> & string;
 type Definitions = NamesPart<'integrations'> & SystemNames['integrations'];
-/** The integration definitions: the workspace's (`src/integration/<name>/`) and bolt's conversation definitions. */
+/** The integration definitions: the workspace's (`src/integration/<name>/`) and bolt's built-in definitions (conversation channels and `github`). */
 export type IntegrationName = keyof Definitions & string;
 /** The literal of definition `D`. */
 export type IntegrationSpecOf<D> = D extends keyof Definitions
@@ -116,7 +116,6 @@ export type InstanceId<D extends string = IntegrationName> = Id<'sys_integration
 };
 /** The MCP server names (`src/agent/mcp/+<n>.mcp.ts`). */
 export type McpName = keyof NamesPart<'mcp'> & string;
-/** The agent skill names (`src/agent/skill/<n>/+skill.md`). */
 /** The host tools a policy's `capabilities.tools` may name (the host's Studio and browser tools). */
 export type HostToolName = keyof NamesPart<'host_tools'> & string;
 export type CustomShape<F> = F extends keyof CustomFields
@@ -420,8 +419,6 @@ export type SubLayer<Paths, P extends string> = Paths extends `${P}.${infer S}`
 /** Every prefix of each path: naming a deep path implies its parents. */
 export type Prefixes<P> = P extends `${infer H}.${infer T}` ? H | `${H}.${Prefixes<T>}` : P;
 type SyncsOf<C> = SpecOf<C> extends { syncs: infer S } ? S : {};
-/** The syncs model `C` declares. */
-export type SyncName<C> = keyof SyncsOf<C> & string;
 /** File syncs offer import, template and export runs even when they use the built-in adapters. */
 export type FileSyncName<C, S = SyncsOf<C>> = {
 	[N in keyof S]: S[N] extends { with: 'file' } ? N : never;

@@ -257,6 +257,16 @@ export function makeDeliver(e: SyncEngine) {
 			next: Schema.NullOr(Schema.String)
 		}), `${next_due(c)}::text AS next`);
 		if (answer.next !== null) yield* e.announce(answer.next);
+		if (e.onFailure !== undefined) {
+			for (const result of results) {
+				if (result.status !== 'dead') continue;
+				yield* e.onFailure({
+					source: result.row.sync,
+					key: `sync:write:${result.row.sync}:${result.row.instance}`,
+					detail: `Sync write ${result.row.sync} (${result.row.op} on ${result.row.model}/${result.row.record}) moved to dead letter: ${result.message}`
+				});
+			}
+		}
 	});
 	const refuse = Effect.fn('Syncs.rollbackWrite')(function* (r: Outbox, message: string) {
 		const sync = syncs_of(m).get(r.sync);

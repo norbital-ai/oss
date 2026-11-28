@@ -2,7 +2,7 @@
 // driver's `DbError` (the SQLSTATE the write compiler maps to a refusal) and, for a typed read, `BoltError`
 // naming the table of a row that does not decode. Batches release their connection before answering.
 import { Clock, Context, Effect, Semaphore, type Option, type Schema } from 'effect';
-import { DbError, type DbBatch, type Lock, type RawDb, type Rows, type Sql } from '@norbital-ai/host-api';
+import { DbError, type Lock, type RawDb, type Rows, type Sql } from '@norbital-ai/host-api';
 import type { BoltError } from '../../protocol/errors.ts';
 import { decodeOne, decodeRows, decodeValue } from './rows.ts';
 import { AuditMutation, auditedBatch } from '../audit-context.ts';

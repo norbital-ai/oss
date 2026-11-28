@@ -610,12 +610,18 @@ describe('next compiler: seed packs', () => {
 					write(root, {
 						'seed/public/sys_user.json': JSON.stringify([member('ada')]),
 						'seed/+seeder.ts': `export default { bank: { tree: 'acme' } };`,
-						'bank/acme/rows/people/sys_user.json': JSON.stringify([member('grace')])
+						'bank/acme/rows/people/sys_user.json': JSON.stringify([
+							{ ...member('ada'), name: 'Ada Private' },
+							member('grace')
+						])
 					});
 					const errors: CheckDiagnostic[] = [];
 					const seeding = yield* seedRows(root, m, bank, cache, errors);
 					expect(errors).toEqual([]);
-					expect(seeding?.rows['sys_user']?.map((r) => r['id'])).toEqual(['ada', 'grace']);
+					expect(seeding?.rows['sys_user']?.map((r) => [r['id'], r['name']])).toEqual([
+						['ada', 'Ada Private'],
+						['grace', 'grace']
+					]);
 					expect(existsSync(join(root, '.norbital/seed'))).toBe(false);
 					write(root, {
 						'bank/acme/rows/people/sys_user.json': JSON.stringify([

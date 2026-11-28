@@ -9,7 +9,28 @@ import '../../ui/src/base.css';
 const data: WorkspaceOperationsData = {
 	can_inspect: true,
 	as_of: '2026-11-25T08:00:00.000Z',
-	usage: [],
+	usage: [
+		{
+			title: 'Memory held',
+			unit: 'MiB',
+			lines: [{ label: 'Memory held', bound: false, points: [{ at: 1_764_000_000_000, value: 42 }] }]
+		},
+		{
+			title: 'Total AI spend',
+			unit: 'micro-SGD',
+			lines: [{ label: 'Total AI spend', bound: false, points: [{ at: 1_764_000_000_000, value: 1200 }] }]
+		},
+		{
+			title: 'Database size',
+			unit: 'bytes',
+			lines: [{ label: 'Database size', bound: false, points: [{ at: 1_764_000_000_000, value: 1024 }] }]
+		},
+		{
+			title: 'Cron runs',
+			unit: 'runs',
+			lines: [{ label: 'Cron runs', bound: false, points: [{ at: 1_764_000_000_000, value: 3 }] }]
+		}
+	],
 	members: null,
 	studio: null,
 	logs: null,
@@ -57,7 +78,7 @@ const data: WorkspaceOperationsData = {
 };
 
 const shown = async (
-	view: 'activity' | 'improvements',
+	view: 'activity' | 'improvements' | 'telemetry',
 	check: () => Promise<void>,
 	on_conversation?: (id: string) => void
 ) => {
@@ -65,6 +86,9 @@ const shown = async (
 	// the board's toolbar forks its work on the page's edge
 	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 	const target = document.createElement('div');
+	target.style.height = '680px';
+	target.style.display = 'flex';
+	target.style.flexDirection = 'column';
 	document.body.append(target);
 	const mounted = mount(WorkspaceOperations, {
 		target,
@@ -87,26 +111,38 @@ const shown = async (
 	}
 };
 
-it('Activity lists pages by views and agent turns by access point', () =>
+it('Activity renders Pages and Assistant activity inside bounded tables ordered by views', () =>
 	shown('activity', async () => {
-		await expect.element(page.getByText('People who opened a page: 4')).toBeInTheDocument();
-		const routes = page.getByRole('rowheader').elements().map((cell) => cell.textContent?.trim());
-		// most viewed first, then the access points in the host's order
-		expect(routes).toEqual([
-			'/app/sales/orders',
-			'/app/sales/quotes',
-			'Norbius (staff)',
-			'System agent'
-		]);
-		await expect.element(page.getByText('Not recorded')).toBeInTheDocument();
-		await expect.element(page.getByRole('row', { name: /System agent 2 0 18 0/ })).toBeInTheDocument();
+		const previous = { width: window.innerWidth, height: window.innerHeight };
+		await page.viewport(1200, 900);
+		try {
+			await expect.element(page.getByText('People who opened a page: 4')).toBeInTheDocument();
+			await expect.element(page.getByRole('row', { name: /\/app\/sales\/orders/ })).toBeInTheDocument();
+			const cells = page
+				.getByRole('row')
+				.elements()
+				.map((row) => row.querySelector('td, [role=cell]')?.textContent?.trim())
+				.filter((text): text is string => text !== undefined && text !== '');
+			// most viewed first, then the access points in the host's order
+			expect(cells).toEqual([
+				'/app/sales/orders',
+				'/app/sales/quotes',
+				'Norbius (staff)',
+				'System agent'
+			]);
+			await expect.element(page.getByText('Not recorded')).toBeInTheDocument();
+			await expect.element(page.getByRole('row', { name: /System agent/ })).toBeInTheDocument();
+		} finally {
+			await page.viewport(previous.width, previous.height);
+		}
 	}));
 
-it('Improvements lays each thread in its status lane, and a card opens its agent conversation', () => {
+it('Improvements uses the inbuilt Kanban board chrome, and a card opens its agent conversation', () => {
 	const opened: string[] = [];
 	return shown(
 		'improvements',
 		async () => {
+			expect(document.querySelector('[data-view="board"]')).not.toBeNull();
 			const waiting = page.getByRole('region', { name: 'Needs your answer' });
 			await expect.element(waiting.getByText('Dates show a day early')).toBeInTheDocument();
 			await expect
@@ -114,8 +150,8 @@ it('Improvements lays each thread in its status lane, and a card opens its agent
 				.toBeInTheDocument();
 			const open = page.getByRole('region', { name: 'Open' });
 			await expect.element(open.getByText('Automation payroll keeps failing')).toBeInTheDocument();
-			// no agent started on it: nothing to open
-			expect(open.getByRole('button').elements()).toHaveLength(0);
+			// no agent started on it: card itself is not a clickable button (only the lane header expand button exists)
+			expect(open.getByRole('button', { name: /Automation payroll keeps failing/ }).elements()).toHaveLength(0);
 			await expect
 				.element(page.getByRole('region', { name: 'Agent working' }).getByText('Nothing here'))
 				.toBeInTheDocument();
@@ -125,3 +161,21 @@ it('Improvements lays each thread in its status lane, and a card opens its agent
 		(id) => opened.push(id)
 	);
 });
+
+it('Telemetry splits KPI charts into Runtime, AI, Storage and Schedules tabs', () =>
+	shown('telemetry', async () => {
+		const previous = { width: window.innerWidth, height: window.innerHeight };
+		await page.viewport(1200, 900);
+		try {
+			await expect.element(page.getByRole('tab', { name: /Runtime/ })).toHaveAttribute('aria-selected', 'true');
+			await expect.element(page.getByText('Memory held', { exact: true }).first()).toBeVisible();
+			await page.getByRole('tab', { name: /AI/ }).click();
+			await expect.element(page.getByText('Total AI spend', { exact: true }).first()).toBeVisible();
+			await page.getByRole('tab', { name: /Storage/ }).click();
+			await expect.element(page.getByText('Database size', { exact: true }).first()).toBeVisible();
+			await page.getByRole('tab', { name: /Schedules/ }).click();
+			await expect.element(page.getByText('Cron runs', { exact: true }).first()).toBeVisible();
+		} finally {
+			await page.viewport(previous.width, previous.height);
+		}
+	}));

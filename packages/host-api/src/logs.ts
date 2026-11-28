@@ -1,5 +1,4 @@
 // The runtime log: events a release writes as they happen, held and queried by the host, never the tenant database.
-import type { Schema } from 'effect';
 import type { Json } from '@norbital-ai/store';
 
 /** A runtime event's severity. */

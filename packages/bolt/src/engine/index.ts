@@ -30,12 +30,12 @@ export {
 } from './manifest.ts';
 export type { GrantData } from './manifest.ts';
 export type { Json } from '../decl/values.ts';
-// ── exports: guest ──
+// ── exports: seed & pack ──
 export { decode_seed, type SeedPack } from './write/seed.ts';
 export { read_pack, read_pack_source, type PackJson } from './write/pack.ts';
 // ── exports: callables ──
 export { size_bytes } from './callables/upload.ts';
-// ── exports: identity ──
+// ── exports: schema & migrations ──
 export { read_applied } from './schema/plan.ts';
 export { plan } from './schema/plan-full.ts';
 export {
@@ -46,7 +46,7 @@ export {
 	read_migrations,
 	type MigrationBundle
 } from './schema/migrations.ts';
-// ── exports: links ──
+// ── exports: agent ──
 export { output_type, RUN_JS } from './agent/run-js.ts';
 // ── exports: protocol ──
 export { wire_error } from '../protocol/wire.ts';

@@ -47,7 +47,6 @@ const settings: Settings = {
 	],
 	secrets: [{ name: 'TOKEN', label: 'Fixture token', set: false }],
 	mcp: [{ name: 'remote', url: 'TOKEN', secrets: ['TOKEN'] }],
-	audit: [],
 	integrations: [
 		{
 			name: 'erp',

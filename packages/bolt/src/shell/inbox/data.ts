@@ -8,11 +8,6 @@ import { NoticeRow } from '../../protocol/schema.ts';
 import { inboxRequests, inboxSql, type InboxRequest } from '../../engine/approvals/inbox.ts';
 export type { InboxRequest } from '../../engine/approvals/inbox.ts';
 
-export type Inbox = {
-	readonly requests: readonly InboxRequest[];
-	readonly notices: readonly NoticeRow[];
-	readonly unread: number;
-};
 const INBOX_LIMIT = 200;
 const Rows = Schema.Struct({
 	notices: Schema.Array(NoticeRow),

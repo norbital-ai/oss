@@ -4,8 +4,6 @@ import { runPiece } from './rows.ts';
 // held effects with their approval; the accepting decision releases them. Distant due times use five-minute buckets.
 // Crons are not queued: the host's clock fires them (`Runs.fire`), automations' and remote syncs' reads alike
 // (`syncTriggers`, engine/sync/index.ts).
-import { Schema } from 'effect';
-import { BoltError } from '../../protocol/errors.ts';
 import type { CronEntry } from '@norbital-ai/host-api';
 import { LIMITS, type Authority, type QueuedRun } from '../contracts.ts';
 import type { Json } from '../../decl/values.ts';

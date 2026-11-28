@@ -50,11 +50,12 @@ export type WorkspaceChange = Readonly<{
 	}> | null;
 }>;
 type BuildLine = Readonly<{ at: string; level: 'info' | 'warn' | 'error'; message: string }>;
-/** Plain operational data rendered identically in tenant Studio and Realm. Host boundaries decode its native schema. */
+export type WorkspaceChart = Omit<UsageChartProps, 'ctx'> & Readonly<{ group?: string }>;
+/** Plain operational data rendered identically in Workspace Studio and a host's operator console. Host boundaries decode its native schema. */
 export type WorkspaceOperationsData = Readonly<{
 	can_inspect: boolean;
 	as_of: string;
-	usage: readonly Omit<UsageChartProps, 'ctx'>[];
+	usage: readonly WorkspaceChart[];
 	members: readonly WorkspaceMember[] | null;
 	studio: Readonly<{
 		commit: string;

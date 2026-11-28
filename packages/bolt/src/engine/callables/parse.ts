@@ -123,19 +123,20 @@ export const decode_acts = Effect.fn('Callables.decodeActs')(function* (
 							: target(rows)
 					};
 				}
-				return isList(input)
-					? input.map((row) => {
-						if (callable.verb === 'delete') {
-							// a non-object row is the planner's to refuse, with its row index (as an update's is)
-							if (!Predicate.isObject(row)) return row;
-							if (Object.keys(row).some((key) => key !== 'target'))
-								throw BoltError.make('invalid_input', 'decode', `${callable.model} delete is { target }.`);
-							return { target: writeTarget(manifest, callable.model, row['target']) };
-						}
-						return callable.verb === 'update' ? writeUpdate(manifest, callable.model, row)
-							: writeFields(manifest, callable.model, row, 'create');
-					})
-					: input;
+				// A lone row where a list belongs would plan no write and still commit: refuse it so the caller can fix it.
+				if (!isList(input))
+					throw BoltError.make('invalid_input', 'decode', `${name} takes a list of rows: [{ … }], even for one.`);
+				return input.map((row) => {
+					if (callable.verb === 'delete') {
+						// a non-object row is the planner's to refuse, with its row index (as an update's is)
+						if (!Predicate.isObject(row)) return row;
+						if (Object.keys(row).some((key) => key !== 'target'))
+							throw BoltError.make('invalid_input', 'decode', `${callable.model} delete is { target }.`);
+						return { target: writeTarget(manifest, callable.model, row['target']) };
+					}
+					return callable.verb === 'update' ? writeUpdate(manifest, callable.model, row)
+						: writeFields(manifest, callable.model, row, 'create');
+				});
 			},
 			catch: (error) =>
 				error instanceof BoltError

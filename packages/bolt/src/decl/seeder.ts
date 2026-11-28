@@ -30,8 +30,9 @@ export type Seeder = {
  * model; a directory groups files or names a test scenario) and `assets.json` (`[{ path, sha256, bytes, content_type }]`)
  * with its `assets/**` bytes; anything else is a `seed-layout` diagnostic. Each row carries its `id` and stored fields
  * in wire form (decimals as numbers, numeric text or `{ "$dec" }`; dates, instants and ids as text) and loads as
- * stored. Identity rows are `sys_team`, `sys_user` (`team` is the id of a `sys_team` row of the same pack) and unnamed
- * `sys_integration` instances.
+ * stored. Identity rows are `sys_team`, `sys_user` (`team` is the id of a `sys_team` row of the same pack) and
+ * unpaired `sys_integration` instances (`id, integration, name, owner, active, configuration`; never credentials,
+ * `status`, `sys_envoy` or `sys_envoy_channel`).
  *
  * `bolt check` loads the seeder (`seed/seeder`) and decodes every public and test row (`seed/decode`). A row value
  * declaring `$schema` is a JSON Schema whose datatypes are checked (`seed/datatype`): a non-string `format` must name

@@ -4,7 +4,7 @@ export type { CalendarEvent } from '@norbital-ai/host-api';
 // A definition is the connection only: one driver (a Bolt kind or one it declares), its typed configuration and
 // credential, OAuth, the HTTP base and auth, webhook verification and handler, a request rate and an inline `test` body.
 // What a connection exchanges is declared on the models it syncs (`model(…).syncs`, `./sync.ts`). Bolt's conversation
-// definitions (whatsapp, email, telegram, slack, discord, wechat, chat) are this same declaration in its system layer.
+// definitions (whatsapp, email, telegram, slack, discord, wechat, chat) and built-in `github` (`http`) are this same declaration in its system layer.
 import type { Actor, Handle } from '../access/actor.ts';
 import { Record as EffectRecord, Schema } from 'effect';
 import { FieldData } from '../field-data.ts';
@@ -19,7 +19,6 @@ import type {
 import type {
 	Checked,
 	Exact,
-	InputFields,
 	InputKind,
 	Simplify,
 	ValidInput,
@@ -538,14 +537,17 @@ export type Integration<N extends string, S> = {
 };
 
 /**
- * `src/integration/<name>/+integration.ts`: one external system's connection: its driver, configuration, credential,
+ * `src/integration/<name>/+integration.ts`: one external system's connection: its driver, `scope` (`'workspace'`, default,
+ * `'personal'` for member-owned accounts on `personal`-capable drivers, or `'both'`), configuration, credential,
  * OAuth client, HTTP base and auth, webhook verification and handler, and request `rate`, with an optional `test` body
  * run when an instance is paired. Its durable instances (connections) are runtime `sys_integration` rows made by people or the
  * agent; source never declares one, and a release neither provisions nor deletes them. Each row's configuration is
  * decoded with its defaults on every write; its credential is collected masked at pairing and sealed host-side, never
- * entering a guest or the browser. What it exchanges is declared on models:
+ * entering a guest or the browser. Conversation instances also carry runtime `listen` (deterministic transport capture
+ * scope) and `classifier` (smart/all/off intake mode, verbal instructions and per-connection automation toggles) fields
+ * on `sys_integration`. What it exchanges is declared on models:
  * `sync('<model>', '<sync>', { with: '<name>', read?, write? })` in the model's `+<sync>.sync.ts`. `name` must equal the folder name. The definition carries no provider protocol:
- * conversation platforms are the host's providers, which a workspace cannot supply.
+ * conversation platforms (and built-in `github` over `http`) live in the system layer and use host-registered providers, which a workspace cannot supply.
  * @returns Declaration metadata and its attached pairing-test body.
  * @example
  * import { integration } from '@norbital-ai/bolt';
@@ -568,7 +570,7 @@ export type Integration<N extends string, S> = {
  * 	}
  * });
  * @param name The integration's name: its folder.
- * @param spec Driver, configuration, credentials and the optional pairing test.
+ * @param spec Driver, scope, configuration, credentials and the optional pairing test.
  */
 /* @__NO_SIDE_EFFECTS__ */
 export function integration<const N extends IntegrationName, const S extends IntegrationLiteral<N>>(

@@ -79,7 +79,7 @@ export function manifestItems(
 				kind: 'sync',
 				name: `${model}.${name}`,
 				description: 'Import, export or synchronize model data.',
-				href: source(`src/data/model/${model}/+model.ts`)
+				href: source(`src/data/model/${model}/+${name}.sync.ts`)
 			});
 	}
 	return items;

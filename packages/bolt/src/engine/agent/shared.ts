@@ -77,6 +77,8 @@ export type AgentEngine = {
 	bundler?: Bundler['Service'] | undefined;
 	/** The integration instances' sealed credentials: a host tool's request through the actor's connection. */
 	credentials?: Credentials | undefined;
+	/** Non-fatal hook checked when a chat turn records AI spend. */
+	onAiSpend?: Effect.Effect<void> | undefined;
 };
 
 export type DrainOptions = {

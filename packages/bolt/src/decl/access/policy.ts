@@ -230,7 +230,7 @@ type PolicyBase = {
 	description: string;
 	/** Per model, the granted outputs and their scopes and history, and the admitted model verbs. */
 	grants: { readonly [model: string]: object } & VerdictSlots;
-	/** The apps, manual starts, host tools and MCP servers holders may use; every agent skill is open to all. */
+	/** The apps, manual automation starts, remote `syncs`, host tools, MCP servers and `personal_connections` holders may use; every agent skill is open to all. */
 	capabilities?: { readonly [k: string]: readonly string[] };
 };
 
@@ -238,14 +238,17 @@ type PolicyBase = {
  * `src/access_control/policy/+<name>.policy.ts`: what holders may do: per-model `grants` (the read outputs they read —
  * the default and named `outputs` and a row filter per layer of each, and `create`, `update` and `delete`
  * with the `fields` they admit per layer and a `verdict` returning `allow` or `approve`, or refusing), the
- * automations they may start, remote syncs they may refresh and capabilities (apps, host tools, MCP servers).
+ * automations they may start, remote `syncs` they may refresh and capabilities (`apps`, `tools`, `mcp`, `personal_connections`).
  * A model's policy guards every caller request at its access points and every layer under them; rows a write callback
  * carries (`with`, `on_approved`, owned children) are admitted by the root write's grant, while native constraints,
  * locks and state rules still apply. Teams, envoys and automations hold policies; rate limits per policy are declared in
  * `+workspace.ts` (`limits`).
- * `approve(flow)` is the whole approval mechanism: the write is held as a native approval request, the named step
- * approvers decide it in the record's approval panel, and a rejection restores the checkpoint. A page needs no
- * separate approval control. The model's verb effects receive the write and approval events.
+ * `approve(flow)` is the whole approval mechanism: the write is held as a native approval request, and the named step
+ * approvers decide it in the record's approval panel (`approve`, `reject`, `request_changes` so the requester can edit
+ * and resubmit on Save, or `withdraw` by the requester; `reject` and `withdraw` restore the checkpoint). A pending step
+ * with no active eligible approver besides the requester surfaces as `stalled` so an administrator can add an approver
+ * or close the request. A page needs no separate approval control. The model's verb effects receive the write and
+ * approval events.
  * Returns the literal.
  * @example
  * export default policy({

@@ -18,7 +18,7 @@ export default define_app({
 	splash: { color: '#FFFFFF' }, // optional `image`, defaults to the icon
 	theme_color: '#FFFFFF', // optional fallback for splash, background and offline colours
 	host: 'https://norbital.example', // an origin; https, http only for localhost, 127.0.0.1, 10.0.2.2, *.localhost
-	workspace: 'https://t-abc.workspaces.norbital.example/apps/cleaner', // optional: pins the app (below)
+	workspace: 'https://acme.workspaces.norbital.example/app/cleaner/jobs', // optional: pins the app (below)
 	allow_navigation: ['*.stripe.com'], // extra hosts that stay in the WebView
 	capabilities: {
 		location: { background: true, purpose: '…' }, // usage strings, background mode, Android permissions
@@ -42,7 +42,7 @@ export default define_app({
 
 **Unpinned** (`workspace` unset): the app opens `start`, else `host`, and is home on the host origin and every subdomain of the
 host's hostname, on the same scheme and port. On a Norbital platform the host's root answers with workspace selection
-and every workspace (`t-<hash>.<tenant base>`) is a subdomain, so the Bolt shell's own switcher moves between them
+and every workspace (`<handle>.<workspace-domain>`) is a subdomain, so the Bolt shell's own switcher moves between them
 inside the app; `bolt_device.pinned` is absent. A self-hosted `bolt-server` serves its one workspace at its root.
 
 Only home documents receive the device runtime and the native bridge; a store build (`build`, `upload`) needs an

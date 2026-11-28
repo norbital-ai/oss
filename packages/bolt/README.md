@@ -17,7 +17,7 @@ Entries:
 
 - `@norbital-ai/bolt` — declaration functions and types
 - `@norbital-ai/bolt/errors` — typed runtime failure and refusal classes
-- `@norbital-ai/bolt/page` — page context types and device helpers
+- `@norbital-ai/bolt/page` — page context types, device/file helpers, connection UI components (`Connections`, `IntegrationCard`, `IntegrationSetup`), and connection state helpers (`decodeStoredStatus`, `resolveConnectionState`)
 - `@norbital-ai/bolt/engine`, `/artifact`, `/host-api`, `/protocol` — host-side runtime contracts (agent runtime under `src/engine/agent/`: turn loop, tool calls, I/O, lifecycle, messages, queue, tools)
 - `@norbital-ai/bolt/docs` — the API reference and authoring skills as data (the agent's `skill` tool reads the compiled skills)
 - `@norbital-ai/bolt/tooling` — internals bolt-cli builds on; not an API

@@ -18,6 +18,7 @@ level, message and source). It fills its parent.
 		rows: readonly LogLine[];
 		/** Loads the next older page (the caller holds the cursor) and prepends it to `rows`. */
 		load_older?: () => Effect.Effect<unknown, Error>;
+		/** Whether an older page is still available to load when scrolling to the top. */
 		has_older?: boolean;
 		/** Keep the newest line in view; scrolling up pauses it. */
 		follow?: boolean;

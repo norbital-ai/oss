@@ -624,10 +624,6 @@ export type DatabaseResult = typeof DatabaseResult.Type;
 export const DATABASE_MAX_ROWS = 1_000;
 /** Most JSON bytes a database result may carry (the crossing limit); more fails `overflow`. */
 export const DATABASE_MAX_BYTES = HOST_LIMITS.crossingBytes;
-/** A host's database driver (a request-only link's implementation); it must not expose its connection in answers or errors. */
-export interface DatabaseDriver {
-	query(credential: Json, request: DatabaseRequest, signal: AbortSignal): Promise<DatabaseResult>;
-}
 
 /** A file a message carries: `id` names the stored file; none when the row could not store its bytes (too large, never received). */
 export type Attachment = {

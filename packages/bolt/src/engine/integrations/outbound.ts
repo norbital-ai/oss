@@ -1,7 +1,8 @@
 // Outbound conversation messages: queued once, delivered in order, and reported through the sync inbox.
 import { sql } from '../db/sql.ts';
-import { Clock, Effect, Layer, Predicate, Result, Schema } from 'effect';
+import { Clock, Effect, Layer, Option, Predicate, Result, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
+import { WorkspaceAlertsService } from '../alerts.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { CapturedResult, nativeCommit } from '../db/captured.ts';
 import { Files } from '../ports.ts';
@@ -192,6 +193,9 @@ type OutboundConfig = {
 	send: Links['Service']['send'];
 	files: Files['Service'];
 	announce: (at: string) => Effect.Effect<void>;
+	onFailure?: (
+		event: Readonly<{ source: string; key: string; detail: string }>
+	) => Effect.Effect<void>;
 	epoch: string;
 };
 function makeOutbound(cfg: OutboundConfig) {
@@ -425,6 +429,12 @@ function makeOutbound(cfg: OutboundConfig) {
 		);
 		if (changed.length === 0) return 'lost';
 		if (e !== null && (status === 'failed' || attempts === 1)) yield* cfg.announce(now);
+		if ((status === 'failed' || status === 'uncertain') && cfg.onFailure !== undefined)
+			yield* cfg.onFailure({
+				source: name || instance,
+				key: `outbound:${instance}`,
+				detail: `Outbound message ${String(r['id'] ?? '')} on ${name || instance} ended as ${status}: ${error.slice(0, 400)}`
+			});
 		return status === 'queued' ? 'retry' : status;
 	});
 	const deliver = Effect.fn('Outbound.deliver')(function* () {
@@ -609,12 +619,14 @@ export const OutboundLive = Layer.effect(
 			wake = yield* Wake,
 			activation = yield* Activation,
 			links = yield* Links,
-			registry = yield* RunHandlers;
+			registry = yield* RunHandlers,
+			alerts = yield* Effect.serviceOption(WorkspaceAlertsService);
 		const service = makeOutbound({
 			engine: { manifest, db, live },
 			send: links.send,
 			files,
 			announce: wake.at,
+			...(Option.isSome(alerts) ? { onFailure: alerts.value.integrationFailed } : {}),
 			epoch: activation.epoch
 		});
 		yield* registry.register(service.handlers);

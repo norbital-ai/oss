@@ -20,7 +20,7 @@ import {
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import type { Json } from '../decl/values.ts';
-import type { Authority, Bindings, Invocation, Outcome, RowData } from '../engine/contracts.ts';
+import type { Authority, Invocation, Outcome, RowData } from '../engine/contracts.ts';
 import { Captured, capturedFields } from '../engine/db/captured.ts';
 import { relations, type EngineManifest } from '../engine/manifest.ts';
 import { catalog_of } from '../engine/access/pred.ts';

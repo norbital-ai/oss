@@ -12,7 +12,7 @@ Author `src/`, `seed/`, `tests/`, `assets/`; compiler owns `.norbital/` (never e
 ## Seeds
 
 - `seed/public/**/<model>.json[.gz]` (+ `assets.json`, `assets/**`) builds the `base` pack; `seed/test/**` builds `test`; `seed/+seeder.ts` maps private bank trees for `bolt seed` only. Never copy bank/customer rows into `seed/`.
-- Seeds restore without callbacks/approvals. Seed teams (`sys_team`: `id, name, parent, policies`), members (`team` is a seeded team's id) and business records; never seed policies, approval routes, envoys, credentials or API keys. Unpaired `sys_integration` rows (`id, integration, name, owner, active, configuration`) are allowed.
+- Seeds restore without callbacks/approvals. Seed teams (`sys_team`: `id, name, parent, policies`), members (`team` is a seeded team's id) and business records; never seed policies, approval routes, envoys (`sys_envoy`, `sys_envoy_channel`), credentials or API keys. Unpaired `sys_integration` rows (`id, integration, name, owner, active, configuration`) are allowed.
 
 ## Migrations
 

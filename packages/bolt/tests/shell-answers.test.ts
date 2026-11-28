@@ -233,17 +233,6 @@ const settings = {
 		}
 	],
 	mcp: [{ name: 'docs', url: 'https://docs.example.test' }],
-	audit: [
-		{
-			model: 'sys_user',
-			record: 'u1',
-			revision: 1,
-			at: '2026-01-01',
-			actor: null,
-			op: 'create',
-			changes: { name: 'Ann' }
-		}
-	],
 	integrations: [
 		{
 			name: 'mail',
@@ -400,9 +389,6 @@ describe('shell answers', () => {
 			expect(yield* Effect.flip(answering({ ...studio, files: [] }).studio())).toMatchObject(
 				protocol
 			);
-			expect(
-				yield* Effect.flip(answering({ binary: false }).studio_file('c1', 'src/a.ts'))
-			).toMatchObject(protocol);
 		})
 	);
 });

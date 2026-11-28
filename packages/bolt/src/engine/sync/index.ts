@@ -9,9 +9,10 @@ import { uuid } from '../port.ts';
 // Every active connection of the integration reads independently and receives committed changes. The id map and
 // outbox carry the connection per replica; an inbound change fans out to peers. Its own connection receives only a
 // correction when an older uncertain outbound delivery could overwrite that inbound image.
-import { Clock, Context, Crypto, Effect, Layer, Schema } from 'effect';
+import { Clock, Context, Crypto, Effect, Layer, Option, Schema } from 'effect';
 import { bindingsAt } from '../query/reader.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
+import { WorkspaceAlertsService } from '../alerts.ts';
 import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { Drivers } from '../ports.ts';
 import {
@@ -186,6 +187,9 @@ export type SyncEngine = {
 		instance: string,
 		patch: { readonly [key: string]: Json }
 	) => Effect.Effect<void, EngineError>;
+	readonly onFailure?: (
+		event: Readonly<{ source: string; key: string; detail: string }>
+	) => Effect.Effect<void>;
 	/** This environment's epoch: an outbox row of another (a fork, a restore) is never sent. */
 	readonly epoch: string;
 };
@@ -203,7 +207,8 @@ export const SyncsLive = Layer.effect(
 			wake = yield* Wake,
 			live = yield* Live,
 			activation = yield* Activation,
-			registry = yield* RunHandlers;
+			registry = yield* RunHandlers,
+			alerts = yield* Effect.serviceOption(WorkspaceAlertsService);
 		const context = yield* Effect.context<TenantDb | Manifest | Live | Wake>();
 		const e: SyncEngine = {
 			manifest,
@@ -220,6 +225,7 @@ export const SyncsLive = Layer.effect(
 			announce: wake.at,
 			status: (instance, patch) =>
 				writeStatus(instance, patch).pipe(Effect.provideContext(context)),
+			...(Option.isSome(alerts) ? { onFailure: alerts.value.integrationFailed } : {}),
 			epoch: activation.epoch
 		};
 		const reading = makeRead(e),

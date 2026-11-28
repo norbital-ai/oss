@@ -164,6 +164,9 @@ it.effect('the atomic map accepts generated writes and rejects retired batch sha
    expect(Result.isSuccess(parse_callable(name, manifest))).toBe(false);
   expect(yield* Effect.flip(decode_acts(manifest, [{ callable: 'customers.create', input: [] }]))).toMatchObject({ code: 'invalid_input' });
   expect(yield* Effect.flip(decode_acts(manifest, { followup: {} }))).toMatchObject({ code: 'invalid_input' });
+  // A single row where a list belongs is refused, never committed as no write at all.
+  for (const [name, input] of [['customers.create', { name: 'Single' }], ['customers.update', { target: 'x', set: { note: 'n' } }], ['customers.delete', { target: 'x' }]] as const)
+   expect(yield* Effect.flip(decode_acts(manifest, { [name]: input }))).toMatchObject({ code: 'invalid_input', message: expect.stringContaining('list of rows') });
  })
 );
 

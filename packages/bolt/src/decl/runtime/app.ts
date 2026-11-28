@@ -3,7 +3,7 @@
 import { Schema } from 'effect';
 import type { Checked, Exact } from '../fields.ts';
 import type { AppName, ModelName, PolicyName, WorkspaceIntegrationName } from '../names.ts';
-import type { CurrencyCode, IanaZone, IconName, NonEmpty, Rate } from '../values.ts';
+import type { CurrencyCode, IanaZone, NonEmpty, Rate } from '../values.ts';
 import type { ChildName, GroupName, PageName } from './names.ts';
 import type { ConvertTarget } from './facilities.ts';
 import type { WorkspaceTheme } from '../theme.ts';
@@ -177,14 +177,14 @@ type EnvoyKey = 'envoys.receive' | 'envoys.unrecognised';
 export type LimitKey = 'act' | 'read' | 'agent' | 'register' | 'upload' | 'convert' | EnvoyKey;
 
 /**
- * `src/+workspace.ts`, exactly one: timezone, locale, app order, workspace capabilities and rate limits per policy.
+ * `src/+workspace.ts`, exactly one: timezone, locale, app order, workspace capabilities, opted-in built-in `connections` and rate limits per policy.
  * Declarations are found by path and named by it; each takes one literal (`model` and `integration` first repeat
  * their name, which must match the path), and every callback sits inside the declaration that invokes it. `bolt sync`
  * (run by `bolt dev` on save and first by `bolt check`) writes their data shapes into the generated, never-edited
  * `.norbital/`.
  * ```text
  * src/+workspace.ts, +secrets.ts
- * src/data/model/<name>/+model.ts, +representation.svelte    (folders may nest; the leaf names the model)
+ * src/data/model/<name>/+model.ts, +<sync>.sync.ts, +representation.svelte    (folders may nest; the leaf names the model)
  * src/data/custom_field/<name>/+custom_field.ts, +renderer.svelte
  * src/access_control/policy/+<name>.policy.ts
  * src/integration/<name>/+integration.ts, +integration.svelte
@@ -204,7 +204,7 @@ export type LimitKey = 'act' | 'read' | 'agent' | 'register' | 'upload' | 'conve
  * @param spec Workspace settings; integration accounts and credentials are created at runtime.
  * @returns The typed declaration unchanged. Compilation validates its references against this workspace's names.
  * @example
- * export default workspace({ tz: 'Asia/Singapore', locale: 'en-SG', apps: ['crm'] });
+ * export default workspace({ tz: 'Asia/Singapore', locale: 'en-SG', apps: ['crm'], connections: ['whatsapp', 'email'] });
  * @example
  * export default workspace({
  *   tz: 'Asia/Singapore', locale: 'en-SG',

@@ -25,7 +25,7 @@ import { relations, type EngineManifest } from '../manifest.ts';
 import { TenantDb as TenantDbService, type TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { CapturedResult, capturePiece, nativeCommit, type CommitPublication } from '../db/captured.ts';
 import { storedRowSql } from '../db/stored.ts';
-import { Activation, HostIdentity, Identity, Live, Manifest, type Authenticated } from '../services.ts';
+import { Activation, HostIdentity, Identity, Live, Manifest } from '../services.ts';
 import { catalog_of, toOwnSql } from '../access/pred.ts';
 import { Authorities } from './actor.ts';
 import { RateWindows as Windows } from '../access/rate.ts';

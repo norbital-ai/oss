@@ -1,7 +1,7 @@
 /// <reference types="node" />
 // The prelude's host hooks and the guest module as a classic script: what every guest runner serves (`GuestIsolatesPort`)
 // and `bolt check`'s declaration evaluation reuse. Bolt runs no guest itself: each host owns its runner as
-// `HostPorts.guests` (bolt-cli's `node_guests`, which bolt-server and `bolt dev` use; Colony's isolated-vm).
+// `HostPorts.guests` (`@norbital-ai/host-api/node`'s `node_guests`, which bolt-server and `bolt dev` use; Colony's isolated-vm).
 import { Buffer } from 'node:buffer';
 import { createCipheriv, createHash } from 'node:crypto';
 import { parseSync } from 'rolldown/utils';

@@ -917,6 +917,12 @@ export function makeRead(e: SyncEngine) {
 							ON CONFLICT (sync, instance, partition) DO UPDATE SET health = excluded.health`);
 						yield* nativeCommit(db.write, e.live.publish, c, CapturedResult)
 							.pipe(Effect.catch((written) => Effect.sync(() => failures.push(written))));
+						if (e.onFailure !== undefined)
+							yield* e.onFailure({
+								source: s.name,
+								key: `sync:read:${s.name}:${inst.id}`,
+								detail: `Sync read ${s.name} on instance ${inst.id} failed (attempt ${slots}): ${failed.message ?? 'unknown error'}`
+							});
 					})
 				)
 			);

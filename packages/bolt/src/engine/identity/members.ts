@@ -1,15 +1,14 @@
 // Member administration: invitations, the admin flag with its `last_admin` guard, (de)activation,
 // member team selection and API keys. Policies are source declarations; teams are `sys_team` rows.
 import type { Json } from '../../decl/values.ts';
-import { audited, auditActor, auditContext } from '../audit-operation.ts';
+import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 import { type AuditActor, DbError, type Lock, Port } from '@norbital-ai/host-api';
 import { fromHex, timingSafeEqual, toBase64url } from '../crypto.ts';
 import { to_hex } from '@norbital-ai/store';
 import { under } from '../../protocol/wire.ts';
-import { Effect, Option, Result, Schema } from 'effect';
+import { Effect, Result, Schema } from 'effect';
 import { LIMITS, type Authority, type MembershipPort } from '../contracts.ts';
-import type { EngineManifest } from '../manifest.ts';
 import { IdentityRefusal, type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';

@@ -73,6 +73,7 @@ import { FacilitiesLive } from './facilities.ts';
 import { GuestLive } from './guest/runner.ts';
 import { RenderGrants } from './render.ts';
 import { TelemetryLive } from './guest/telemetry.ts';
+import { WorkspaceAlertsLive, WorkspaceAlertsService } from './alerts.ts';
 
 export type EngineServices =
 	| Manifest
@@ -103,7 +104,8 @@ export type EngineServices =
 	| SmartThrottle
 	| MessageQueue
 	| AgentDrains
-	| RenderGrants;
+	| RenderGrants
+	| WorkspaceAlertsService;
 export type EngineHost =
 	| Crypto.Crypto
 	| TenantDb
@@ -181,18 +183,19 @@ export function EngineLive(
 				);
 			})
 		),
-		DecisionsLive,
 		TelemetryLive,
 		TurnsLive,
 		DeadlinesLive,
 		RunHandlersLive,
 		RenderGrants.layer
-	).pipe(Layer.provideMerge(Layer.merge(values, AdminAi)));
+	).pipe(Layer.provideMerge(values));
 	const wake = WakeLive.pipe(Layer.provideMerge(bottom));
 	const guest = GuestLive.pipe(Layer.provideMerge(wake));
 	const reads = ReadsLive.pipe(Layer.provideMerge(guest));
 	const live = LiveHubLive.pipe(Layer.provideMerge(reads));
-	const identity = IdentityLive.pipe(Layer.provideMerge(live));
+	const alerts = WorkspaceAlertsLive.pipe(Layer.provideMerge(live));
+	const ai = DecisionsLive.pipe(Layer.provideMerge(AdminAi), Layer.provideMerge(alerts));
+	const identity = IdentityLive.pipe(Layer.provideMerge(ai));
 	const links = LinksLive.pipe(Layer.provideMerge(identity));
 	const callables = CallablesLive.pipe(Layer.provideMerge(links));
 	const approvals = ApprovalsLive.pipe(Layer.provideMerge(callables));

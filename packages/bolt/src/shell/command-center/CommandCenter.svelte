@@ -1,36 +1,26 @@
 <!--
-	The workspace's command center: what happens across it, one tab each (a deep link `/command-center/<tab>`). Bundle,
-	Telemetry and Logs are the host's inspection (`studio_inspect`, a Studio host's, read once for all three): the
-	bundle analyzer (artifact digest, client bytes, package pins, bundle files and cache), resource telemetry and the
-	runtime log. Activity and Improvements are the same inspection asked for that view (a host that serves neither
-	answers `null`, and the view says so). Logs reads the log itself
-	(`logs`), every release by default or one release's serving window, and optionally a run; its opt-in
-	Auto-refresh re-reads only that. Audit is the audit trail,
-	Automations every run, AI the members' chats, readable envoy threads and automation transcripts (inspection is
-	read-only in Norbius), People the
-	members and invitations. `tabs` is what this viewer gets (`command_center_tabs`); rollbacks are Studio's, not here.
+	The workspace's command center: host-agnostic operations shipped with every Bolt workspace (untethered or tethered),
+	one tab each (a deep link `/command-center/<tab>`). Logs reads Bolt's own `Logs` port directly; Audit is the audit
+	trail; Queue lists every automation run; AI lists workspace conversations, readable envoy threads and automation
+	transcripts; People manages members and invitations. Host-supplied authoring, improvements, activity, telemetry and
+	bundle analysis belong to Workspace Studio, never here.
 -->
 <script lang="ts">
 	import { date_time } from '../i18n.ts';
 	import {
 		Badge,
+		Combobox,
+		EmptyState,
 		Icon,
+		LogView,
 		Table,
 		TableSkeleton,
 		Tabs,
-		WorkspaceOperations,
-		EmptyState,
-		release_window,
-		type WorkspaceOperationsData,
-		type WorkspaceRange,
-		type WorkspaceScope,
-		type WorkspaceView,
 		type UiContext
 	} from '@norbital-ai/ui';
 	import { fork, observe, observe_once } from '@norbital-ai/ui/effect';
 	import { AppHeader, Stack } from '@norbital-ai/ui/layout';
 	import { MediaQuery } from 'svelte/reactivity';
-	import { watch } from '@norbital-ai/ui/behaviors';
 	import type { AgentConversation } from '../../protocol/wire.ts';
 	import { ConversationsReadAnswer, type ShellApi } from '../api-types.ts';
 	import type { ShellBolt } from '../runtime.ts';
@@ -39,6 +29,7 @@
 	import AutoRefresh from '../AutoRefresh.svelte';
 	import Runs from '../runs/Runs.svelte';
 	import People from '../people/People.svelte';
+	import Alerts from './Alerts.svelte';
 	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
 	import banner from '../assets/banners/command-center.jpg';
 
@@ -80,73 +71,35 @@
 	const active = $derived(
 		tab !== undefined && tabs.includes(tab) ? tab : (tabs[0] ?? 'automations')
 	);
-	const VIEWS: { readonly [k in CommandCenterTab]?: WorkspaceView } = {
-		bundle: 'bundle',
-		telemetry: 'telemetry',
-		logs: 'logs',
-		activity: 'activity',
-		improvements: 'improvements'
-	};
-	const view = $derived(VIEWS[active]);
 
-	// one inspection serves Bundle, Telemetry and Logs: switching between them is a local render
-	let range = $state<WorkspaceRange>('7d');
-	let runFilter = $state<string | null>(null),
-		// the release Logs reads (its publication instant): `null`, every release, until one is chosen
-		release = $state<string | null>(null);
-	const inspecting = $derived(view !== undefined);
-	// Activity and Improvements are read only when asked for by name
-	const named = $derived(view === 'activity' || view === 'improvements' ? view : undefined);
-	const inspection = observe_once(() =>
-		inspecting ? api.studio_inspect({ range, ...(named === undefined ? {} : { view: named }) }) : null
-	);
-	// a new scope reads while the last answer stays on screen
-	let shown = $state<WorkspaceOperationsData | null>(null);
-	watch(
-		() => inspection.current,
-		(next) => {
-			if (next !== undefined) shown = next;
-		}
-	);
-	// Logs reads the log itself, scoped to the chosen release's serving window (every release until one is chosen) and run:
-	// Auto-refresh re-reads only this
-	const releases = $derived(shown?.studio?.releases ?? []);
+	// Runtime logs read Bolt's own `/__bolt/shell/logs` endpoint directly — works identically untethered or tethered.
+	let runFilter = $state<string | null>(null);
+	let runSearch = $state('');
 	const logs = observe_once(() =>
-		view === 'logs' && shown !== null
-			? api.logs({
-					...release_window(releases, release),
-					...(runFilter === null ? {} : { run: runFilter })
-				})
+		active === 'logs'
+			? api.logs(runFilter === null ? {} : { run: runFilter })
 			: null
 	);
-	const data = $derived(
-		// the last answer was another view's: nothing to show of a named one until its own read answers
-		shown === null || (named !== undefined && shown[named] === null && inspection.loading)
-			? null
-			: view === 'logs'
-				? {
-						...shown,
-						logs: logs.current ?? shown.logs,
-						filters: { ...shown.filters, run: runFilter ?? '' },
-						errors:
-							logs.error === undefined
-								? shown.errors
-								: {
-										access: null,
-										studio: null,
-										bundles: null,
-										cache: null,
-										build: null,
-										...shown.errors,
-										logs: logs.error.message
-									}
-					}
-				: shown
+	const logRows = $derived(logs.current ?? []);
+	const runOptions = $derived.by(() => {
+		const ids = new Set(logRows.flatMap((row) => (row.run === null ? [] : [row.run])));
+		if (runFilter) ids.add(runFilter);
+		const asked = runSearch.trim().slice(0, 200);
+		if (asked) ids.add(asked);
+		return [
+			{ value: '', label: t('All runs') },
+			...Array.from(ids, (id) => ({ value: id, label: id, keywords: id }))
+		];
+	});
+	const logLines = $derived(
+		[...logRows].reverse().map((row) => ({
+			id: row.id,
+			at: row.at,
+			level: row.severity,
+			message: `${row.event} ${JSON.stringify(row.attributes)}`,
+			source: row.run === null ? null : `run ${row.run}`
+		}))
 	);
-	function scope(next: WorkspaceScope): void {
-		if (next.range !== undefined) range = next.range;
-		if (next.run !== undefined) runFilter = next.run;
-	}
 
 	// Workspace administration is separate from the member's own Norbius selector.
 	const conversations = observe(() =>
@@ -189,74 +142,62 @@
 		}))
 	);
 	const TITLES: { readonly [k in CommandCenterTab]: string } = {
-		bundle: 'Bundle',
-		telemetry: 'Telemetry',
 		logs: 'Logs',
-		activity: 'Activity',
-		improvements: 'Improvements',
 		audit: 'Audit',
 		automations: 'Queue',
 		inference: 'AI',
-		people: 'People'
+		people: 'People',
+		alerts: 'Alerts'
 	};
 	const ICONS: { readonly [k in CommandCenterTab]: string } = {
-		bundle: 'lucide:package',
-		telemetry: 'lucide:activity',
 		logs: 'lucide:scroll-text',
-		activity: 'lucide:mouse-pointer-click',
-		improvements: 'lucide:wrench',
 		audit: 'concept:access',
 		automations: 'concept:automations',
 		inference: 'lucide:sparkles',
-		people: 'lucide:users'
+		people: 'lucide:users',
+		alerts: 'lucide:bell-ring'
 	};
 </script>
 
-{#snippet operations()}
-	{#if inspection.error !== undefined}<p role="alert" class="text-xs text-destructive">
-			{inspection.error.message}
-		</p>{/if}
-	{#if view !== undefined && data !== null}
-		<WorkspaceOperations {ctx}
-			{data}
-			{range}
-			{view}
-			views={[view]}
-			busy={inspection.loading || (view === 'logs' && logs.loading)}
-			on_change={scope}
-			bind:release
-			{t}
-			{...on_conversation === null ? {} : { on_conversation }}
-		>
-			{#snippet actions()}<AutoRefresh {t} on_refresh={() => fork(logs.refetch())} />{/snippet}
-		</WorkspaceOperations>
-	{:else if inspection.error === undefined}
-		<!-- the view's own shape while the inspection reads: Bundle's figures and its two lists, Telemetry's charts, the log's lines -->
-		<div role="status" aria-busy="true" aria-label={t('Loading…')} class="@container flex flex-col gap-3">
-			{#if view === 'bundle'}
-				{@render bar('h-5 w-16')}
-				{@render bar('h-4 w-56')}
-				<div class="grid gap-4 border-b border-border pb-3 @xl:grid-cols-2">
-					{#each ['w-40', 'w-20', 'w-24', 'w-20'] as width, i (i)}
-						<div class="flex flex-col gap-1">{@render bar('h-4 w-28')}{@render bar(`h-4 ${width}`)}</div>
-					{/each}
-				</div>
-				{@render bar('h-4 w-72')}
-				{#each ['w-56', 'w-40'] as width (width)}
-					<div class="rounded-md border border-border p-3">{@render bar(`h-4 ${width}`)}</div>
-				{/each}
-			{:else if view === 'telemetry'}
-				<div class="flex items-center justify-between gap-3">{@render bar('h-5 w-20')}{@render bar('h-8 w-32')}</div>
-				<div class="grid gap-3 @2xl:grid-cols-2 @5xl:grid-cols-3">
-					{#each [0, 1, 2, 3] as i (i)}<div class="h-56 rounded-md border border-border"></div>{/each}
-				</div>
-			{:else}
-				<TableSkeleton />
-			{/if}
-		</div>
-	{/if}
+{#snippet logsView()}
+	<div class="flex h-full min-h-0 flex-1 flex-col gap-3">
+		{#if logs.error !== undefined}<p role="alert" class="text-xs text-destructive">
+				{logs.error.message}
+			</p>{/if}
+		{#if logs.loading && logs.current === undefined}
+			<TableSkeleton />
+		{:else}
+			<LogView {ctx} rows={logLines} follow={false}>
+				{#snippet controls()}
+					<h2 class="px-1 text-sm font-semibold">{t('Logs')}</h2>
+					<Combobox
+						class="w-64"
+						aria-label={t('Automation run')}
+						searchable
+						value={runFilter ?? ''}
+						options={runOptions}
+						on_search={(query) => {
+							runSearch = query;
+						}}
+						on_change={(next) => next !== null && (runFilter = next || null)}
+					/>
+				{/snippet}
+				{#snippet trailing()}
+					<AutoRefresh {t} on_refresh={() => fork(logs.refetch())} />
+				{/snippet}
+				{#snippet empty()}
+					<EmptyState
+						variant="inset"
+						size="fill"
+						icon="history"
+						title={t('No log lines')}
+						hint={t('Automation runs, assistant turns and envoy messages write here.')}
+					/>
+				{/snippet}
+			</LogView>
+		{/if}
+	</div>
 {/snippet}
-{#snippet bar(size: string)}<div class={['bg-muted animate-pulse rounded motion-reduce:animate-none', size]}></div>{/snippet}
 {#snippet aiCategory({ row }: { row: (typeof transcripts)[number]; value: unknown })}
 	<Badge
 		variant={row.category === 'web' ? 'brand' : 'outline'}
@@ -288,14 +229,10 @@
 	</Table>
 {/snippet}
 {#snippet body()}
-	<!-- the operations views fill the panel (their own regions scroll); the others grow and the panel scrolls -->
-	<div
-		class={[
-			'flex min-w-0 flex-col gap-3 pb-6',
-			view !== undefined && 'h-full min-h-0'
-		]}
-	>
-		{#if active === 'audit'}
+	<div class="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 pb-4">
+		{#if active === 'logs'}
+			{@render logsView()}
+		{:else if active === 'audit'}
 			<Audit {ctx} {api} {t} locale={bolt.locale} catalog={bolt.catalog} {admin} />
 		{:else if active === 'automations'}
 			<Runs {ctx}
@@ -312,8 +249,8 @@
 			{@render inference()}
 		{:else if active === 'people'}
 			<People {ctx} {api} {t} locale={bolt.locale} {configuration} />
-		{:else}
-			{@render operations()}
+		{:else if active === 'alerts'}
+			<Alerts {api} {t} locale={bolt.locale} />
 		{/if}
 	</div>
 {/snippet}
@@ -325,7 +262,7 @@
 			src={banner}
 			icon="lucide:radar"
 			title={t('Command center')}
-			description={t('Bundles, telemetry, logs, audit, runs and people across the workspace.')}
+			description={t('Logs, audit, runs, AI transcripts, people and alerts across the workspace.')}
 		/>
 	{/if}
 	<Tabs

@@ -29,6 +29,7 @@ import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { PageResult } from '../../protocol/schema.ts';
 import { Audit } from '../audit.ts';
+import { WorkspaceAlertsService } from '../alerts.ts';
 import type { Authority } from '../contracts.ts';
 import { mark as markMessage, post as postMessage, stableId } from '../conversations/store.ts';
 import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
@@ -579,6 +580,7 @@ export const AgentsLive = Layer.effectContext(
 			turnHandlers = yield* TurnHandlers,
 			runHandlers = yield* RunHandlers,
 			links = yield* Effect.serviceOption(Links),
+			alerts = yield* Effect.serviceOption(WorkspaceAlertsService),
 			host = yield* AgentHost;
 		const bindings = Clock.currentTimeMillis.pipe(
 			Effect.map((now) => bindingsAt(now, manifest.workspace.tz))
@@ -623,6 +625,10 @@ export const AgentsLive = Layer.effectContext(
 				guest,
 				http,
 				credentials: sealed,
+				...Option.match(alerts, {
+					onNone: () => ({}),
+					onSome: (service) => ({ onAiSpend: service.checkAiSpend })
+				}),
 				...Option.match(bundler, { onNone: () => ({}), onSome: (b) => ({ bundler: b }) })
 			},
 			ai,

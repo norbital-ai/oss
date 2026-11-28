@@ -37,15 +37,17 @@ import {
 	ShellError,
 	ShellWorkspace,
 	SignInMethodsAnswer,
-	StudioInspectionAnswer,
 	Transcript,
 	VerifiedAnswer,
+	WorkspaceAlerts,
+	WorkspaceAlertsState,
+	WorkspaceAlertTestResult,
 	type ShellApi
 } from './api-types.ts';
 import { browserTransport } from '../protocol/client.ts';
 import { ProtocolFailed, TransportFailed } from '../decl/errors/browser.ts';
 import { ActReply, WireError, type PageResult } from '../protocol/schema.ts';
-import { AuditPage, AuditRecord, SentFeedback, StudioFile, StudioView, uuidv7 } from '@norbital-ai/host-api';
+import { AuditPage, AuditRecord, SentFeedback, StudioView, uuidv7 } from '@norbital-ai/host-api';
 import { based, base, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
 
 /** Recheck the served client after any reconnect, including a browser that missed the cutover's close frame. */
@@ -258,6 +260,9 @@ export function shell_api(
 		settings: () => call(SettingsAnswer, 'GET', `${SHELL}/settings`),
 		settings_op: (op: string, input: Json) =>
 			call(Schema.Json, 'POST', `${SHELL}/settings`, { op, input }),
+		alerts: () => call(WorkspaceAlertsState, 'GET', `${SHELL}/alerts`),
+		save_alerts: (next) => call(WorkspaceAlerts, 'POST', `${SHELL}/alerts`, next),
+		test_alert: () => call(WorkspaceAlertTestResult, 'POST', `${SHELL}/alerts/test`, {}),
 		/** An integration instance's host verbs (`/__bolt/integrations/<instance>/…`); the host authorizes "may update this row". */
 		integration: instances,
 		integration_offers: () =>
@@ -319,18 +324,6 @@ export function shell_api(
 		studio: () => call(StudioView, 'GET', `${SHELL}/studio`),
 		studio_run: (op: import('@norbital-ai/host-api').StudioOp) =>
 			call(StudioView, 'POST', `${SHELL}/studio`, { op }),
-		studio_file: (commit: string, path: string) =>
-			call(
-				Schema.NullOr(StudioFile),
-				'GET',
-				`${SHELL}/studio/file?${new URLSearchParams({ commit, path })}`
-			),
-		studio_inspect: (input) =>
-			call(
-				StudioInspectionAnswer,
-				'GET',
-				`${SHELL}/studio/inspect?${new URLSearchParams(Object.entries(input).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))}`
-			),
 		/** A permissions preview (member id or `{ team }`), explicit impersonation, or `null` to return. */
 		preview: (target: string | { team: string } | { user: string; impersonate: true } | null) =>
 			done(
@@ -412,11 +405,6 @@ export function shell_api(
 			respond_now: (conversation: string) => act('sys_conversation.respond_now', { conversation }),
 			confirm: (message: string, approve: boolean) =>
 				act('sys_message.confirm', { message, approve }),
-			// the agent's remaining generated actions
-			set_agent: (conversation: string, agent: string) =>
-				act('sys_conversation.set_agent', { conversation, agent }),
-			file: (message: string, about: { model: string; id: string } | null) =>
-				act('sys_message.file', { message, about }),
 			stop: (conversation: string) => act('sys_conversation.stop', { conversation }),
 			set_model: (conversation: string, model: string) =>
 				act('sys_conversation.set_model', { conversation, model }),

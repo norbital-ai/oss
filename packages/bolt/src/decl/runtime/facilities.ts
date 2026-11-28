@@ -14,7 +14,7 @@ import type {
 	Unavailable as UnavailableFailure,
 	WebPage
 } from '@norbital-ai/host-api';
-import type { Checked, Exact, InputKind, InputOf, ValidInput, ValueOf } from '../fields.ts';
+import type { Checked, Exact, InputKind, ValidInput, ValueOf } from '../fields.ts';
 import type {
 	AutomationName,
 	ModelName,
@@ -672,8 +672,10 @@ export type Ai<Tools> = {
 		/**
 		 * Starts a system agent on a task and answers at once with its conversation: the agent works on its own, as the
 		 * system under this automation's `policies`, with no person attending. It reads and writes what those policies
-		 * allow and is refused anything that needs a person's confirmation. Once per call site of a run. Only a queued run
-		 * starts one; an administrator reads its conversation in the agent panel. Use `infer` when the run needs the answer.
+		 * allow and is refused anything that needs a person's confirmation. Optional `files` (`readonly FileRef[]`) attaches
+		 * stored workspace files to the task conversation for the system agent to read via `read_file`. Once per call site of a
+		 * run. Only a queued run starts one; an administrator reads its conversation in the agent panel. Use `infer` when the
+		 * run needs the answer.
 		 * @example A weekly audit that files what it finds.
 		 * ```ts
 		 * yield* ctx.ai.sys_2.task({
@@ -685,6 +687,7 @@ export type Ai<Tools> = {
 		task(request: {
 			description: string;
 			prompt: string;
+			/** Stored workspace files attached to the task conversation for the system agent to read. */
 			files?: readonly FileRef[];
 		}): Eff<{ conversation: string }, Failure>;
 	};

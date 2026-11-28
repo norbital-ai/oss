@@ -27,13 +27,11 @@ import {
 	is_off,
 	type LogQuery,
 	type Off,
-	type ShellNotice,
 	type ShellPorts,
 	StudioInspectInput,
 	StudioOp,
 	studio_view,
-	Unavailable,
-	type WorkspaceLink
+	Unavailable
 } from '@norbital-ai/host-api';
 import {
 	Activation,
@@ -131,6 +129,7 @@ import {
 	type ShellBoot
 } from './nav.ts';
 import { readLog, runLog } from '../engine/guest/telemetry.ts';
+import { WorkspaceAlerts, WorkspaceAlertsService } from '../engine/alerts.ts';
 import { Audit } from '../engine/audit.ts';
 import { audited, auditContext } from '../engine/audit-operation.ts';
 
@@ -1204,7 +1203,13 @@ const makeShell = Effect.gen(function* () {
 		const auth = x.authority;
 		if (auth === null || auth.actor.kind !== 'member')
 			return refused('unauthenticated', 'Sign in first.', 401);
-		if (c.live !== undefined && (path === `${SHELL}/settings` || path === `${SHELL}/organization`))
+		if (
+			c.live !== undefined &&
+			(path === `${SHELL}/settings` ||
+				path === `${SHELL}/organization` ||
+				path === `${SHELL}/alerts` ||
+				path === `${SHELL}/alerts/test`)
+		)
 			return refused('forbidden', NOT_IN_PREVIEW, 403);
 		const url = requestUrl(request);
 		const s = surfaces(m, auth.actor, auth.admin, c.studio !== undefined, c.live !== undefined);
@@ -1319,6 +1324,41 @@ const makeShell = Effect.gen(function* () {
 					return yield* Effect.fail(invalid('An audit detail requires an event id.'));
 				return json({ value: yield* audit.detail(id) });
 			}
+			case 'GET /alerts': {
+				if (!auth.admin || auth.actor.kind !== 'member')
+					return refused('forbidden', 'Only administrators manage workspace alerts.', 403);
+				const alerts = yield* Effect.serviceOption(WorkspaceAlertsService);
+				if (Option.isNone(alerts))
+					return refused('unavailable', 'Workspace alerts are unavailable.', 503);
+				return json({ value: yield* alerts.value.state });
+			}
+			case 'POST /alerts': {
+				if (!auth.admin || auth.actor.kind !== 'member')
+					return refused('forbidden', 'Only administrators manage workspace alerts.', 403);
+				const alerts = yield* Effect.serviceOption(WorkspaceAlertsService);
+				if (Option.isNone(alerts))
+					return refused('unavailable', 'Workspace alerts are unavailable.', 503);
+				const next = yield* requestBody(request, WorkspaceAlerts);
+				return json({
+					value: yield* audited(
+						h.db,
+						{
+							category: 'identity',
+							action: 'alerts.save',
+							...auditContext(auth, next)
+						},
+						alerts.value.save(next)
+					).pipe(Effect.provideService(Audit, audit))
+				});
+			}
+			case 'POST /alerts/test': {
+				if (!auth.admin || auth.actor.kind !== 'member')
+					return refused('forbidden', 'Only administrators manage workspace alerts.', 403);
+				const alerts = yield* Effect.serviceOption(WorkspaceAlertsService);
+				if (Option.isNone(alerts))
+					return refused('unavailable', 'Workspace alerts are unavailable.', 503);
+				return json({ value: yield* alerts.value.sendTest(auth.actor.email) });
+			}
 			case 'GET /settings':
 				return json({ value: yield* settings(h, m, auth, secrets) });
 			case 'POST /settings':
@@ -1426,7 +1466,7 @@ const makeShell = Effect.gen(function* () {
 					(yield* requestBody(request, Body))['op'] ?? null
 				);
 				if (Option.isNone(op)) return refused('check', 'The Studio operation is malformed.', 422);
-				// a decision ends Norbius's held request: tell its conversation and wake the turn that asked
+				// a decision ends the agent's held request: tell its conversation and wake the turn that asked
 				const chosen = op.value,
 					decided =
 						chosen.op === 'approval.decide'
@@ -1445,7 +1485,7 @@ const makeShell = Effect.gen(function* () {
 								: 'request';
 					const text =
 						chosen.op === 'approval.decide' && chosen.kind === 'approved'
-							? `The person approved your ${action}. It is running; workspace_review shows its progress.`
+							? `The person approved your ${action}. It is running; check its status for progress.`
 							: `The person rejected your ${action}; it did not run. Do not ask again unless something changed.`;
 					yield* agents.value
 						.notify({

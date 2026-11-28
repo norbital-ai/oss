@@ -4,7 +4,7 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `ap
 
 ## Workspace, secrets & theme
 
-- `+workspace.ts`: `tz`, `locale`, `languages`, `currency`, `apps` order, `theme`, `ai`, `agent`, `csp`, `convert`, `signup`, policy `limits`. Accounts, envoys, chat models and budgets are runtime.
+- `+workspace.ts`: `tz`, `locale`, `languages`, `currency`, `apps` order, `theme`, `ai`, `agent`, `csp`, `convert`, `signup`, `connections` (built-in workspace integrations offered in Settings → Integrations → Connections), policy `limits`. Accounts, envoys, chat models and budgets are runtime.
 - `+secrets.ts`: `UPPER_SNAKE` names + `label`/`description` (no defaults/values). Read in server Effects via `Config.Redacted(name)` (`Config.option` for optional); unwrap with `Redacted.value` only where plaintext is required. Integration secrets live on per-instance `credential`. Keep secrets out of pages, logs, chat and source.
 - **Workspace theme:** configure `theme` in `src/+workspace.ts` with high-level knobs (`palette: 'warm' | 'neutral' | 'crisp'`, `accent: 'orange' | 'blue' | 'emerald' | 'violet' | 'rose' | 'teal' | 'amber' | 'slate' | '#rrggbb'`, `radius: 'sharp' | 'default' | 'soft'`) and optional per-mode `light`/`dark` semantic overrides (CSS var names without `--`: `surface-*`, `content-*`, `border-*`, `tone-*`, `primary`/`accent`/`brand` + foregrounds + ring, sidebar, charts, status; `font-sans`/`font-mono` installed/bundled stacks; `radius`). Omitted tokens keep defaults; never add per-page theme CSS/scripts or manual `dark:` color classes. For reference-image restyling, set shared palette/accent in `workspace.theme` and preserve layout primitives, logic and authority; preview both themes.
 

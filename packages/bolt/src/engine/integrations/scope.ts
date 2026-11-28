@@ -1,5 +1,5 @@
 // Platform-native listening scope for conversation connections (ingest capture filter) and envoy channel bindings (routing).
-import { Effect, Option, Predicate, Schema } from 'effect';
+import { Option, Predicate, Schema } from 'effect';
 import type { HandleKind } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { canonicalHandle } from '../envoys/senders.ts';

@@ -6,7 +6,6 @@ import {
 	AiAssistantContent,
 	AiToolCallSchema,
 	AiToolResult,
-	textOf,
 	STUDIO_ROLES, storedInstant, ToolBehavior, ToolView } from '@norbital-ai/host-api';
 import { AgentQuestion, PageAction, PageResult, Usage as UsageSchema } from '../../protocol/schema.ts';
 import type { Json } from '../../decl/values.ts';

@@ -167,7 +167,7 @@ export type ShellBoot = {
 	 * where "Change workspace" leads (the host's workspace picker). `organization`: the host lets an administrator edit the
 	 * name and logo (`ShellHostConfig.organization`). `live`: this is a preview environment; the live workspace's address. `recovery`:
 	 * where an administrator repairs the workspace when it will not open (the failure card links it). `billing`: the
-	 * host's billing page (Settings links it). `feedback`: the host takes feedback (the account menu offers the dialog);
+	 * host's billing page (Settings embeds it). `feedback`: the host takes feedback (the account menu offers the dialog);
 	 * `usage`: it takes page views (`ShellPorts.usage`).
 	 */
 	workspace: {
@@ -477,7 +477,7 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
 /**
  * The shell's own surfaces an actor gets: externals never see settings, automation runs, the staff inbox or Studio.
  * Settings and logs are an administrator's; Studio is every staff member's (their own draft; the host decides what a
- * non-administrator may do) on a host that serves it (`studio`: Colony; an untethered workspace has none). The command
+ * non-administrator may do) on a host that serves it (an untethered workspace has none). The command
  * center is every staff member's (`runs`); its tabs follow the rest. A preview environment (`preview`) drops the meta
  * tools entirely: only application modules remain.
  */
@@ -527,21 +527,11 @@ export const page_chunk_key = (r: Route): string | null =>
 const SETTINGS_TABS = ['organization', 'integrations', 'secrets'] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 /**
- * The command center's tabs, each a deep link `/command-center/<tab>`: what happens across the workspace (bundle
- * analysis, resource telemetry, runtime logs, page and agent activity, improvement threads, the audit trail, automation
- * runs, inference transcripts) and who has access.
+ * The command center's tabs, each a deep link `/command-center/<tab>`: host-agnostic workspace operations shipped with
+ * every Bolt workspace (untethered or tethered) — runtime logs, the audit trail, automation runs, AI transcripts,
+ * people and alerts. Host-owned authoring, improvements, activity, telemetry and bundle analysis belong to Workspace Studio.
  */
-const COMMAND_CENTER_TABS = [
-	'bundle',
-	'telemetry',
-	'logs',
-	'activity',
-	'improvements',
-	'audit',
-	'automations',
-	'inference',
-	'people'
-] as const;
+const COMMAND_CENTER_TABS = ['logs', 'audit', 'automations', 'inference', 'people', 'alerts'] as const;
 export type CommandCenterTab = (typeof COMMAND_CENTER_TABS)[number];
 const named = <T extends string>(tabs: readonly T[], value: string | undefined): T | undefined =>
 	tabs.find((t) => t === value);
@@ -560,10 +550,9 @@ export function preview_route(r: Route, preview: boolean): Route {
 }
 
 /**
- * The command center tabs a viewer gets, in order: the host's inspection (bundle, telemetry, logs, activity,
- * improvements) needs a Studio
- * host and an administrator; the audit trail, inference transcripts (with Norbius) and People are an administrator's,
- * People never in a preview environment; automation runs are every staff member's. Empty: no command center.
+ * The command center tabs a viewer gets, in order — independent of whether a host serves Studio: runtime logs, the
+ * audit trail, inference transcripts (with Norbius) and People are an administrator's; automation runs are every staff
+ * member's. Empty: no command center.
  */
 export function command_center_tabs(
 	s: Surfaces,
@@ -575,17 +564,11 @@ export function command_center_tabs(
 	return COMMAND_CENTER_TABS.filter((tab) =>
 		tab === 'automations'
 			? true
-			: tab === 'bundle' ||
-				  tab === 'telemetry' ||
-				  tab === 'logs' ||
-				  tab === 'activity' ||
-				  tab === 'improvements'
-				? lead && s.studio
-				: tab === 'inference'
-					? lead && s.agent
-					: tab === 'people'
-						? lead && !preview
-						: lead
+			: tab === 'inference'
+				? lead && s.agent
+				: tab === 'people'
+					? lead && !preview
+					: lead
 	);
 }
 

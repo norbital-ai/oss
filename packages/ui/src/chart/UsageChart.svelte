@@ -19,6 +19,10 @@
 		ctx: UiContext;
 		/** The metric's name above the chart; also its accessible label. */
 		title: string;
+		/** Short plain-language explanation of what the chart measures. */
+		description?: string;
+		/** How the headline readout summarizes the primary line (`peak` default, `sum` for counters, `latest` for storage). */
+		aggregation?: 'peak' | 'sum' | 'latest';
 		/** How values read: `bytes`, `MiB`, `micro-SGD`, `seconds`, `load per core`, else a suffix. */
 		unit: string;
 		/** The series: the first is the use; the x axis follows its sample times. */
@@ -30,6 +34,23 @@
 	const peakValue = (values: ReadonlyArray<number | null>): number | null => {
 		const known = values.filter((value) => value !== null);
 		return known.length === 0 ? null : Math.max(...known);
+	};
+	const sumValue = (values: ReadonlyArray<number | null>): number | null => {
+		let total = 0,
+			seen = false;
+		for (const value of values) {
+			if (value === null) continue;
+			total += value;
+			seen = true;
+		}
+		return seen ? total : null;
+	};
+	const latestValue = (values: ReadonlyArray<number | null>): number | null => {
+		for (let i = values.length - 1; i >= 0; i--) {
+			const value = values[i];
+			if (value !== null && value !== undefined) return value;
+		}
+		return null;
 	};
 	const BYTES = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
 	/** A reading in its unit, for people. */
@@ -64,23 +85,43 @@
 	import { create_slider } from '../behaviors/index.js';
 	import { ui_text } from '../primitives/utils.js';
 
-	let { ctx, title, unit, lines, utilization = null }: UsageChartProps = $props();
+	let {
+		ctx,
+		title,
+		description,
+		aggregation = 'peak',
+		unit,
+		lines,
+		utilization = null
+	}: UsageChartProps = $props();
 	const host = $derived(ctx.ui.kinds);
 	const t = ui_text();
 	const metric = (value: number | null) =>
 		value === null ? t('unavailable') : format_metric_value(unit, value, host.locale);
 	const W = 600,
 		H = 160;
-	// the use is the brand line; its bounds take the chart palette after it
+	// the use is the brand line; its bounds and category series take the chart palette after it
 	const COLORS = [
 		'var(--brand)',
 		'var(--chart-2)',
 		'var(--chart-3)',
 		'var(--chart-4)',
-		'var(--chart-5)'
+		'var(--chart-5)',
+		'var(--muted-foreground)'
 	];
 	const length = $derived(Math.max(0, ...lines.map((line) => line.points.length)));
 	const maximum = $derived(peakValue(lines.flatMap((line) => line.points.map((p) => p.value))));
+	const primaryValues = $derived(lines[0]?.points.map((p) => p.value) ?? []);
+	const primaryPeak = $derived(peakValue(primaryValues));
+	const primaryTotal = $derived(sumValue(primaryValues));
+	const primaryLatest = $derived(latestValue(primaryValues));
+	const lineSummary = (line: UsageChartLine): number | null => {
+		const values = line.points.map((p) => p.value);
+		if (line.bound) return latestValue(values);
+		if (aggregation === 'sum') return sumValue(values);
+		if (aggregation === 'latest') return latestValue(values);
+		return peakValue(values);
+	};
 	const top = $derived((maximum ?? 0) * 1.1 || 1);
 	const x = (i: number) => (length <= 1 ? 0 : (i / (length - 1)) * W);
 	const y = (value: number) => H - (value / top) * H;
@@ -120,13 +161,20 @@
 </script>
 
 <figure class="flex h-full min-w-0 flex-col gap-2 rounded-md border border-border p-3 text-xs">
-	<figcaption class="flex flex-wrap items-baseline justify-between gap-2">
-		<span class="text-xs font-medium">{title}</span>
-		<span class="text-meta">
+	<figcaption class="flex flex-wrap items-start justify-between gap-2">
+		<div class="min-w-0">
+			<span class="block text-xs font-medium text-foreground">{title}</span>
+			{#if description}<span class="text-meta mt-0.5 block leading-snug">{description}</span>{/if}
+		</div>
+		<span class="text-meta shrink-0 tabular-nums">
 			{#if utilization !== null}{t('peakCapacity').replace(
 					'{n}',
 					String(Math.round(utilization * 100))
-				)}{:else}{t('peak')} {metric(peakValue(lines[0]?.points.map((p) => p.value) ?? []))}{/if}
+				)} · {metric(primaryPeak)}{:else if aggregation === 'sum'}{t('total')} {metric(
+					primaryTotal
+				)}{:else if aggregation === 'latest'}{t('latest')} {metric(primaryLatest)}{:else}{t('peak')} {metric(
+					primaryPeak
+				)}{/if}
 		</span>
 	</figcaption>
 	<div
@@ -170,18 +218,26 @@
 	</div>
 	<div class="text-meta flex flex-wrap justify-between gap-x-3 gap-y-1 tabular-nums">
 		<span>{first === undefined ? '' : when(first)}</span>
-		<span>{t('maximum')} {metric(maximum)}</span>
+		<span
+			>{#if aggregation === 'sum'}{t('peakPerStep')} {metric(primaryPeak)}{:else}{t('maximum')} {metric(
+					maximum
+				)}{/if}</span
+		>
 		<span>{last === undefined ? '' : when(last)}</span>
 	</div>
 	<ul class="flex flex-wrap gap-x-4 gap-y-1 text-xs">
 		{#each lines as line, i (line.label)}
 			<li class="flex items-center gap-1.5">
 				<span
-					class="inline-block h-0.5 w-4"
+					class="inline-block h-0.5 w-4 shrink-0"
 					style:background={COLORS[i % COLORS.length]}
 					style:opacity={line.bound ? 0.6 : 1}
 				></span>
-				{line.label}{#if hover !== null}: {metric(line.points[hover]?.value ?? null)}{/if}
+				<span>{line.label}</span>{#if hover !== null}<span class="tabular-nums"
+						>: {metric(line.points[hover]?.value ?? null)}</span
+					>{:else if lines.length > 1}<span class="text-meta tabular-nums"
+						>{metric(lineSummary(line))}</span
+					>{/if}
 			</li>
 		{/each}
 		{#if at != null}<li class="text-meta">{when(at)}</li>{/if}

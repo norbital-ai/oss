@@ -11,7 +11,6 @@ import type {
 	CurrencyCode,
 	Decimal,
 	DatePeriod,
-	Duration,
 	FileRef,
 	Id,
 	Instant,
