@@ -32,6 +32,11 @@ it('retains the time-grid scroll anchor when the displayed date and scale change
 		app.set_scale(6, 40);
 		flushSync();
 		expect(scroller.scrollTop).toBe(80);
+		// Re-setting the same calendar date with a fresh Date instance must preserve the viewer's scroll position.
+		scroller.scrollTop = 215;
+		app.set_date(new Date(2026, 10, 7, 12, 0));
+		flushSync();
+		expect(scroller.scrollTop).toBe(215);
 	} finally {
 		await unmount(app);
 		target.remove();

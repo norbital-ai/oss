@@ -49,7 +49,7 @@ Every built-in `@norbital-ai/ui` component runs on these Svelte-5 runes behavior
 | Roving tabindex toolbar / segmented list | `create_roving_focus`, `create_toolbar`, `create_typeahead` | `{@attach roving.item(key)}`, `{...roving.item_attrs(key)}`, `{...roving.root_attrs()}` (auto focus recovery on unmount) |
 | Responsive overflow into "More" menu | `create_overflow` | `{@attach overflow.list}`, `{@attach overflow.measure}`, `overflow.visible`, `overflow.hidden` |
 | Collapsible panel / accordion / find-in-page | `create_disclosure`, `create_accordion`, `bind_findable`, `supports_hidden_until_found` | `{...d.trigger_attrs()}`, `{...d.content_attrs()}`, `{@attach bind_findable(...)}` (`hidden="until-found"`) |
-| Large virtualized list | `virtual_list` | `{@attach v.anchor}`, `{@attach v.measure(key)}`, `v.before`, `v.after`, `v.slice(rows)` |
+| Large virtualized list / 2D grid | `virtual_list`, `virtual_grid` | `{@attach v.anchor}`, `{@attach v.measure(key)}`, `v.before`, `v.after`, `v.total`, `v.slice(rows)` (or `size` fixed fast path) |
 | Pager / carousel / clipboard / chat scroll | `create_pagination`, `page_range`, `create_carousel`, `create_clipboard`, `create_stick_to_bottom` | `pager.previous()`, `pager.next()`, `carousel.slide_attrs(i)`, `copy()`, `{@attach tail.viewport}`, `tail.scroll_to_bottom()` |
 
 ### Grids, selection, drag, motion & direct manipulation

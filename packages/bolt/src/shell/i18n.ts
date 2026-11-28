@@ -349,6 +349,11 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Suppresses duplicate alerts per key.': '在冷却期内抑制同一告警重复发送。',
 	'Repeat cooldown must be between 1 and 1440 minutes.': '重复冷却时间必须在 1 到 1440 分钟之间。',
 	'AI spend threshold must be between 1 and 100%.': 'AI 支出阈值必须在 1% 到 100% 之间。',
+	'Enable admin inbox alerts or add at least one email recipient.': '请启用管理员收件箱告警或至少添加一个邮件收件人。',
+	'Select at least one alert trigger when alerts are enabled.': '启用告警时请至少选择一个触发条件。',
+	'Save changes before sending a test alert.': '发送测试告警前请先保存更改。',
+	'Save changes before testing.': '测试前请先保存更改。',
+	'No monthly limit set': '未设置月度限额',
 	Triggers: '触发条件',
 	'Automation failures': '自动化运行失败',
 	'Alert when any scheduled, event, or manual automation finishes with an error.':

@@ -39,7 +39,16 @@ export {
 export { default as Textarea } from './textarea/textarea.svelte';
 /** Public tooltip component backed by `create_floating` with touch-device popover fallback. */
 export { default as Tooltip } from './tooltip/tooltip.svelte';
-export { virtual_list, type Virtual, type VirtualOptions } from './virtual/virtual.svelte.js';
+export {
+	virtual_grid,
+	virtual_list,
+	type Virtual,
+	type VirtualAxis,
+	type VirtualGrid,
+	type VirtualGridOptions,
+	type VirtualOptions,
+	type VirtualRange
+} from './virtual/virtual.svelte.js';
 export {
 	cn,
 	format_file_size,

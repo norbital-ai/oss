@@ -679,7 +679,7 @@ A live kanban board of a model's records in lanes by a state, enum or relation f
 									</span>
 								</header>
 								<div
-									class="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-1"
+									class="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-1 [overflow-anchor:none]"
 									data-lane-scroll
 								>
 									{#if target}<div

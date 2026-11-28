@@ -121,18 +121,20 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		count: () => agendaEvents.length,
 		key: (i) => String(agendaEvents[i]?.id ?? i),
 		estimate: 48,
+		gap: 0,
 		threshold: 30,
 		overscan: 6
 	});
 	const n = $derived(days.length);
 	const height = $derived((end_hour - start_hour) * hour_height);
 	let scroller = $state<HTMLElement | null>(null);
+	const daySpanKey = $derived(`${days[0]?.getTime() ?? 0}:${days.length}`);
 	watch(
-		[() => scroller, () => shown, () => days, () => start_hour, () => hour_height],
-		([element, view, dates, start, scale]) => {
+		[() => scroller, () => shown, () => daySpanKey, () => start_hour, () => hour_height],
+		([element, view, _span, start, scale]) => {
 			if (element === null || view === 'month') return;
 			const current = new Date();
-			const hour = dates.some((day) => sameDay(day, current))
+			const hour = days.some((day) => sameDay(day, current))
 				? Math.max(0, current.getHours() - 1)
 				: 8;
 			element.scrollTop = Math.max(0, (hour - start) * scale);
@@ -325,6 +327,44 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 
 	// ── month ──
 	const cells = $derived(monthGrid(at));
+	const dayStamp = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+	// Single-pass index of events onto the visible month cells (avoids 42× O(E) scans per render).
+	const monthEvents = $derived.by(() => {
+		const byDay = new Map<string, CalendarEvent[]>();
+		if (shown !== 'month' || cells.length === 0) return byDay;
+		const firstCell = cells[0];
+		const lastCell = cells.at(-1);
+		if (firstCell === undefined || lastCell === undefined) return byDay;
+		const rangeStart = new Date(
+			firstCell.getFullYear(),
+			firstCell.getMonth(),
+			firstCell.getDate()
+		).getTime();
+		const rangeEnd =
+			new Date(lastCell.getFullYear(), lastCell.getMonth(), lastCell.getDate()).getTime() +
+			86_400_000;
+		for (const event of events) {
+			const startMs = event.start.getTime();
+			const endMs = event.end.getTime();
+			if (endMs <= rangeStart && startMs < rangeStart) continue;
+			if (startMs >= rangeEnd) continue;
+			const cursor = new Date(
+				Math.max(
+					rangeStart,
+					new Date(event.start.getFullYear(), event.start.getMonth(), event.start.getDate()).getTime()
+				)
+			);
+			const stopMs = Math.min(rangeEnd, Math.max(endMs, startMs + 1));
+			while (cursor.getTime() < stopMs) {
+				const k = dayStamp(cursor);
+				const bucket = byDay.get(k);
+				if (bucket !== undefined) bucket.push(event);
+				else byDay.set(k, [event]);
+				cursor.setDate(cursor.getDate() + 1);
+			}
+		}
+		return byDay;
+	});
 	const MAX_PILLS = 3;
 	const weekdays = $derived(
 		Array.from({ length: 7 }, (_, i) =>
@@ -417,7 +457,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	</header>
 
 	{#if shown === 'month' && compact}
-		<div class="min-h-0 flex-1 overflow-auto overscroll-contain" data-calendar-compact>
+		<div class="min-h-0 flex-1 overflow-auto overscroll-contain [overflow-anchor:none]" data-calendar-compact>
 			<div
 				class="grid grid-cols-7 px-2 pt-1 text-center"
 				{...compactMonthRadio.root_attrs()}
@@ -426,7 +466,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 				{#each weekdays as w (w)}<span class="py-1 text-overline text-muted-foreground">{w}</span
 					>{/each}
 				{#each cells as d (d.getTime())}
-					{@const list = onDay(events, d)}
+					{@const list = monthEvents.get(dayStamp(d)) ?? []}
 					{@const dayKey = String(d.getTime())}
 					<button
 						{...compactMonthRadio.item_attrs(dayKey)}
@@ -491,7 +531,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 			style:grid-template-rows="repeat({cells.length / 7}, minmax(6rem, 1fr))"
 		>
 			{#each cells as d (d.getTime())}
-				{@const list = onDay(events, d)}
+				{@const list = monthEvents.get(dayStamp(d)) ?? []}
 				<div
 					class={cn(
 						'flex min-w-0 flex-col gap-0.5 overflow-hidden bg-surface-active p-1',
@@ -570,7 +610,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		{/if}
 		<div
 			bind:this={scroller}
-			class={cn('min-h-0 flex-1 overflow-auto overscroll-contain', !compact && 'mx-4 mb-4')}
+			class={cn('min-h-0 flex-1 overflow-auto overscroll-contain [overflow-anchor:none]', !compact && 'mx-4 mb-4')}
 			data-calendar-scroll
 		>
 			<div class="relative" style:min-width="calc(3.5rem + {n * col_width}px)">

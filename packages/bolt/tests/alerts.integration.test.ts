@@ -171,7 +171,7 @@ layer(workspace, { excludeTestServices: true })('local workspace command center 
 			});
 			expect(initial.admin_emails).toEqual(['boss@acme.com']);
 
-			// Invalid recipient email is refused
+			// Invalid recipient email or enabling without triggers is refused
 			const invalid = yield* adminApi
 				.save_alerts({
 					...initial.settings,
@@ -180,6 +180,17 @@ layer(workspace, { excludeTestServices: true })('local workspace command center 
 				})
 				.pipe(Effect.flip);
 			expect(invalid.status).toBe(400);
+
+			const noTriggers = yield* adminApi
+				.save_alerts({
+					...initial.settings,
+					enabled: true,
+					automation_failed: false,
+					integration_failed: false,
+					ai_spend_threshold_pct: null
+				})
+				.pipe(Effect.flip);
+			expect(noTriggers.status).toBe(400);
 
 			// Save enabled settings with explicit email recipient
 			const saved = yield* adminApi.save_alerts({

@@ -464,7 +464,12 @@ export {
 	type PatternViolation
 } from './testing.js';
 export {
+	virtual_grid,
 	virtual_list,
 	type Virtual,
-	type VirtualOptions
+	type VirtualAxis,
+	type VirtualGrid,
+	type VirtualGridOptions,
+	type VirtualOptions,
+	type VirtualRange
 } from '../primitives/virtual/virtual.svelte.js';

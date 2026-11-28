@@ -62,7 +62,7 @@ A kanban board over a caller-supplied local row array, sharing the exact lane, e
 	import { humanize, msg } from '../text/messages.js';
 	import ViewToolbar from '../model/ViewToolbar.svelte';
 	import ToolbarSearch from '../model/toolbar/ToolbarSearch.svelte';
-	import BoardEmptyLane from './BoardEmptyLane.svelte';
+	import LocalBoardLane from './LocalBoardLane.svelte';
 
 	let {
 		ctx,
@@ -117,9 +117,11 @@ A kanban board over a caller-supplied local row array, sharing the exact lane, e
 	} as const;
 	const dotOf = (lane: LocalLane) =>
 		lane.dot !== undefined ? lane.dot : typeof lane.value === 'string' ? DOT[tone(lane.value)] : null;
-	const idOf = (row: R, fallback: number): string =>
-		typeof row['id'] === 'string' && row['id'] !== '' ? row['id'] : String(fallback);
 	const interactive = (row: R) => on_open !== undefined && (can_open === undefined || can_open(row));
+	const openCard = (row: R) => {
+		if (expanded !== null) expanded = null;
+		on_open?.(row);
+	};
 
 	let expanded = $state<string | null>(null);
 	let laneSearch = $state('');
@@ -134,44 +136,6 @@ A kanban board over a caller-supplied local row array, sharing the exact lane, e
 		return laneSearch.trim() === '' ? inLane : searchRows(inLane, laneSearch, names);
 	});
 </script>
-
-{#snippet renderCard(row: R, lane: LocalLane, index: number, grid: boolean)}
-	{@const rowId = idOf(row, index)}
-	{@const clickable = interactive(row)}
-	{#if clickable}
-		<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-		<div
-			role="listitem"
-			class="contents"
-		>
-			<button
-				type="button"
-				class={[
-					'group bg-surface-raised text-card-foreground hover:border-border-control relative flex w-full cursor-pointer flex-col gap-1 overflow-clip rounded-control border text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none motion-reduce:transition-none',
-					grid ? 'min-h-24 p-3' : 'p-2.5'
-				]}
-				data-board-card={rowId}
-				onclick={() => {
-					if (expanded !== null) expanded = null;
-					on_open?.(row);
-				}}
-			>
-				{@render card({ row, lane })}
-			</button>
-		</div>
-	{:else}
-		<div
-			role="listitem"
-			class={[
-				'group bg-surface-raised text-card-foreground relative flex w-full flex-col gap-1 overflow-clip rounded-control border text-left text-sm',
-				grid ? 'min-h-24 p-3' : 'p-2.5'
-			]}
-			data-board-card={rowId}
-		>
-			{@render card({ row, lane })}
-		</div>
-	{/if}
-{/snippet}
 
 <!-- mirrors Board.svelte: fills a bounded parent; each lane scrolls inside itself -->
 <section class="@container flex h-full min-h-72 min-w-0 flex-1 flex-col gap-2" data-view="board">
@@ -238,16 +202,10 @@ A kanban board over a caller-supplied local row array, sharing the exact lane, e
 					</header>
 					<div
 						role="list"
-						class="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-1"
+						class="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-1 [overflow-anchor:none]"
 						data-lane-scroll
 					>
-						{#if cards.length === 0}
-							<BoardEmptyLane {ctx} />
-						{:else}
-							{#each cards as row, index (idOf(row, index))}
-								{@render renderCard(row, lane, index, false)}
-							{/each}
-						{/if}
+						<LocalBoardLane {ctx} {lane} {cards} {card} {interactive} on_open={openCard} />
 					</div>
 				</section>
 			{/each}
@@ -286,19 +244,21 @@ A kanban board over a caller-supplied local row array, sharing the exact lane, e
 							<ToolbarSearch bind:value={laneSearch} label={msg(words, 'table.search')} />
 						</div>
 					</Dialog.Header>
-					<div class="min-h-0 flex-1 overflow-y-auto p-4" data-lane-scroll>
+					<div class="min-h-0 flex-1 overflow-y-auto p-4 [overflow-anchor:none]" data-lane-scroll>
 						<div
 							role="list"
 							class="grid grid-cols-[repeat(auto-fill,minmax(min(16rem,100%),1fr))] content-start gap-3"
 							data-lane-grid
 						>
-							{#if expandedRows.length === 0}
-								<BoardEmptyLane {ctx} grid />
-							{:else}
-								{#each expandedRows as row, index (idOf(row, index))}
-									{@render renderCard(row, expandedLane, index, true)}
-								{/each}
-							{/if}
+							<LocalBoardLane
+								{ctx}
+								lane={expandedLane}
+								cards={expandedRows}
+								{card}
+								grid
+								{interactive}
+								on_open={openCard}
+							/>
 						</div>
 					</div>
 				</div>

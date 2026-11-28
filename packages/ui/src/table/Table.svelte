@@ -452,6 +452,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 		st = { ...st, ...patch, after: null };
 		back = [];
 		clearSelection();
+		win.reset();
 	};
 	// a new filter or sort starts from the first page
 	onChange_(
@@ -550,6 +551,12 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 					})()
 			: []
 	);
+	const sourceKey = $derived(`${kind}:${name || model}`);
+	let settled = $state.raw<{
+		readonly sourceKey: string;
+		readonly rows: readonly ReadRow[];
+		readonly next: string | null;
+	} | null>(null);
 	const view: ReadState<readonly ReadRow[]> = $derived(
 		kind === 'local'
 			? { kind: 'ready', value: local }
@@ -560,31 +567,55 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 					}
 				: pageState
 	);
-	const next = $derived(
+	const rawNext = $derived(
 		pageState.kind === 'ready' && 'next' in pageState.value ? pageState.value.next : null
 	);
-	// a long page (page_size 100/200, a local grid) renders a window of rows, measured and keyed by id
-	const shownRows = $derived(view.kind === 'ready' ? view.value : []);
+	onChange_(
+		() => ({ sourceKey, view, rawNext }),
+		({ sourceKey: keyNow, view: currentView, rawNext: nextCursor }) => {
+			if (settled !== null && settled.sourceKey !== keyNow) settled = null;
+			if (currentView.kind === 'ready') {
+				settled = { sourceKey: keyNow, rows: currentView.value, next: nextCursor };
+			} else if (currentView.kind === 'error' || currentView.kind === 'noAccess') {
+				settled = null;
+			}
+		}
+	);
+	const refreshing = $derived(
+		kind !== 'local' &&
+			view.kind === 'loading' &&
+			settled !== null &&
+			settled.sourceKey === sourceKey
+	);
+	// Retain the last ready rows while switching pages/filters/sorts so the table never flashes to a skeleton.
+	const displayView: ReadState<readonly ReadRow[]> = $derived(
+		refreshing && settled !== null ? { kind: 'ready', value: settled.rows } : view
+	);
+	const next = $derived(refreshing && settled !== null ? settled.next : rawNext);
+	// a long page (page_size 50/100/200, a local grid) renders a window of rows, measured and keyed by id
+	const shownRows = $derived(displayView.kind === 'ready' ? displayView.value : []);
 	// a relation its output reads as no layer (a `sys_user` owner) labels its targets in one read after the page
 	const labelRequest = $derived(
 		kind === 'model' ? label_wave(kinds.catalog, model, refs, shownRows) : null
 	);
 	const labels = $derived(labelRequest === null ? null : host().query(labelRequest));
 	const presented = $derived(
-		new Map(
-			shownRows.map<[ReadRow, Values]>((row) => [
-				row,
-				typeof row['id'] === 'string'
-					? (labelled(
-							kinds.catalog,
-							model,
-							refs,
-							unref(kinds.catalog, model, refs, [row]),
-							labels?.current
-						)[0] ?? row)
-					: row
-			])
-		)
+		kind !== 'model' || refs.length === 0
+			? null
+			: new Map(
+					shownRows.map<[ReadRow, Values]>((row) => [
+						row,
+						typeof row['id'] === 'string'
+							? (labelled(
+									kinds.catalog,
+									model,
+									refs,
+									unref(kinds.catalog, model, refs, [row]),
+									labels?.current
+								)[0] ?? row)
+							: row
+					])
+				)
 	);
 	const rowKey = (index: number) => {
 		const id = shownRows[index]?.['id'];
@@ -599,9 +630,10 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	const win = virtual_list({
 		count: () => shownRows.length,
 		key: winKey,
-		get estimate() {
-			return grid ? 37 : 64;
-		}
+		estimate: () => (grid ? 37 : 64),
+		gap: 0,
+		threshold: 40,
+		overscan: 10
 	});
 
 	// A phone has no hover: a leftward row swipe reveals the trailing control; the next tap elsewhere hides it.
@@ -778,9 +810,14 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	// the footer : the range, the page size, "page X of Y" and previous/next over the cursor
 	const paged = $derived(kind === 'model');
 	const range = $derived(
-		view.kind !== 'ready'
+		displayView.kind !== 'ready'
 			? null
-			: rangeText(text, back.length * size, view.value.length, paged ? count : view.value.length)
+			: rangeText(
+					text,
+					back.length * size,
+					displayView.value.length,
+					paged ? count : displayView.value.length
+				)
 	);
 	const pages = $derived(count === null || !paged ? null : Math.max(1, Math.ceil(count / size)));
 	const setSize = (n: number) => {
@@ -875,11 +912,13 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 					if (cursor === null) return;
 					back = [...back, st.after];
 					st = { ...st, after: cursor };
+					win.reset();
 				},
 				previous_page: () => {
 					if (back.length === 0) return;
 					st = { ...st, after: back.at(-1) ?? null };
 					back = back.slice(0, -1);
+					win.reset();
 				},
 				set_page_size: (n) => {
 					if (typeof n === 'number' && SIZES.some((s) => s === n)) setSize(n);
@@ -953,7 +992,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 			(declared === undefined || (declared.kind === 'text' && declared.format === undefined))
 		);
 	};
-	const presentRow = (row: ReadRow): Values => presented.get(row) ?? row;
+	const presentRow = (row: ReadRow): Values => presented?.get(row) ?? row;
 	const columnValue = <F extends keyof ColumnsIn<S> & string>(row: ReadRow, field: F) => row[field];
 
 	// ── local-array edits ──
@@ -1065,12 +1104,14 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 					on_previous={() => {
 						st = { ...st, after: back.at(-1) ?? null };
 						back = back.slice(0, -1);
+						win.reset();
 					}}
 					on_next={() => {
 						const cursor = next;
 						if (cursor === null) return;
 						back = [...back, st.after];
 						st = { ...st, after: cursor };
+						win.reset();
 					}}
 				/>{/if}
 		{/if}
@@ -1169,7 +1210,10 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 					     the nowrap row actions never squeeze a truncating column down to its first letters -->
 				{#if grid}
 					<div
-						class={embedded ? 'min-w-0 overflow-x-auto' : 'min-h-0 flex-1 overflow-auto rounded-t-md'}
+						class={embedded
+							? 'min-w-0 overflow-x-auto [overflow-anchor:none]'
+							: 'min-h-0 flex-1 overflow-auto rounded-t-md [overflow-anchor:none]'}
+						aria-busy={refreshing || undefined}
 						data-table-wide
 					>
 						<table
@@ -1256,9 +1300,9 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 										></th>{/if}
 								</tr>
 							</thead>
-							<tbody>
+							<tbody class={refreshing ? 'opacity-60 transition-opacity' : undefined}>
 								{#if win.on}<tr aria-hidden="true" {@attach win.anchor}
-										><td colspan={span} style="height:{win.before}px;padding:0;border:0"></td></tr
+										><td colspan={span} class="h-0! border-0! p-0!" style:height="{win.before}px"></td></tr
 									>{/if}
 								{#each win.slice(rows) as row, j (row['id'] ?? win.start + j)}
 									{@const i = win.start + j}
@@ -1377,14 +1421,21 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 										{/if}
 									</tr>
 								{/each}
-								{#if win.after > 0}<tr aria-hidden="true"
-										><td colspan={span} style="height:{win.after}px;padding:0;border:0"></td></tr
+								{#if win.on && win.after > 0}<tr aria-hidden="true"
+										><td colspan={span} class="h-0! border-0! p-0!" style:height="{win.after}px"></td></tr
 									>{/if}
 							</tbody>
 						</table>
 					</div>
 				{:else}
-					<ul class="min-h-0 flex-1 divide-y overflow-auto rounded-t-md" data-table-list>
+					<ul
+						class={[
+							'min-h-0 flex-1 divide-y overflow-auto rounded-t-md [overflow-anchor:none]',
+							refreshing && 'opacity-60 transition-opacity'
+						]}
+						aria-busy={refreshing || undefined}
+						data-table-list
+					>
 						{#if win.on}<li
 								aria-hidden="true"
 								style="height:{win.before}px"
@@ -1470,7 +1521,7 @@ A paged, searchable, filterable grid of a model's records, a read's rows or a lo
 	{:else}
 		<ReadGate
 			{ctx}
-			state={view}
+			state={displayView}
 			what={model === '' ? catalogText(text, 'table.rows', 'these rows') : label(text, model)}
 		>
 			{#snippet children(rows)}{@render content(rows)}{/snippet}

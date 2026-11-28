@@ -12,13 +12,13 @@
  */
 type Edge = 'block-start' | 'block-end' | 'inline-start' | 'inline-end';
 
-function overflowEdges(node: HTMLElement): string {
+function overflowEdges(node: HTMLElement, columnReverse: boolean): string {
 	const edges: Edge[] = [];
 	// `scrollLeft` is negative in RTL and `scrollTop` is negative in `flex-direction: column-reverse`
 	// (such as Firefox/Gecko chat scrollports), so measure distance from both ends regardless of sign.
 	const maxTop = Math.max(0, node.scrollHeight - node.clientHeight);
 	const rawTop = node.scrollTop;
-	const reversed = rawTop < 0 || getComputedStyle(node).flexDirection === 'column-reverse';
+	const reversed = rawTop < 0 || columnReverse;
 	const top = reversed ? Math.max(0, maxTop + rawTop) : rawTop;
 	const bottom = reversed ? Math.max(0, -rawTop) : Math.max(0, maxTop - rawTop);
 	const left = Math.abs(node.scrollLeft);
@@ -56,8 +56,9 @@ export function scrollAffordance(options?: { fade?: boolean }) {
 
 	return (node: HTMLElement) => {
 		if (!fade) node.setAttribute('data-fade', 'false');
+		let columnReverse = getComputedStyle(node).flexDirection === 'column-reverse';
 		const syncOverflow = () => {
-			const edges = overflowEdges(node);
+			const edges = overflowEdges(node, columnReverse);
 			if (node.getAttribute('data-overflow') !== edges) {
 				node.setAttribute('data-overflow', edges);
 			}
@@ -76,7 +77,10 @@ export function scrollAffordance(options?: { fade?: boolean }) {
 		// event at all — a filtered list that drops below the fold is the common case.
 		// Observe direct children via ResizeObserver (which catches nested height changes) and
 		// coalesce onto one animation frame instead of forcing synchronous reflow per character mutation.
-		const observer = new ResizeObserver(schedule);
+		const observer = new ResizeObserver(() => {
+			columnReverse = getComputedStyle(node).flexDirection === 'column-reverse';
+			schedule();
+		});
 		observer.observe(node);
 		for (const child of node.children) observer.observe(child);
 

@@ -204,6 +204,17 @@ export const saveWorkspaceAlerts = Effect.fn('Alerts.save')(function* (
 			'decode',
 			'Enable admin inbox alerts or add at least one email recipient.'
 		);
+	if (
+		next.enabled &&
+		!next.automation_failed &&
+		!next.integration_failed &&
+		next.ai_spend_threshold_pct === null
+	)
+		return yield* BoltError.make(
+			'invalid_input',
+			'decode',
+			'Select at least one alert trigger when alerts are enabled.'
+		);
 	const cleaned: WorkspaceAlerts = { ...next, emails: [...normalizedEmails] };
 	yield* writeConfig(db, ALERTS_KEY, cleaned);
 	return cleaned;

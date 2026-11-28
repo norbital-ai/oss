@@ -51,6 +51,33 @@
 		aiSpendThreshold = String(current.settings.ai_spend_threshold_pct ?? 80);
 	});
 
+	const normalizedEmails = $derived(
+		emailsText
+			.split(',')
+			.map((part) => part.trim())
+			.filter((part) => part.length > 0)
+	);
+	const dirty = $derived.by(() => {
+		const current = alertsState.current?.settings;
+		if (current === undefined) return false;
+		const draftThreshold = aiSpendEnabled ? aiSpendThreshold.trim() : '';
+		const savedThreshold =
+			current.ai_spend_threshold_pct === null ? '' : String(current.ai_spend_threshold_pct);
+		return (
+			enabled !== current.enabled ||
+			notifyAdmins !== current.notify_admins ||
+			cooldownMinutes.trim() !== String(current.cooldown_minutes) ||
+			automationFailed !== current.automation_failed ||
+			integrationFailed !== current.integration_failed ||
+			draftThreshold !== savedThreshold ||
+			normalizedEmails.join(', ') !== current.emails.join(', ')
+		);
+	});
+	const missingDelivery = $derived(enabled && !notifyAdmins && normalizedEmails.length === 0);
+	const missingTrigger = $derived(
+		enabled && !automationFailed && !integrationFailed && !aiSpendEnabled
+	);
+
 	const KIND_LABELS: Readonly<Record<string, string>> = {
 		automation: 'Automation',
 		integration: 'Integration',
@@ -77,10 +104,15 @@
 			error = t('AI spend threshold must be between 1 and 100%.');
 			return;
 		}
-		const emails = emailsText
-			.split(',')
-			.map((part) => part.trim())
-			.filter((part) => part.length > 0);
+		const emails = normalizedEmails;
+		if (enabled && !notifyAdmins && emails.length === 0) {
+			error = t('Enable admin inbox alerts or add at least one email recipient.');
+			return;
+		}
+		if (enabled && !automationFailed && !integrationFailed && threshold === null) {
+			error = t('Select at least one alert trigger when alerts are enabled.');
+			return;
+		}
 		const payload: WorkspaceAlerts = {
 			enabled,
 			emails,
@@ -181,19 +213,25 @@
 						)}
 					</p>
 				</div>
-				<Button
-					type="button"
-					variant="outline"
-					class="h-8 gap-1.5 px-3 text-xs"
-					disabled={testing || saving}
-					onclick={sendTest}
-				>
-					{#if testing}<Spinner class="size-3.5" />{:else}<Icon
-							name="lucide:send"
-							class="size-3.5"
-						/>{/if}
-					{t(testing ? 'Sending…' : 'Send test alert')}
-				</Button>
+				<div class="flex flex-col items-end gap-1">
+					<Button
+						type="button"
+						variant="outline"
+						class="h-8 gap-1.5 px-3 text-xs"
+						disabled={testing || saving || dirty}
+						title={dirty ? t('Save changes before sending a test alert.') : undefined}
+						onclick={sendTest}
+					>
+						{#if testing}<Spinner class="size-3.5" />{:else}<Icon
+								name="lucide:send"
+								class="size-3.5"
+							/>{/if}
+						{t(testing ? 'Sending…' : 'Send test alert')}
+					</Button>
+					{#if dirty}
+						<span class="text-meta">{t('Save changes before testing.')}</span>
+					{/if}
+				</div>
 			</div>
 
 			{#if error !== null}
@@ -293,10 +331,15 @@
 						<label class="flex items-start gap-2.5">
 							<input type="checkbox" class="mt-0.5" bind:checked={aiSpendEnabled} />
 							<span>
-								<strong class="block font-medium text-foreground"
-									>{t('Monthly AI budget threshold')}</strong
-								>
-								<span class="text-meta">
+								<span class="flex flex-wrap items-center gap-1.5">
+									<strong class="font-medium text-foreground"
+										>{t('Monthly AI budget threshold')}</strong
+									>
+									{#if snap.ai_monthly_cap === null || snap.ai_monthly_cap <= 0}
+										<Badge variant="outline">{t('No monthly limit set')}</Badge>
+									{/if}
+								</span>
+								<span class="text-meta block">
 									{#if snap.ai_monthly_cap !== null && snap.ai_monthly_cap > 0}
 										{t('Current month')}: {money(snap.ai_monthly_spent)} / {money(
 											snap.ai_monthly_cap
@@ -322,8 +365,23 @@
 					</div>
 				</div>
 
-				<div class="flex items-center justify-end gap-2 border-t border-border/60 pt-3">
-					<Button type="submit" class="h-8 px-3 text-xs" disabled={saving}>
+				<div class="flex items-center justify-between gap-3 border-t border-border/60 pt-3">
+					{#if missingDelivery}
+						<span class="text-destructive">
+							{t('Enable admin inbox alerts or add at least one email recipient.')}
+						</span>
+					{:else if missingTrigger}
+						<span class="text-destructive">
+							{t('Select at least one alert trigger when alerts are enabled.')}
+						</span>
+					{:else}
+						<span></span>
+					{/if}
+					<Button
+						type="submit"
+						class="h-8 px-3 text-xs"
+						disabled={saving || missingDelivery || missingTrigger}
+					>
 						{#if saving}<Spinner class="size-3.5" />{/if}
 						{t(saving ? 'Saving…' : 'Save alert settings')}
 					</Button>

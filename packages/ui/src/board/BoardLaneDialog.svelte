@@ -105,7 +105,7 @@
 			/>
 		</div>
 	</Dialog.Header>
-	<div class="min-h-0 flex-1 overflow-y-auto p-4" data-lane-scroll>
+	<div class="min-h-0 flex-1 overflow-y-auto p-4 [overflow-anchor:none]" data-lane-scroll>
 		<div
 			role="list"
 			class="grid grid-cols-[repeat(auto-fill,minmax(min(16rem,100%),1fr))] content-start gap-3"
